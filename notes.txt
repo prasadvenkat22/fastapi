@@ -1,0 +1,59 @@
+python -m pip install SQLAlchemy FastAPI-SQLAlchemy
+alembic init alembic
+alembic upgrade head
+
+docker build -t fastapi-web .
+docker-compose build
+docker-compose up -d
+docker-compose run app alembic revision --autogenerate -m "First migration"
+
+--git commands
+--git clone
+--git add .
+--git commit -m "info"
+git push -u origin
+
+------------------------
+#DATABASE_URL= "postgresql://postgres:Eshwar333@database-1.conlq7xqxx5d.us-east-1.rds.amazonaws.com:5432"
+
+#DATABASE_URL= "postgresql://postgres:Eshwar333@pgdb:5432/admin"
+#DATABASE_URL="postgresql://postgres:Eshwar333@database-1.conlq7xqxx5d.us-east-1.rds.amazonaws.com/postgres"
+DATABASE_URL="postgresql://postgres:Eshwar333@database-1.cluster-cpdko7hfm984.us-east-2.rds.amazonaws.com/postres"
+
+DB_USER=postgres
+DB_PASSWORD=Eshwar333
+DB_NAME=postgres 
+PGADMIN_EMAIL=admin@admin.com
+PGADMIN_PASSWORD=Eshwar333
+-----------------------------
+
+
+database-1.cluster-cpdko7hfm984.us-east-2.rds.amazonaws.com
+
+psql --host=database-1.cluster-cpdko7hfm984.us-east-2.rds.amazonaws.com --port=5432 --dbname=postgres --username=postgres
+ 
+ssh -i ~/Downloads/fast-api-postgreql.pem ubuntu@44.204.13.11
+
+scp -i ~/Downloads/fast-api-postgreql.pem -r /Postgresql_Fastapi ubuntu@44.204.13.11:/home/ubuntu/
+
+scp -i ~/Downloads/fast-api-postgreql.pem /Postgresql_Fastapi/main.py ubuntu@44.204.13.11:/home/ubuntu/Postgresql_Fastapi/
+
+scp -i ~/Downloads/fast-api-postgreql.pem /Postgresql_Fastapi/main.py ubuntu@44.204.13.11:/home/ubuntu/Postgresql_Fastapi/
+
+scp -i ~/Downloads/fast-api-postgreql.pem /Postgresql_Fastapi/.env ubuntu@44.204.13.11:/home/ubuntu/Postgresql_Fastapi/
+
+sudo apt update && sudo apt upgrade -y
+
+sudo apt install ca-certificates curl gnupg lsb-release
+sudo apt install ca-certificates curl gnupg lsb-release
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+docker -v
+systemctl status docker --no-pager -l
+sudo usermod -aG docker $USER
+id $USER
+newgrp docke
+

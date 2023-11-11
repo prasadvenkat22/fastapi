@@ -1,0 +1,39 @@
+done:
+--postgres local and aws rds created
+--data models and crud apis, alembic and sqlalchemy integrations done
+--sqlalchemy to migrated and manage db classes from
+---fast api to postgres database
+--data validation classes done - this acts like middleware
+---CRUD API For users, applications, roles done
+
+To do:
+--admin sql and stored procedures we need this functionality
+--once the tenants are created
+--this will add roles and access to users added
+--fast api code to call stored procs
+--exec sql and created new tenant dbs
+
+CREATE DATABASE TenatOne
+    WITH
+    OWNER = postgres
+    ENCODING = 'UTF8'
+    CONNECTION LIMIT = -1
+    IS_TEMPLATE = False;
+
+
+INSERT INTO public.applications(
+	 name, description)
+	VALUES ('TenantOne', 'for testing');
+	--select * from public.applications
+	INSERT INTO public.roles(
+	id, role, description)
+	VALUES (2, 'admin' , 'admin  role');
+	--select * from roles
+---drop table applications
+INSERT INTO public.roles(
+	id, role, description)
+	VALUES (1, 'user' , 'regurla user role');
+	
+	select * from roles
+	select * from applications
+	select * from users

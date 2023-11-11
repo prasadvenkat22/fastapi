@@ -1,0 +1,211 @@
+from fastapi import FastAPI, HTTPException,status, Depends, File, UploadFile
+from typing import List, Annotated
+from schema import AppRoleUser,Application,UserCreate,Role
+import models
+from database import engine, SessionLocal
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.engine import result
+import json
+import pandas as pd
+import time, datetime
+from numpy import genfromtxt
+
+from passlib.context import CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+class Hasher():
+    @staticmethod
+    def verify_password(plain_password, hashed_password):
+        return pwd_context.verify(plain_password, hashed_password)
+    @staticmethod
+    def get_password_hash(password):
+        return pwd_context.hash(password)
+    
+app = FastAPI()
+models.Base.metadata.create_all(bind=engine)
+def get_db():
+    db= SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+@app.get("/")
+async def home():
+    return {"Home": "FastAPI SQL Alchemy and Postgresql"}
+db_dependency= Annotated[Session, Depends(get_db)]
+
+@app.get("/users/")
+async def get_users(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.User).offset(skip).limit(limit).all()
+@app.get("/users/{user_id}")
+async def get_user_id(user_id: int, db:db_dependency):
+    result=db.query(models.User).filter(models.User.id==user_id).first()
+    if not result:
+        raise HTTPException(status_code=404, detail='User ID not found')
+    return result
+@app.get("/applications/{application_id}")
+async def get_application_id(application_id:int, db:db_dependency):
+    result=db.query(models.Application).filter(models.Application.id==application_id).first()
+    if not result:
+        raise HTTPException(status_code=404, detail='User ID not found')
+    return result
+
+@app.get("/applications/")
+async def get_applications(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.Application).offset(skip).limit(limit).all()
+
+@app.get("/roles/")
+async def get_roles(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.Role).offset(skip).limit(limit).all()
+
+@app.post("/users/")
+async def create_user(Usr: AppRoleUser, db: db_dependency):
+    try:
+        hashed_pwd = Hasher.get_password_hash(Usr.password)
+
+        db_user = models.User(name=Usr.name,
+                           hashed_password=hashed_pwd ,
+                           email=Usr.email, role=Usr.role,
+                           application = Usr.application)
+        result=db.query(models.User).filter(models.User.name==Usr.name).filter(models.User.application == Usr.application).first()
+        if result:
+            return {"error": f"User by that Name and APP Exists, {Usr.name} - {Usr.application}"}
+        resultapp=db.query(models.Application).filter(models.Application.name==Usr.application).first()
+        if not resultapp:
+            return {"error": f"Applicaiton by that Name Does not Exists-please add the App first and retry,  {Usr.application}"}
+        print(db_user.hashed_password)
+        print(db_user.application)
+        print(db_user.role)
+        print(db_user.email)
+        print(db_user.name)
+        if not result:
+            db.add(db_user)
+            db.commit()
+            db.refresh(db_user)
+            #result= create_db_users(Usr.name,Usr.password,resultapp.DBName,Usr.role)
+            return {"status": "User added to Database", "User": db_user}
+        else:
+            return {"error": f"User by that Name Exists {Usr.name}"}
+    except Exception:
+       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
+ 
+db_dependency= Annotated[Session, Depends(get_db)]
+@app.post("/applications/")
+async def create_app(App: Application, db: db_dependency):
+    #  sd-app=models.Applications(**App.dict())
+    try:
+        db_app = models.Application(
+            name=App.name, 
+            description=App.description,
+            DBName = App.DBName)
+        result=db.query(models.Application).filter(models.Application.name==App.name).first()
+        if not result:
+            db.add(db_app)
+            db.commit()
+            db.refresh(db_app)
+            return {"status": "App added to Database", "App": db_app}
+        else:
+            return {"error": f"App by that Name Exists {db_app.name}"}
+    except Exception:
+       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
+@app.post("/roles/")
+async def create_role(r: Role, db: db_dependency):
+    #  sd-app=models.Applications(**App.dict())
+    try:
+        db_role = models.Role(role=r.role, description=r.desc)
+        result=db.query(models.Role).filter(models.Role.role==r.role).first()
+        if not result:
+             db.add(db_role)
+             db.commit()
+             db.refresh(db_role)
+             return {"status": "Role added to Database", "Role": db_role}
+        else:
+            return {"error": f"Role by that Name Exists {r.role}"}
+    except Exception:
+       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
+
+@app.get("/sql/statements")
+async def issue_sql(db: db_dependency):
+# write the SQL query inside the text() block
+    with engine.connect() as conn:
+        user='test'
+        pwd='test123'
+        json_ = json.dumps({'x': user})
+        sql = text( 'CREATE USER '+ user + ' WITH PASSWORD :p ')
+        result = conn.execute(sql,{'p':pwd })
+        conn.commit()
+        with engine.connect() as conn:
+            stmt= text("select * from pg_catalog.pg_user where usename = :u")
+            
+            for row in conn.execute(stmt, {'u':user}):
+                 print(f"{row.usename}")
+
+    return {"status": "User added to Database", "User": user }
+
+#with engine.connect() as conn, conn.begin():
+#    stmt = text("INSERT INTO users (id, name) VALUES(:id, :name)")
+#    conn.execute(stmt, [dict(id=1, name="test"), dict(id=2, name="testagain")])
+def create_db_users(user, password, tenantdbname,role):
+# write the SQL query inside the text() block
+    try:
+        with engine.connect() as conn:
+            user=user
+            pwd=password
+            role=role
+            json_ = json.dumps({'x': user})
+            if role=='user':
+                sql = text( 'CREATE USER '+ user + ' WITH PASSWORD :p ')
+            else:
+                sql = text( 'CREATE USER '+ user + ' WITH SUPERUSER	NOCREATEDB 	CREATEROLE 	INHERIT NOREPLICATION PASSWORD :p ' )
+
+            print(sql)
+            result = conn.execute(sql,{'p':pwd })
+            conn.commit()
+            with engine.connect() as conn:
+                stmt= text("select * from pg_catalog.pg_user where usename = :u")
+                
+                for row in conn.execute(stmt, {'u':user}):
+                    print(f"{row.usename}")
+
+        return {"status": "User added to Database", "User": user }
+    except Exception:
+       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
+
+def Load_Data(file_name):
+    data = genfromtxt(file_name, delimiter=',', skiprows=1, converters={0: lambda s: str(s)})
+    return data.tolist()
+
+@app.post("/upload_csv/")
+def uploadcsv_pandas( db: db_dependency, filepath:str, seperator:str):
+    
+    if filepath.endswith(".csv"):
+        df = pd.read_csv(filepath )
+    else:
+        df = pd.read_excel(filepath )
+
+   
+    try:
+
+        tablename  =get_file_name(filepath)
+
+        print(tablename)
+        print(seperator)
+        df.to_sql(tablename , engine, if_exists= 'replace', index= False)
+
+    except:
+        print("Sorry, some error has occurred!")
+
+    finally:
+        engine.dispose()
+def get_file_name(file_path):
+        file_path_components = file_path.split('/')
+        file_name_and_extension = file_path_components[-1].rsplit('.', 1)
+        return file_name_and_extension[0]
+# import os
+# path = 'your path'
+# all_csv_files = [f for f in os.listdir(path) if f.endswith('.csv')]
+# for f in all_csv_files:
+#     data = pd.read_csv(os.path.join(path, f), sep="|", names=col)
+
+# # list without .csv
+# files = [f[:-4] for f all_csv_files]

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException,status, Depends, File, UploadFile
 from typing import List, Annotated
 from schemas_pgrs.schema import AppRoleUser,Application,UserCreate,Role
-import models_pgdb.models as models
+#import models_pgdb.models as models
 from config.db_pgrs import engine, SessionLocal
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -42,7 +42,7 @@ app.include_router(dbfile_pgrs_router.router)#,tags=['files'], prefix='/api/file
 #app.include_router(image_router.router)
 app.include_router(image_router.router)
 
-models.Base.metadata.create_all(bind=engine)
+#models.Base.metadata.create_all(bind=engine)
 # def get_db():
 #     db= SessionLocal()
 #     try:

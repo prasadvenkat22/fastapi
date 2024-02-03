@@ -25,8 +25,8 @@ services:
       - 5050:80
     volumes:
       - pgadmin-data:/var/lib/pgadmin
-    #depends_on:
-    #  - pgdb
+    depends_on:
+     - pgdb
   app:
     container_name: app
     build: .
@@ -35,8 +35,8 @@ services:
       - .:/app
     ports:
       - 8000:8000
-    #depends_on:
-    #  - pgdb
+    depends_on:
+     - pgdb
     restart: always
   nginx:
     container_name: "nginx"
@@ -47,8 +47,8 @@ services:
     ports:
       - 80:8000
       
-    links:
-      - app
+    # links:
+    #   - app
     #depends_on:
     #  - app
 volumes:

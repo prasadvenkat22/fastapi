@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException,status, Depends, File, UploadFile
 from typing import List, Annotated
-from schemas_pgrs.schema import AppRoleUser,Application,UserCreate,Role
+from schemas_pgrs.schema import AppRoleUser,Application,Role,TransactionModel,TransactonBase
 import models_pgdb.models as models
 from config.db_pgrs import engine, SessionLocal
 from sqlalchemy.orm import Session
@@ -60,6 +60,11 @@ async def get_applications(db: db_dependency, skip: int = 0, limit: int = 100):
 async def get_roles(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Role).offset(skip).limit(limit).all()
 
+
+@router.get("/transactions/")
+async def get_transactions(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.Transaction).offset(skip).limit(limit).all()
+
 @router.post("/users/")
 async def create_user(Usr: AppRoleUser, db: db_dependency):
     try:
@@ -75,11 +80,11 @@ async def create_user(Usr: AppRoleUser, db: db_dependency):
         resultapp=db.query(models.Application).filter(models.Application.name==Usr.application).first()
         if not resultapp:
             return {"error": f"Applicaiton by that Name Does not Exists-please add the App first and retry,  {Usr.application}"}
-        print(db_user.hashed_password)
-        print(db_user.application)
-        print(db_user.role)
-        print(db_user.email)
-        print(db_user.name)
+        # print(db_user.hashed_password)
+        # print(db_user.application)
+        # print(db_user.role)
+        # print(db_user.email)
+        # print(db_user.name)
         if not result:
             db.add(db_user)
             db.commit()
@@ -123,6 +128,18 @@ async def create_role(r: Role, db: db_dependency):
              return {"status": "Role added to Database", "Role": db_role}
         else:
             return {"error": f"Role by that Name Exists {r.role}"}
+    except Exception:
+       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
+@router.post("/transactions/", response_model=TransactionModel)
+async def create_transaction(transaction:TransactonBase, db: db_dependency):
+    #  sd-app=models.Applications(**App.dict())
+    try:
+        db_Trasaction = models.Transaction(**transaction.dict())
+        db.add(db_Trasaction)
+        db.commit()
+        db.refresh(db_Trasaction)
+        return {"status": "Transaction added to Database", "Transaction": db_Trasaction}
+
     except Exception:
        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
 

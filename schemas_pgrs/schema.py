@@ -31,4 +31,17 @@ class AppRoleUser(UserBase):
         from_attributes = True
 
 
- 
+class TransactonBase(BaseModel) :
+    amount:float
+    category:str
+    description:str
+    is_income:bool
+    date:str
+
+class TransactionModel(TransactonBase):
+    id:int
+    class Config:
+        from_attributes = True
+
+
+

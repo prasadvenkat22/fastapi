@@ -40,7 +40,7 @@ app.include_router(db_mngdb_router.router)#,tags=['Users'], prefix='/api/mongodb
 app.include_router(db_pgrs_router.router)#,tags=['Users'], prefix='/api/postgres')
 app.include_router(dbfile_pgrs_router.router)#,tags=['files'], prefix='/api/files')
 #app.include_router(image_router.router)
-app.include_router(image_router.router)
+#app.include_router(image_router.router)
 
 #models.Base.metadata.create_all(bind=engine)
 # def get_db():

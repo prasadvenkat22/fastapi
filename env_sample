@@ -1,5 +1,6 @@
 
 
+
 DATABASE_URL= "postgresql://postgres:Eshwar333@pgdb:5432/postgres"
 
 #DATABASE_URL="postgresql://postgres:Eshwar333@database-1.conlq7xqxx5d.us-east-1.rds.amazonaws.com/postgres"
@@ -12,11 +13,11 @@ PGADMIN_EMAIL=admin@admin.com
 PGADMIN_PASSWORD=Eshwar333
 
 #mongodb+srv://adminuser:Eshwar333@cluster0.6bl1tzp.mongodb.net/
-MONGODB_URL="mongodb://localhost:27017"
+#MONGODB_URL="mongodb://localhost:27017"
 #local_mongo_url=mongodb://localhost:27017/DBNAME?readPreference=primary&ssl=false 
 DB_NAME ="TENANT"
 #ATLAS_MONGODB_URI="mongodb+srv://Eshwar:Eshwar333@cluster0.6bl1tzp.mongodb.net/NodeAPI?retryWrites=true&w=majority""
-#MONGODB_URL="mongodb+srv://Eshwar:Eshwar333@cluster0.6bl1tzp.mongodb.net/"
+MONGODB_URL="mongodb+srv://Eshwar:Eshwar333@cluster0.6bl1tzp.mongodb.net/"
 #mongodb+srv://<username>:<password>@cluster0.6bl1tzp.mongodb.net/
 APP_PORT="5000"
 PORT=500

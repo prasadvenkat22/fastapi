@@ -72,7 +72,7 @@ async def upload_data( db: db_dependency, file: UploadFile, seperator:str):
     if file.filename.endswith(".csv"):
         df = pd.read_csv(file.file )
     else:
-        df = pd.read_excel(file.file )
+        df = pd.read_csv(file.file,delimiter= str, header='infer')
 
    
     try:
@@ -84,8 +84,9 @@ async def upload_data( db: db_dependency, file: UploadFile, seperator:str):
         df.to_sql(tablename , engine, if_exists= 'replace', index= False)
         return {"status": status.HTTP_200_OK, "detail":f"{file.filename} - upload to postgres successfully"}
 
-    except:
-        print("Sorry, some error has occurred!")
+    except Exception:
+       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
+
 
     finally:
         engine.dispose()

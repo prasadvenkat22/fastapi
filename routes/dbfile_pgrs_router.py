@@ -4,7 +4,10 @@ from schemas_pgrs.schema import AppRoleUser,Application,UserCreate,Role
 import models_pgdb.models as models
 from config.db_pgrs import engine, SessionLocal
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import Column, Integer, String, create_engine, MetaData, Table
+from sqlalchemy.sql import text
+import re
+
 from sqlalchemy.engine import result
 import json
 import pandas as pd
@@ -81,8 +84,17 @@ async def upload_data( db: db_dependency, file: UploadFile, seperator:str):
 
         print(tablename)
         print(seperator)
+        # lower the case, strip leading and trailing white space,
+        # and substitute the whitespace between words with underscore
+        ws = re.compile("\s+")
+
+        #df.columns = [ws.sub("_", i.lower().strip()) for i in df.columns]
+        rows = len(df.axes[0])  
+        columns = len(df.columns)  
+
+
         df.to_sql(tablename , engine, if_exists= 'replace', index= False)
-        return {"status": status.HTTP_200_OK, "detail":f"{file.filename} - upload to postgres successfully"}
+        return {"status": status.HTTP_200_OK, "detail":f"{file.filename} - upload to postgres successfully: columns {columns}, rows: {rows}"}
 
     except Exception:
        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
@@ -90,6 +102,7 @@ async def upload_data( db: db_dependency, file: UploadFile, seperator:str):
 
     finally:
         engine.dispose()
+
 def get_file_name(file_path):
         file_path_components = file_path.split('/')
         file_path_components = file_path.split('\\')
@@ -104,4 +117,22 @@ def get_file_name(file_path):
 
 # # list without .csv
 # files = [f[:-4] for f all_csv_files]
+
+@router.get("/tables_in_Database/")
+async def read_users( db: db_dependency):
+    try:
+        sql=f"SELECT * FROM  public.users "
+        print(sql)
+        with engine.connect() as conn:
+ 
+            df = pd.read_sql('select tablename from pg_tables where schemaname = '"'public'", conn)
+
+        return df
+           # return data 
+        #return{"hello" : "good "}
+    except Exception:
+       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"table error")
+    finally:
+        engine.dispose()
+
 

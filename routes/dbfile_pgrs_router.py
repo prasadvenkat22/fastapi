@@ -119,7 +119,7 @@ def get_file_name(file_path):
 # files = [f[:-4] for f all_csv_files]
 
 @router.get("/tables_in_Database/")
-async def read_users( db: db_dependency):
+async def get_tables( db: db_dependency):
     try:
         sql=f"SELECT * FROM  public.users "
         print(sql)

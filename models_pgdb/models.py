@@ -4,13 +4,12 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from sqlalchemy.sql import func
 
-class Application(Base):
-    __tablename__ = "application"
-
+class Service(Base):
+    __tablename__ = "Services"
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, unique=True,default='App')
     description = Column(String, index=True)
-    created_date =  Column(DateTime(timezone=True), default=func.now())
+    createdate =  Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
     DBName = Column(String, default='postgres')
     UniqueConstraint ('name', 'DBName', name='uix_2')
@@ -26,13 +25,10 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String,  nullable=False)
-    hashed_password = Column(String)
     email = Column(String,   nullable=False)
     created_date =  Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
-    role =Column(String )
-    application =Column(String)
-    UniqueConstraint ('name', 'application', name='uix_1')
+    UniqueConstraint ('name', 'service', name='uix_1')
 
 #    user_id = Column(Integer, ForeignKey(User.id), primary_key=True)
 
@@ -44,4 +40,19 @@ class Transaction(Base):
     description = Column(String)
     is_income = Column(Boolean)
     date= Column(String)
-    
+
+class Registraion(Base):
+    __tablename__ = "Registrations"
+    id = Column(Integer,primary_key= True, index= True)
+    firstname=Column(String)
+    lastname=Column(String)
+    username = Column(String)
+    useremail = Column(String)
+    clientname = Column(String)
+    servicename = Column(String)
+    clientemail = Column(String)
+    contactphoneno = Column(String)
+    address = Column(String)
+    demodate= Column(DateTime)
+    createdate= Column(DateTime)
+

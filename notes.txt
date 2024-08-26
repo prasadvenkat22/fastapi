@@ -1,7 +1,8 @@
 python -m pip install SQLAlchemy FastAPI-SQLAlchemy
 alembic init alembic
 alembic upgrade head
-
+alembic init migrations
+docker-compose down --volumes
 docker build -t fastapi-web .
 docker-compose build
 docker-compose up -d

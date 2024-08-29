@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy.sql import func
 
 class Service(Base):
-    __tablename__ = "Services"
+    __tablename__ = "services"
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, unique=True,default='App')
     description = Column(String, index=True)
@@ -42,7 +42,7 @@ class Transaction(Base):
     date= Column(String)
 
 class Registraion(Base):
-    __tablename__ = "Registrations"
+    __tablename__ = "registrations"
     id = Column(Integer,primary_key= True, index= True)
     firstname=Column(String)
     lastname=Column(String)

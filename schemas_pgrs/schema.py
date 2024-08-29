@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import List, Annotated
 from enum import Enum
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import  Depends
 from pydantic import BaseModel, EmailStr,Field
 from datetime import datetime
 from typing import Literal

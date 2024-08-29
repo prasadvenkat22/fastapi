@@ -31,6 +31,7 @@ services:
     container_name: app
     build: .
     command: bash -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+
     volumes:
       - .:/app
     ports:
@@ -46,11 +47,17 @@ services:
       - ./app/nginx/conf.d:/etc/nginx/conf.d
     ports:
       - 80:8000
-      
+  streamlit:
+    build: .
+    volumes:
+      - .:/app
+    ports:
+      - 8501:8501     
     # links:
     #   - app
-    #depends_on:
-    #  - app
+    restart: always
+    depends_on:
+      - app
 volumes:
  postgres-data:
  pgadmin-data:

@@ -1,4 +1,6 @@
 from fastapi import FastAPI, HTTPException,status, Depends, File, UploadFile
+from pydantic import BaseModel
+
 from typing import List, Annotated
 from schemas_pgrs.schema import ServiceUser,service,Role,TransactionModel,TransactonBase,RegistrationBase,RegistraionModel
 import models_pgdb.models as models
@@ -143,16 +145,15 @@ async def create_role(r: Role, db: db_dependency):
             return {"error": f"Role by that Name Exists {r.role}"}
     except Exception:
        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
-@router.post("/transactions/", response_model=TransactionModel)
+@router.post("/transactions/")
 async def create_transaction(transaction:TransactonBase, db: db_dependency):
     #  sd-app=models.Applications(**App.dict())
-    try:
+    try: 
         db_Trasaction = models.Transaction(**transaction.model_dump())
         db.add(db_Trasaction)
         db.commit()
         db.refresh(db_Trasaction)
         return {"status": "Transaction added to Database", "Transaction": db_Trasaction}
-
     except Exception:
        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
 @router.post("/registrations/")

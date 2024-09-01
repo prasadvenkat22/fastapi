@@ -4,17 +4,15 @@ import pandas as pd
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain. chains import LLMChain
 from langchain_openai import OpenAI
-import requests
-import json
 from dotenv import load_dotenv
 import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
 from langchain.chains.question_answering import load_qa_chain
 from langchain_community.llms import OpenAI
-from langchain.callbacks import get_openai_callback
+from langchain_community.callbacks import get_openai_callback
 
 load_dotenv()  # take environment variables from .env.
 apikey=os.getenv("OPEN_API_KEY")
@@ -49,7 +47,7 @@ def main():
         data= pd.read_csv(user_csv)
         st.write("Date Preview")
         st.dataframe(data.head())
-        agent = create_pandas_dataframe_agent(OpenAI( temperature=0, max_tokens=100), data, verbose=True, model_name="gpt-3.5-turbo")
+        agent = create_pandas_dataframe_agent(OpenAI( temperature=0, max_tokens=100), data, verbose=True, model_name="GPT-4o",allow_dangerous_code=True)
         query = st.text_input("Enter a query")
         if st.button("Execure query"):
             answer = agent.invoke(query)

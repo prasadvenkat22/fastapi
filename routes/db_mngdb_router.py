@@ -14,7 +14,7 @@ router = APIRouter(
     prefix = '/CRUD',
     tags = ['MongoDB APIs']
 )
-base = '/Mongodb APIs/'
+base = '/Customers/'
 UploadImage = f'{base}image-upload/'
 
 _notFoundMessage = "Could not find user with the given Id."

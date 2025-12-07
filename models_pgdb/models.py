@@ -12,7 +12,7 @@ class Service(Base):
     createdate =  Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
     DBName = Column(String, default='postgres')
-    UniqueConstraint ('name', 'DBName', name='uix_2')
+    #UniqueConstraint ('name', 'DBName', name='uix_2')
 
 class Role(Base):
     __tablename__ = "roles"
@@ -28,7 +28,7 @@ class User(Base):
     email = Column(String,   nullable=False,default="TestEmail@test.com")
     created_date =  Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
-    UniqueConstraint ('name', 'service', name='uix_1')
+    #UniqueConstraint ('name', 'service', name='uix_1')
 
 #    user_id = Column(Integer, ForeignKey(User.id), primary_key=True)
 

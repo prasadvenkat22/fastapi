@@ -7,8 +7,8 @@ from sqlalchemy.sql import func
 class Service(Base):
     __tablename__ = "services"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, unique=True,default='TestApp')
-    description = Column(String, index=True)
+    name = Column(String, unique=True,default='TestService')
+    description = Column(String, index= True,default='This is a test service')
     createdate =  Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
     DBName = Column(String, default='postgres')

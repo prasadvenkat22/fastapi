@@ -5,19 +5,20 @@ import os
 import motor.motor_asyncio
 
 load_dotenv()  # take environment variables from .env.
+DB_NAME = os.getenv("DB_NAME", "fastapi_db")
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 
-DB=os.getenv("DB_NAME")
-# client = MongoClient(os.getenv("MONGODB_URL"))
-# db = client.admin
-# collection_name = db["users"]
-#print(DB)
-# app = FastAPI()
-#client = MongoClient(os.getenv("MONGODB_URL"))
-#db = client.users
-#client = MongoClient(os.getenv("MONGODB_URL"))
+# Create async Motor client and select database from env
+client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URL)
+db = client.get_database(DB_NAME)
 
-client = motor.motor_asyncio.AsyncIOMotorClient(os.environ["MONGODB_URL"])
-db = client.get_database("users")
+# Expose collections matching Postgres tables so other modules can import
+# and use either `db.<collection>` or the named collection variables below.
+users = db.get_collection("users")
+services = db.get_collection("services")
+roles = db.get_collection("roles")
+transactions = db.get_collection("transactions")
+registrations = db.get_collection("registrations")
 #database = client["mydatabase"]
 # Send a ping to confirm a successful connection
 # try:

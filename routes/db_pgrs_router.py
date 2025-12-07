@@ -5,6 +5,9 @@ from typing import List, Annotated
 from schemas_pgrs.schema import ServiceUser,service,Role,TransactionModel,TransactonBase,RegistrationBase,RegistraionModel
 import models_pgdb.models as models
 from config.db_pgrs import engine, SessionLocal
+from models_mgdb.db import db as mdb
+import logging
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from sqlalchemy.engine import result
@@ -28,7 +31,11 @@ class Hasher():
     def get_password_hash(password):
         return pwd_context.hash(password)
     
-models.Base.metadata.create_all(bind=engine)
+try:
+    models.Base.metadata.create_all(bind=engine)
+except Exception as e:
+    # Do not fail import if Postgres is unavailable during static analysis or tests
+    print('Warning: could not create tables at import time:', e)
 def get_db():
     db= SessionLocal()
     try:
@@ -104,6 +111,11 @@ async def create_user(Usr: ServiceUser, db: db_dependency):
         db.add(db_user)
         db.commit()
         db.refresh(db_user)
+        # also write to MongoDB users collection (best-effort)
+        try:
+            await mdb.users.insert_one(Usr.model_dump())
+        except Exception as exc:
+            logger.warning("MongoDB write failed for users: %s", exc, exc_info=True)
         #result= create_db_users(Usr.name,Usr.password,resultapp.DBName,Usr.role)
         return {"status": "User added to Database", "User": db_user}
         #else:
@@ -125,6 +137,11 @@ async def create_app(Svc: service, db: db_dependency):
             db.add(db_svc)
             db.commit()
             db.refresh(db_svc)
+            # mirror to MongoDB (best-effort)
+            try:
+                await mdb.services.insert_one(Svc.model_dump())
+            except Exception as exc:
+                logger.warning("MongoDB write failed for services: %s", exc, exc_info=True)
             return {"status": "Svc added to Database", "App": db_svc}
         else:
             return {"error": f"Svc by that Name Exists {db_svc.name}"}
@@ -140,6 +157,10 @@ async def create_role(r: Role, db: db_dependency):
              db.add(db_role)
              db.commit()
              db.refresh(db_role)
+             try:
+                 await mdb.roles.insert_one(r.model_dump())
+             except Exception as exc:
+                 logger.warning("MongoDB write failed for roles: %s", exc, exc_info=True)
              return {"status": "Role added to Database", "Role": db_role}
         else:
             return {"error": f"Role by that Name Exists {r.role}"}
@@ -153,6 +174,10 @@ async def create_transaction(transaction:TransactonBase, db: db_dependency):
         db.add(db_Trasaction)
         db.commit()
         db.refresh(db_Trasaction)
+        try:
+            await mdb.transactions.insert_one(transaction.model_dump())
+        except Exception as exc:
+            logger.warning("MongoDB write failed for transactions: %s", exc, exc_info=True)
         return {"status": "Transaction added to Database", "Transaction": db_Trasaction}
     except Exception:
        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
@@ -164,6 +189,10 @@ async def create_registration(registration:RegistrationBase, db: db_dependency):
         db.add(db_Registration)
         db.commit()
         db.refresh(db_Registration)
+        try:
+            await mdb.registrations.insert_one(registration.model_dump())
+        except Exception as exc:
+            logger.warning("MongoDB write failed for registrations: %s", exc, exc_info=True)
         return {"status": "registration added to Database", "Registratoin": db_Registration}
 
     except Exception:

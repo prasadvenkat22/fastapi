@@ -55,3 +55,16 @@ async def home():
 #db_dependency= Annotated[Session, Depends(get_db)]
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
+@app.on_event("startup")
+def on_startup():
+    """Create Postgres tables at application startup (if DB reachable)."""
+    try:
+        from config.db_pgrs import engine
+        import models_pgdb.models as models
+        models.Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        # don't crash app on startup if Postgres is not available; log a warning
+        import logging
+        logging.getLogger(__name__).warning("Postgres create_all failed on startup: %s", e)
+

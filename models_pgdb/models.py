@@ -7,7 +7,7 @@ from sqlalchemy.sql import func
 class Service(Base):
     __tablename__ = "services"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, unique=True,default='App')
+    name = Column(String, unique=True,default='TestApp')
     description = Column(String, index=True)
     createdate =  Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
@@ -24,8 +24,8 @@ class Role(Base):
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String,  nullable=False)
-    email = Column(String,   nullable=False)
+    name = Column(String,  nullable=False,default   ='TestUser')
+    email = Column(String,   nullable=False,default="TestEmail@test.com")
     created_date =  Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
     UniqueConstraint ('name', 'service', name='uix_1')
@@ -35,24 +35,23 @@ class User(Base):
 class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(Integer,primary_key= True, index= True)
-    amount = Column(Float)
-    category = Column(String)
-    description = Column(String)
-    is_income = Column(Boolean)
-    date= Column(String)
+    amount = Column(Float,default=0.0)
+    category = Column(String,default='General')
+    description = Column(String,default='Test Description')
+    is_income = Column(Boolean,default= True) 
+    date= Column(String,default=str(datetime.now().date()))
 
 class Registraion(Base):
     __tablename__ = "registrations"
     id = Column(Integer,primary_key= True, index= True)
-    firstname=Column(String)
-    lastname=Column(String)
-    username = Column(String)
-    useremail = Column(String)
-    clientname = Column(String)
-    servicename = Column(String)
-    clientemail = Column(String)
-    contactphoneno = Column(String)
-    address = Column(String)
-    demodate= Column(DateTime)
-    createdate= Column(DateTime)
-
+    firstname=Column(String,default='Test')
+    lastname=Column(String,default='TestLastName')
+    username = Column(String,default='testuser')
+    useremail = Column(String,  default="Test@testemail.com")
+    clientname = Column(String,default="testClient")
+    servicename = Column(String,default='TestService')
+    clientemail = Column(String,default="testCelienEmail")
+    contactphoneno = Column(String,default='1234567890')
+    address = Column(String,default='Test Address')
+    demodate= Column(DateTime,default=func.now())
+    createdate= Column(DateTime,default=func.now())

@@ -1,25 +1,31 @@
 services:
   pgdb:
     container_name: postgres_container
-    image: postgres
+    # Build CrunchyData-based Postgres with pgvector compiled-in
+    build:
+      context: ./docker/postgres-crunchy-pgvector
+    # if you prefer a prebuilt image, you can replace `build:` with:
+    # image: crunchydata/crunchy-postgres:15.3
     restart: always
-    environment:
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=${DB_NAME}
-    #PGDATA: /var/lib/postgresql/data
+    env_file:
+      - .env
     ports:
-     - "5432:80"
+     - "5432:5432"
     volumes:
      - postgres-data:/var/lib/postgresql/data
+     - ./docker/postgres-crunchy-pgvector/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   pgadmin:
     container_name: pgadmin4_container
     image: dpage/pgadmin4
     restart: always
-    environment:
-      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL}
-      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
+    env_file:
+      - .env
     ports:
       - 5050:80
     volumes:
@@ -30,7 +36,8 @@ services:
     container_name: app
     build: .
     command: bash -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
-
+    env_file:
+      - .env
     volumes:
       - .:/app
     ports:
@@ -48,10 +55,12 @@ services:
       - 80:8000
   streamlit:
     build: .
+    env_file:
+      - .env
     volumes:
       - .:/app
     ports:
-      - 8501:8501     
+      - 8501:8501
     # links:
     #   - app
     restart: always

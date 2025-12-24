@@ -47,16 +47,15 @@ async def getById(id: str):
     raise HTTPException(status_code=404, detail=f"Student {id} not found")
 
 async def InsertUser(data: user):
-    #result = db.users.insert_one(dict(data))
-    #return serializeDict(db.users.find_one({"_id": ObjectId(result.inserted_id)}))
-        
-    new_user = await db.users.insert_one(
-        data.model_dump(by_alias=True, exclude=["id"])
-                     )
-    created_user = await db.users.find_one(
-        {"_id": new_user.inserted_id}
-    )   
-    return    (json_util.dumps(created_user))
+    # Build payload excluding any raw password; if caller already hashed
+    # the password (routes set it before calling), include it as passwordHash.
+    payload = data.model_dump(by_alias=True, exclude={"id", "password"})
+    if getattr(data, "password", None):
+        # `data.password` should already be hashed by caller when appropriate
+        payload["passwordHash"] = data.password
+    new_user = await db.users.insert_one(payload)
+    created_user = await db.users.find_one({"_id": new_user.inserted_id})
+    return json_util.dumps(created_user)
 
 
 #    return json.loads(json_util.dumps(data))

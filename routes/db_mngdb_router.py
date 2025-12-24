@@ -1,10 +1,21 @@
 from bson import objectid
 from bson import ObjectId
 from fastapi import status, File, UploadFile,HTTPException
+from typing import List
+from datetime import datetime
 from models_mgdb.users import user
 from models_mgdb.db import users as users_coll, services as services_coll, roles as roles_coll, transactions as transactions_coll, registrations as registrations_coll
 from schemas_mgdb.serializeobjects import serializeDict, serializeList
-from schemas_pgrs.schema import service as ServiceSchema, Role as RoleSchema, TransactonBase as TransactionSchema, RegistrationBase as RegistrationSchema
+from schemas_pgrs.schema import (
+    service as ServiceSchema,
+    Role as RoleSchema,
+    TransactonBase as TransactionSchema,
+    RegistrationBase as RegistrationSchema,
+    CustomerBase,
+    DeviceBase,
+    CustomerResponse,
+    DeviceResponse,
+)
 from utils.utils import getResponse, riseHttpExceptionIfNotFound
 from helpers.save_picture import save_picture
 from services import user_service as service
@@ -31,6 +42,19 @@ _coll_map = {
     'transactions': transactions_coll,
     'registrations': registrations_coll,
 }
+# Add customers and devices to collection map if present in db module
+try:
+    _coll_map['customers'] = customers_coll
+except NameError:
+    # customers_coll may not be imported into this module; import from models_mgdb.db
+    from models_mgdb.db import customers as customers_coll
+    _coll_map['customers'] = customers_coll
+
+try:
+    _coll_map['devices'] = devices_coll
+except NameError:
+    from models_mgdb.db import devices as devices_coll
+    _coll_map['devices'] = devices_coll
 
 
 @router.get(base)
@@ -49,8 +73,12 @@ async def mongo_get_users():
 
 @router.post('/users/')
 async def mongo_create_user(data: user):
-    data.password = Hasher.get_password_hash(data.password)
-    res = await users_coll.insert_one(data.model_dump())
+    # Hash password and avoid storing raw password in MongoDB mirrors
+    plain_pwd = data.password
+    hashed = Hasher.get_password_hash(plain_pwd)
+    payload = data.model_dump(exclude={"password"})
+    payload["passwordHash"] = hashed
+    res = await users_coll.insert_one(payload)
     created = await users_coll.find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
@@ -61,6 +89,40 @@ async def mongo_get_services():
     async for s in services_coll.find():
         items.append(serializeDict(s))
     return items
+
+
+@router.get('/customers/', response_model=List[CustomerResponse])
+async def mongo_get_customers():
+    items = []
+    async for c in customers_coll.find():
+        items.append(serializeDict(c))
+    return items
+
+
+@router.post('/customers/', response_model=CustomerResponse)
+async def mongo_create_customer(data: CustomerBase):
+    payload = data.model_dump(exclude_none=True)
+    payload.setdefault('createdAt', datetime.utcnow())
+    res = await customers_coll.insert_one(payload)
+    created = await customers_coll.find_one({'_id': res.inserted_id})
+    return serializeDict(created)
+
+
+@router.get('/devices/', response_model=List[DeviceResponse])
+async def mongo_get_devices():
+    items = []
+    async for d in devices_coll.find():
+        items.append(serializeDict(d))
+    return items
+
+
+@router.post('/devices/', response_model=DeviceResponse)
+async def mongo_create_device(data: DeviceBase):
+    payload = data.model_dump(exclude_none=True)
+    payload.setdefault('createdAt', datetime.utcnow())
+    res = await devices_coll.insert_one(payload)
+    created = await devices_coll.find_one({'_id': res.inserted_id})
+    return serializeDict(created)
 
 
 @router.post('/services/')
@@ -117,6 +179,68 @@ async def mongo_create_registration(data: RegistrationSchema):
     res = await registrations_coll.insert_one(payload)
     created = await registrations_coll.find_one({'_id': res.inserted_id})
     return serializeDict(created)
+
+
+@router.get('/customers/{id}', response_model=CustomerResponse)
+async def mongo_get_customer_by_id(id: str):
+    try:
+        obj_id = ObjectId(id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid id')
+    doc = await customers_coll.find_one({'_id': obj_id})
+    await riseHttpExceptionIfNotFound(doc, message=f"Customer {id} not found")
+    return serializeDict(doc)
+
+
+@router.get('/devices/{id}', response_model=DeviceResponse)
+async def mongo_get_device_by_id(id: str):
+    try:
+        obj_id = ObjectId(id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid id')
+    doc = await devices_coll.find_one({'_id': obj_id})
+    await riseHttpExceptionIfNotFound(doc, message=f"Device {id} not found")
+    return serializeDict(doc)
+
+
+@router.put('/customers/{id}')
+async def mongo_update_customer(id: str, data: dict):
+    try:
+        obj_id = ObjectId(id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid id')
+    await customers_coll.update_one({'_id': obj_id}, {'$set': data})
+    return getResponse(True)
+
+
+@router.put('/devices/{id}')
+async def mongo_update_device(id: str, data: dict):
+    try:
+        obj_id = ObjectId(id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid id')
+    await devices_coll.update_one({'_id': obj_id}, {'$set': data})
+    return getResponse(True)
+
+
+@router.delete('/customers/{id}')
+async def mongo_delete_customer(id: str):
+    try:
+        obj_id = ObjectId(id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid id')
+    await customers_coll.delete_one({'_id': obj_id})
+    return getResponse(True)
+
+
+@router.delete('/devices/{id}')
+async def mongo_delete_device(id: str):
+    try:
+        obj_id = ObjectId(id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid id')
+    await devices_coll.delete_one({'_id': obj_id})
+    return getResponse(True)
 
 
 @router.get(base+'{id}')

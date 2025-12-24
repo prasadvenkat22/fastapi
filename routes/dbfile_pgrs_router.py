@@ -19,7 +19,12 @@ router = APIRouter(
     tags = ['Data Loading']
 )
  
-models.Base.metadata.create_all(bind=engine)
+try:
+    models.Base.metadata.create_all(bind=engine)
+except Exception as e:
+    # Do not fail import if Postgres is unavailable during static analysis or tests
+    import logging
+    logging.getLogger(__name__).warning("Postgres create_all failed on import: %s", e)
 def get_db():
     db= SessionLocal()
     try:

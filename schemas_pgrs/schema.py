@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Annotated
+from typing import List, Annotated, Optional, Dict
 from enum import Enum
 from fastapi import  Depends
 from pydantic import BaseModel, EmailStr,Field
@@ -53,7 +53,56 @@ class RegistrationBase(BaseModel):
     address :str
     demodate:datetime
     createdate:datetime
+    # Extended fields for demo booking flow
+    customerId: Optional[str]
+    serviceId: Optional[int]
+    contact: Optional[Dict] = None
+    preferredSlots: Optional[List[datetime]] = None
+    scheduledSlot: Optional[datetime] = None
+    status: Optional[Literal['requested','scheduled','completed','cancelled']] = 'requested'
+    assignedToUserId: Optional[str] = None
+    source: Optional[str] = None
+    notes: Optional[str] = None
 class RegistraionModel(RegistrationBase):
     id:int
     class Config:
         from_attributes = True
+
+
+class Contact(BaseModel):
+    name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    company: Optional[str] = None
+
+
+class CustomerBase(BaseModel):
+    name: str = Field(..., min_length=2)
+    status: Optional[Literal['active','inactive']] = 'active'
+    primaryContact: Optional[Contact] = None
+    billing: Optional[Dict] = None
+    tenantId: Optional[str] = None
+    metadata: Optional[Dict] = None
+    createdAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
+
+
+class DeviceBase(BaseModel):
+    customerId: Optional[str] = None
+    deviceType: Optional[str] = None
+    serialNumber: Optional[str] = None
+    model: Optional[str] = None
+    firmwareVersion: Optional[str] = None
+    status: Optional[str] = 'active'
+    lastSeenAt: Optional[datetime] = None
+    metadata: Optional[Dict] = None
+    createdAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
+
+
+class CustomerResponse(CustomerBase):
+    _id: Optional[str] = None
+
+
+class DeviceResponse(DeviceBase):
+    _id: Optional[str] = None

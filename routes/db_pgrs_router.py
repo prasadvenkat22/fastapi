@@ -113,7 +113,8 @@ async def create_user(Usr: ServiceUser, db: db_dependency):
         db.refresh(db_user)
         # also write to MongoDB users collection (best-effort)
         try:
-            await mdb.users.insert_one(Usr.model_dump())
+            # Do not mirror any raw password to MongoDB
+            await mdb.users.insert_one(Usr.model_dump(exclude={"password"}))
         except Exception as exc:
             logger.warning("MongoDB write failed for users: %s", exc, exc_info=True)
         #result= create_db_users(Usr.name,Usr.password,resultapp.DBName,Usr.role)

@@ -32,12 +32,9 @@ jobs:
           # Ensure dnspython is available for mongodb+srv SRV resolution (Atlas)
           pip install dnspython pytest pytest-asyncio
 
-      - name: Wait for local Mongo (skipped if ATLAS_URI provided)
-        if: ${{ secrets.ATLAS_URI == '' }}
-        run: |
-          for i in {1..30}; do
-            nc -z localhost 27017 && break || sleep 1
-          done
+      # Removed conditional wait step because accessing `secrets` in
+      # that expression caused evaluation errors in some contexts.
+      # The test runner will perform any necessary checks at runtime.
 
       - name: Run tests
         env:

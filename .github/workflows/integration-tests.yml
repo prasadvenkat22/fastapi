@@ -51,5 +51,13 @@ jobs:
           else
             export MONGODB_URL="mongodb://localhost:27017"
             echo "Using local MongoDB service for tests"
+            echo "Waiting for local MongoDB to become available..."
+            for i in {1..60}; do
+              nc -z localhost 27017 && echo "Mongo is up" && break || sleep 1
+            done
+            if ! nc -z localhost 27017; then
+              echo "Timed out waiting for MongoDB on localhost:27017" >&2
+              exit 1
+            fi
           fi
           python -m pytest -q

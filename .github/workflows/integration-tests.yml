@@ -12,8 +12,11 @@ jobs:
       mongo:
         image: mongo:6.0
         ports: ['27017']
+        # Use mongosh for the healthcheck because the legacy `mongo` shell
+        # may not be present in newer Mongo images (MongoDB 6+). If the
+        # runner still fails, the healthcheck can be removed entirely.
         options: >-
-          --health-cmd="mongo --eval 'db.runCommand({ ping: 1 })' --quiet || exit 1"
+          --health-cmd="mongosh --eval \"db.adminCommand({ ping: 1 })\" --quiet || exit 1"
           --health-interval=5s --health-timeout=5s --health-retries=10
 
     steps:

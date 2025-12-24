@@ -43,6 +43,9 @@ jobs:
         env:
           # If ATLAS_URI secret is set, tests will run against Atlas. Otherwise use local test Mongo.
           ATLAS_URI: ${{ secrets.ATLAS_URI }}
+          # Provide a default SQL DATABASE URL for CI so SQLAlchemy doesn't fail
+          # when Postgres isn't available in the runner. Use a local SQLite file.
+          DATABASE_URL: "sqlite:///./test_ci.db"
         run: |
           # Choose Mongo URL: prefer ATLAS_URI when provided
           if [ -n "$ATLAS_URI" ]; then

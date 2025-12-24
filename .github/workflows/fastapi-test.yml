@@ -1,12 +1,15 @@
 name: CI - Integration Tests
 
 on:
+  push:
+  pull_request:
   workflow_dispatch:
     inputs:
       run_atlas:
-        description: 'true' ## 'Set to "true" to attempt running tests against Atlas (requires ATLAS_URI secret)'
+        description: 'Set to "true" to attempt running tests against Atlas (requires ATLAS_URI secret)'
         required: true
         default: 'false'
+ 
 
 jobs:
   integration-tests:

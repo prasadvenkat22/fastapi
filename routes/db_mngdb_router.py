@@ -4,7 +4,11 @@ from fastapi import status, File, UploadFile,HTTPException
 from typing import List
 from datetime import datetime
 from models_mgdb.users import user
-from models_mgdb.db import users as users_coll, services as services_coll, roles as roles_coll, transactions as transactions_coll, registrations as registrations_coll
+import models_mgdb.db as mgdb
+
+
+def C(name: str):
+    return mgdb.get_collection(name)
 from schemas_mgdb.serializeobjects import serializeDict, serializeList
 from schemas_pgrs.schema import (
     service as ServiceSchema,
@@ -21,7 +25,6 @@ from helpers.save_picture import save_picture
 from services import user_service as service
 from fastapi import APIRouter
 from dotenv import load_dotenv
-from models_mgdb.db import db
 from services.user_service import Hasher
 import asyncio
 import os
@@ -36,25 +39,14 @@ _notFoundMessage = "Could not find user with the given Id."
 
 # Map route collection names to Motor collection objects
 _coll_map = {
-    'users': users_coll,
-    'services': services_coll,
-    'roles': roles_coll,
-    'transactions': transactions_coll,
-    'registrations': registrations_coll,
+    'users': 'users',
+    'services': 'services',
+    'roles': 'roles',
+    'transactions': 'transactions',
+    'registrations': 'registrations',
+    'customers': 'customers',
+    'devices': 'devices',
 }
-# Add customers and devices to collection map if present in db module
-try:
-    _coll_map['customers'] = customers_coll
-except NameError:
-    # customers_coll may not be imported into this module; import from models_mgdb.db
-    from models_mgdb.db import customers as customers_coll
-    _coll_map['customers'] = customers_coll
-
-try:
-    _coll_map['devices'] = devices_coll
-except NameError:
-    from models_mgdb.db import devices as devices_coll
-    _coll_map['devices'] = devices_coll
 
 
 @router.get(base)
@@ -66,7 +58,7 @@ async def getallusers():
 @router.get('/users/')
 async def mongo_get_users():
     users = []
-    async for u in users_coll.find():
+    async for u in C('users').find():
         users.append(serializeDict(u))
     return users
 
@@ -78,15 +70,15 @@ async def mongo_create_user(data: user):
     hashed = Hasher.get_password_hash(plain_pwd)
     payload = data.model_dump(exclude={"password"})
     payload["passwordHash"] = hashed
-    res = await users_coll.insert_one(payload)
-    created = await users_coll.find_one({'_id': res.inserted_id})
+    res = await C('users').insert_one(payload)
+    created = await C('users').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
 @router.get('/services/')
 async def mongo_get_services():
     items = []
-    async for s in services_coll.find():
+    async for s in C('services').find():
         items.append(serializeDict(s))
     return items
 
@@ -94,7 +86,7 @@ async def mongo_get_services():
 @router.get('/customers/', response_model=List[CustomerResponse])
 async def mongo_get_customers():
     items = []
-    async for c in customers_coll.find():
+    async for c in C('customers').find():
         items.append(serializeDict(c))
     return items
 
@@ -103,15 +95,15 @@ async def mongo_get_customers():
 async def mongo_create_customer(data: CustomerBase):
     payload = data.model_dump(exclude_none=True)
     payload.setdefault('createdAt', datetime.utcnow())
-    res = await customers_coll.insert_one(payload)
-    created = await customers_coll.find_one({'_id': res.inserted_id})
+    res = await C('customers').insert_one(payload)
+    created = await C('customers').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
 @router.get('/devices/', response_model=List[DeviceResponse])
 async def mongo_get_devices():
     items = []
-    async for d in devices_coll.find():
+    async for d in C('devices').find():
         items.append(serializeDict(d))
     return items
 
@@ -120,23 +112,23 @@ async def mongo_get_devices():
 async def mongo_create_device(data: DeviceBase):
     payload = data.model_dump(exclude_none=True)
     payload.setdefault('createdAt', datetime.utcnow())
-    res = await devices_coll.insert_one(payload)
-    created = await devices_coll.find_one({'_id': res.inserted_id})
+    res = await C('devices').insert_one(payload)
+    created = await C('devices').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
 @router.post('/services/')
 async def mongo_create_service(data: ServiceSchema):
     payload = data.model_dump()
-    res = await services_coll.insert_one(payload)
-    created = await services_coll.find_one({'_id': res.inserted_id})
+    res = await C('services').insert_one(payload)
+    created = await C('services').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
 @router.get('/roles/')
 async def mongo_get_roles():
     items = []
-    async for r in roles_coll.find():
+    async for r in C('roles').find():
         items.append(serializeDict(r))
     return items
 
@@ -144,15 +136,15 @@ async def mongo_get_roles():
 @router.post('/roles/')
 async def mongo_create_role(data: RoleSchema):
     payload = data.model_dump()
-    res = await roles_coll.insert_one(payload)
-    created = await roles_coll.find_one({'_id': res.inserted_id})
+    res = await C('roles').insert_one(payload)
+    created = await C('roles').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
 @router.get('/transactions/')
 async def mongo_get_transactions():
     items = []
-    async for t in transactions_coll.find():
+    async for t in C('transactions').find():
         items.append(serializeDict(t))
     return items
 
@@ -160,15 +152,15 @@ async def mongo_get_transactions():
 @router.post('/transactions/')
 async def mongo_create_transaction(data: TransactionSchema):
     payload = data.model_dump()
-    res = await transactions_coll.insert_one(payload)
-    created = await transactions_coll.find_one({'_id': res.inserted_id})
+    res = await C('transactions').insert_one(payload)
+    created = await C('transactions').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
 @router.get('/registrations/')
 async def mongo_get_registrations():
     items = []
-    async for r in registrations_coll.find():
+    async for r in C('registrations').find():
         items.append(serializeDict(r))
     return items
 
@@ -176,8 +168,8 @@ async def mongo_get_registrations():
 @router.post('/registrations/')
 async def mongo_create_registration(data: RegistrationSchema):
     payload = data.model_dump()
-    res = await registrations_coll.insert_one(payload)
-    created = await registrations_coll.find_one({'_id': res.inserted_id})
+    res = await C('registrations').insert_one(payload)
+    created = await C('registrations').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
@@ -187,7 +179,7 @@ async def mongo_get_customer_by_id(id: str):
         obj_id = ObjectId(id)
     except Exception:
         raise HTTPException(status_code=400, detail='Invalid id')
-    doc = await customers_coll.find_one({'_id': obj_id})
+    doc = await C('customers').find_one({'_id': obj_id})
     await riseHttpExceptionIfNotFound(doc, message=f"Customer {id} not found")
     return serializeDict(doc)
 
@@ -198,28 +190,32 @@ async def mongo_get_device_by_id(id: str):
         obj_id = ObjectId(id)
     except Exception:
         raise HTTPException(status_code=400, detail='Invalid id')
-    doc = await devices_coll.find_one({'_id': obj_id})
+    doc = await C('devices').find_one({'_id': obj_id})
     await riseHttpExceptionIfNotFound(doc, message=f"Device {id} not found")
     return serializeDict(doc)
 
 
 @router.put('/customers/{id}')
-async def mongo_update_customer(id: str, data: dict):
+async def mongo_update_customer(id: str, data: CustomerBase):
     try:
         obj_id = ObjectId(id)
     except Exception:
         raise HTTPException(status_code=400, detail='Invalid id')
-    await customers_coll.update_one({'_id': obj_id}, {'$set': data})
+    payload = data.model_dump(exclude_none=True)
+    payload['updatedAt'] = datetime.utcnow()
+    await C('customers').update_one({'_id': obj_id}, {'$set': payload})
     return getResponse(True)
 
 
 @router.put('/devices/{id}')
-async def mongo_update_device(id: str, data: dict):
+async def mongo_update_device(id: str, data: DeviceBase):
     try:
         obj_id = ObjectId(id)
     except Exception:
         raise HTTPException(status_code=400, detail='Invalid id')
-    await devices_coll.update_one({'_id': obj_id}, {'$set': data})
+    payload = data.model_dump(exclude_none=True)
+    payload['updatedAt'] = datetime.utcnow()
+    await C('devices').update_one({'_id': obj_id}, {'$set': payload})
     return getResponse(True)
 
 
@@ -229,7 +225,7 @@ async def mongo_delete_customer(id: str):
         obj_id = ObjectId(id)
     except Exception:
         raise HTTPException(status_code=400, detail='Invalid id')
-    await customers_coll.delete_one({'_id': obj_id})
+    await C('customers').delete_one({'_id': obj_id})
     return getResponse(True)
 
 
@@ -239,7 +235,7 @@ async def mongo_delete_device(id: str):
         obj_id = ObjectId(id)
     except Exception:
         raise HTTPException(status_code=400, detail='Invalid id')
-    await devices_coll.delete_one({'_id': obj_id})
+    await C('devices').delete_one({'_id': obj_id})
     return getResponse(True)
 
 
@@ -284,8 +280,8 @@ async def upload_collection_image(collection: str, id: str, file: UploadFile = F
     Supported collections: `users`, `services`, `roles`, `transactions`, `registrations`.
     """
     collection = collection.lower()
-    coll = _coll_map.get(collection)
-    if coll is None:
+    coll_name = _coll_map.get(collection)
+    if coll_name is None:
         raise HTTPException(status_code=404, detail=f"Collection '{collection}' not found")
 
     # validate id and document exists
@@ -294,6 +290,7 @@ async def upload_collection_image(collection: str, id: str, file: UploadFile = F
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid document id")
 
+    coll = mgdb.get_collection(coll_name)
     doc = await coll.find_one({'_id': obj_id})
     if not doc:
         raise HTTPException(status_code=404, detail=f"Document {id} not found in {collection}")
@@ -369,9 +366,9 @@ async def uploadjsondata(file: UploadFile):
             print(file.filename)
             json_data = json.load(file.file)
             print(json_data)
-            print(db.name)
+            print(mgdb.db.name)
             # Use Motor async insert_many for the async DB
-            Collection = db[tablename]
+            Collection = mgdb.get_collection(tablename)
             if isinstance(json_data, list):
                 await Collection.insert_many(json_data)
             else:

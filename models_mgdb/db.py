@@ -7,23 +7,25 @@ load_dotenv()  # take environment variables from .env.
 DB_NAME = os.getenv("DB_NAME", "fastapi_db")
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 
-# Create async Motor client and select database from env
-client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URL)
-db = client.get_database(DB_NAME)
+# Do not create the Motor client at import-time to avoid capturing
+# an event loop that may later be closed (causes "Event loop is closed").
+# Initialize the client during application startup via `init_db()`.
+client = None
+db = None
 
-# Expose collections matching Postgres tables so other modules can import
-users = db.get_collection("users")
-services = db.get_collection("services")
-roles = db.get_collection("roles")
-transactions = db.get_collection("transactions")
-registrations = db.get_collection("registrations")
 
-# Additional collections for proposed schema
-customers = db.get_collection("customers")
-devices = db.get_collection("devices")
-audit_logs = db.get_collection("audit_logs")
-attachments = db.get_collection("attachments")
-invoices = db.get_collection("invoices")
+async def init_db(mongo_url: str = None, db_name: str = None):
+	"""Initialize Motor client and database. Call from FastAPI startup."""
+	global client, db
+	url = mongo_url or MONGODB_URL
+	name = db_name or DB_NAME
+	client = motor.motor_asyncio.AsyncIOMotorClient(url)
+	db = client.get_database(name)
 
-# backward-compatible alias for code that imports `db` from config
-# (other modules should import from `models_mgdb.db`)
+
+def get_collection(name: str):
+	"""Return a Motor collection by name. Raises if DB not initialized."""
+	if db is None:
+		raise RuntimeError("MongoDB client not initialized. Call init_db() on startup.")
+	return db.get_collection(name)
+

@@ -1,2 +1,12 @@
 .env
 node_modules
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*build/
+*dist/
+*.egg-info/
+*.so
+.pytest_cache/
+test_ci.db

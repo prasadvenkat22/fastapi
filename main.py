@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 import routes.db_mngdb_router as db_mngdb_router
 import GENAI.router as genai_router
+import models_mgdb.db as mgdb
 
 app = FastAPI(title="FastAPI-Users-Backend",description = "CRUD API")
 
@@ -56,13 +57,19 @@ async def home():
 
 
 @app.on_event("startup")
-def on_startup():
-    """Create Postgres tables at application startup (if DB reachable)."""
+async def on_startup():
+    """Initialize Mongo client and create Postgres tables (if reachable)."""
+    try:
+        await mgdb.init_db()  # Initialize Mongo (Motor) client
+    except Exception:
+        # don't crash app on startup if Mongo is not available; log a warning
+        import logging
+        logging.getLogger(__name__).warning("Mongo init_db failed on startup")
+
     try:
         from config.db_pgrs import engine
         import models_pgdb.models as models
         models.Base.metadata.create_all(bind=engine)
     except Exception as e:
-        # don't crash app on startup if Postgres is not available; log a warning
         import logging
         logging.getLogger(__name__).warning("Postgres create_all failed on startup: %s", e)

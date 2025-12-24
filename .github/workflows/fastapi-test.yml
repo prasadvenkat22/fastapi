@@ -9,9 +9,7 @@ on:
         description: 'Set to "true" to attempt running tests against Atlas (requires ATLAS_URI secret)'
         required: true
         default: 'false'
-    push:
-      branches:
-        - main     
+ 
 
 jobs:
   integration-tests:

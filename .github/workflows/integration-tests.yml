@@ -3,6 +3,7 @@ name: CI - Integration Tests
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   integration-tests:
@@ -28,9 +29,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest pytest-asyncio
+          # Ensure dnspython is available for mongodb+srv SRV resolution (Atlas)
+          pip install dnspython pytest pytest-asyncio
 
-      - name: Wait for Mongo
+      - name: Wait for local Mongo (skipped if ATLAS_URI provided)
+        if: ${{ secrets.ATLAS_URI == '' }}
         run: |
           for i in {1..30}; do
             nc -z localhost 27017 && break || sleep 1
@@ -38,6 +41,15 @@ jobs:
 
       - name: Run tests
         env:
-          MONGODB_URL: mongodb://localhost:27017
+          # If ATLAS_URI secret is set, tests will run against Atlas. Otherwise use local test Mongo.
+          ATLAS_URI: ${{ secrets.ATLAS_URI }}
         run: |
+          # Choose Mongo URL: prefer ATLAS_URI when provided
+          if [ -n "$ATLAS_URI" ]; then
+            export MONGODB_URL="$ATLAS_URI"
+            echo "Using ATLAS_URI for tests"
+          else
+            export MONGODB_URL="mongodb://localhost:27017"
+            echo "Using local MongoDB service for tests"
+          fi
           python -m pytest -q

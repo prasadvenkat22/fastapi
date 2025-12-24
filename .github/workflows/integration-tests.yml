@@ -7,7 +7,7 @@ on:
     inputs:
       run_atlas:
         description: 'true' ## 'Set to "true" to attempt running tests against Atlas (requires ATLAS_URI secret)'
-        required: false
+        required: true
         default: 'false'
 
 jobs:

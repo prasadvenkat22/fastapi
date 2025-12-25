@@ -1,4 +1,12 @@
 services:
+  mongo:
+    image: mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
   pgdb:
     container_name: postgres_container
     # Build CrunchyData-based Postgres with pgvector compiled-in
@@ -44,6 +52,7 @@ services:
       - 8000:8000
     depends_on:
      - pgdb
+     - mongo
     restart: always
   nginx:
     container_name: "nginx"
@@ -67,5 +76,6 @@ services:
     depends_on:
       - app
 volumes:
+ mongo-data:
  postgres-data:
  pgadmin-data:

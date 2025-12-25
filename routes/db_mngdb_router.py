@@ -19,8 +19,10 @@ from schemas_pgrs.schema import (
     DeviceBase,
     CustomerResponse,
     DeviceResponse,
+    InvoiceBase,
+    InvoiceResponse,
 )
-from utils.utils import getResponse, riseHttpExceptionIfNotFound
+from utils.utils import getResponse, riseHttpExceptionIfNotFound, await_if_coro
 from helpers.save_picture import save_picture
 from services import user_service as service
 from fastapi import APIRouter
@@ -46,12 +48,11 @@ _coll_map = {
     'registrations': 'registrations',
     'customers': 'customers',
     'devices': 'devices',
+    'invoices': 'invoices',
 }
 
 
-@router.get(base)
-async def getallusers():
-    return await service.getAllUser()
+
 
 
 # New endpoints matching Postgres CRUD endpoints but for MongoDB
@@ -95,8 +96,8 @@ async def mongo_get_customers():
 async def mongo_create_customer(data: CustomerBase):
     payload = data.model_dump(exclude_none=True)
     payload.setdefault('createdAt', datetime.utcnow())
-    res = await C('customers').insert_one(payload)
-    created = await C('customers').find_one({'_id': res.inserted_id})
+    res = await await_if_coro(C('customers').insert_one(payload))
+    created = await await_if_coro(C('customers').find_one({'_id': res.inserted_id}))
     return serializeDict(created)
 
 
@@ -112,8 +113,8 @@ async def mongo_get_devices():
 async def mongo_create_device(data: DeviceBase):
     payload = data.model_dump(exclude_none=True)
     payload.setdefault('createdAt', datetime.utcnow())
-    res = await C('devices').insert_one(payload)
-    created = await C('devices').find_one({'_id': res.inserted_id})
+    res = await await_if_coro(C('devices').insert_one(payload))
+    created = await await_if_coro(C('devices').find_one({'_id': res.inserted_id}))
     return serializeDict(created)
 
 
@@ -171,6 +172,24 @@ async def mongo_create_registration(data: RegistrationSchema):
     res = await C('registrations').insert_one(payload)
     created = await C('registrations').find_one({'_id': res.inserted_id})
     return serializeDict(created)
+
+
+@router.get('/invoices/', response_model=List[InvoiceResponse])
+async def mongo_get_invoices():
+    items = []
+    async for i in C('invoices').find():
+        items.append(serializeDict(i))
+    return items
+
+
+@router.post('/invoices/', response_model=InvoiceResponse)
+async def mongo_create_invoice(data: InvoiceBase):
+    payload = data.model_dump(exclude_none=True)
+    payload.setdefault('createdAt', datetime.utcnow())
+    res = await await_if_coro(C('invoices').insert_one(payload))
+    created = await await_if_coro(C('invoices').find_one({'_id': res.inserted_id}))
+    return serializeDict(created)
+
 
 
 @router.get('/customers/{id}', response_model=CustomerResponse)

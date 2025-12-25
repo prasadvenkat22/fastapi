@@ -15,6 +15,7 @@ def test_customers_crud():
         assert 'id' in data or '_id' in data or data.get('name') == 'TestCo'
 
 
+
 def test_devices_crud():
     # create device
     with TestClient(app) as client:

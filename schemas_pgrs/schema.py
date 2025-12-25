@@ -106,3 +106,15 @@ class CustomerResponse(CustomerBase):
 
 class DeviceResponse(DeviceBase):
     _id: Optional[str] = None
+
+
+class InvoiceBase(BaseModel):
+    transaction_ids: List[str]
+    customer_id: str
+    amount: float
+    status: str
+
+
+class InvoiceResponse(InvoiceBase):
+    _id: str
+

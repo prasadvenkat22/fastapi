@@ -296,7 +296,7 @@ async def uploadUserImage(id: str, file: UploadFile = File(...)):
 async def upload_collection_image(collection: str, id: str, file: UploadFile = File(...)):
     """Upload an image/file and attach `imageUrl` to the document in the given collection.
 
-    Supported collections: `users`, `services`, `roles`, `transactions`, `registrations`.
+    Supported collections: `users`, `services`, `roles`, `transactions`, `registrations`, `customers`, `devices`, and `invoices`.
     """
     collection = collection.lower()
     coll_name = _coll_map.get(collection)
@@ -347,6 +347,21 @@ async def upload_transactions_image(id: str, file: UploadFile = File(...)):
 @router.post('/registrations/{id}/image', status_code=status.HTTP_204_NO_CONTENT)
 async def upload_registrations_image(id: str, file: UploadFile = File(...)):
     return await upload_collection_image('registrations', id, file)
+
+
+@router.post('/customers/{id}/image', status_code=status.HTTP_204_NO_CONTENT)
+async def upload_customers_image(id: str, file: UploadFile = File(...)):
+    return await upload_collection_image('customers', id, file)
+
+
+@router.post('/devices/{id}/image', status_code=status.HTTP_204_NO_CONTENT)
+async def upload_devices_image(id: str, file: UploadFile = File(...)):
+    return await upload_collection_image('devices', id, file)
+
+
+@router.post('/invoices/{id}/image', status_code=status.HTTP_204_NO_CONTENT)
+async def upload_invoices_image(id: str, file: UploadFile = File(...)):
+    return await upload_collection_image('invoices', id, file)
 
 
 

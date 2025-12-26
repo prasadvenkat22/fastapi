@@ -4,7 +4,9 @@ import io
 import os
 import csv
 from pydantic import BaseModel
-from .llm_integration import run_rag, DocumentRequest
+
+from .llm_integration import DocumentRequest, LLMRequest, LLMResponse, vector_store_factory
+from . import rag_service
 
 try:
     from PyPDF2 import PdfReader
@@ -14,38 +16,30 @@ except Exception:
 router = APIRouter(prefix="/api/genai", tags=["GENAI"])
 
 
-class DocumentResponse(BaseModel):
-    id: Optional[str]
-    content: str
-    metadata: Dict = {}
-    score: Optional[float] = None
-
-
 class QueryResponse(BaseModel):
-    results: List[DocumentResponse]
+    results: List[rag_service.DocumentResponse]
 
 
 @router.post("/query", response_model=QueryResponse)
-async def genai_query(request: DocumentRequest):
-    """Accept a structured request and return structured results.
-    Delegates to `run_rag` in `llm_integration`.
-    """
+async def genai_query(request: DocumentRequest, vector_store: str = "faiss"):
+    """Accept a structured request and return structured results from a vector store."""
     try:
-        results = await run_rag(request)
+        vs = vector_store_factory(vector_store)
+        results = await vs.get_documents(query=request.query, top_k=request.top_k, filters=request.filters)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Normalize results to plain dicts so pydantic will validate across modules
-    normalized = []
-    for r in results:
-        if hasattr(r, "model_dump"):
-            normalized.append(r.model_dump())
-        elif hasattr(r, "dict"):
-            normalized.append(r.dict())
-        else:
-            normalized.append(r)
+    return QueryResponse(results=results)
 
-    return QueryResponse(results=normalized)
+
+@router.post("/llm", response_model=LLMResponse)
+async def genai_llm(request: LLMRequest):
+    """Accept a structured LLM request and return a structured LLM response."""
+    try:
+        response = await rag_service.call_llm(request)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return response
 
 
 def _infer_column_types(rows: List[List[str]], max_sample: int = 100) -> List[str]:
@@ -109,10 +103,15 @@ def _csv_to_markdown_sample(reader: List[List[str]], header: List[str], rows_to_
     return "\n".join(md_lines)
 
 
-@router.post("/query/upload", response_model=QueryResponse)
+@router.post("/query/upload", response_model=LLMResponse)
 async def genai_query_upload(
     files: List[UploadFile] = File(...),
     query: str = Form(...),
+    vector_store: str = Form("faiss"),
+    llm_provider: str = Form("openai"),
+    llm_model: str = Form("gpt-4o-mini"),
+    temperature: float = Form(0.0),
+    max_tokens: int = Form(800),
     top_k: int = Form(4),
     summarize: bool = Form(False),
 ):
@@ -246,20 +245,22 @@ async def genai_query_upload(
         uploads.append({"content": text, "metadata": {"filename": fname}})
         await f.close()
 
-    request = DocumentRequest(query=query, top_k=top_k)
+    # Build a single context string from all uploaded documents
+    full_context = "\n\n".join([u["content"] for u in uploads])
+    # Add the user's query to the context
+    prompt = f"Based on the following documents, please answer this question: {query}\n\nDocuments:\n{full_context}"
+
+    llm_req = LLMRequest(
+        prompt=prompt,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
     try:
-        results = await run_rag(request, uploads=uploads)
+        response = await rag_service.call_llm(llm_req)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Normalize results for pydantic
-    normalized: List[Dict[str, Any]] = []
-    for r in results:
-        if hasattr(r, "model_dump"):
-            normalized.append(r.model_dump())
-        elif hasattr(r, "dict"):
-            normalized.append(r.dict())
-        else:
-            normalized.append(r)
-
-    return QueryResponse(results=normalized)
+    return response

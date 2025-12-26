@@ -11,10 +11,12 @@ class service(BaseModel):
     description:str=Field(..., min_length=5)
     DBName: Literal['postgres','TenantOne', 'TenantTwo'] = 'postgres'
     createdate: datetime
+    imageUrl: Optional[str] = None
 
 class Role(BaseModel):
     role:Literal['user','admin'] = 'user'
     desc:str
+    imageUrl: Optional[str] = None
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -35,6 +37,7 @@ class TransactonBase(BaseModel) :
     description:str
     is_income:bool
     date:str
+    imageUrl: Optional[str] = None
 
 class TransactionModel(TransactonBase):
     id:int
@@ -53,6 +56,7 @@ class RegistrationBase(BaseModel):
     address :str
     demodate:datetime
     createdate:datetime
+    imageUrl: Optional[str] = None
     # Extended fields for demo booking flow
     customerId: Optional[str]
     serviceId: Optional[int]
@@ -85,6 +89,7 @@ class CustomerBase(BaseModel):
     metadata: Optional[Dict] = None
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
+    imageUrl: Optional[str] = None
 
 
 class DeviceBase(BaseModel):
@@ -96,8 +101,10 @@ class DeviceBase(BaseModel):
     status: Optional[str] = 'active'
     lastSeenAt: Optional[datetime] = None
     metadata: Optional[Dict] = None
+
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
+    imageUrl: Optional[str] = None
 
 
 class CustomerResponse(CustomerBase):
@@ -113,6 +120,7 @@ class InvoiceBase(BaseModel):
     customer_id: str
     amount: float
     status: str
+    imageUrl: Optional[str] = None
 
 
 class InvoiceResponse(InvoiceBase):

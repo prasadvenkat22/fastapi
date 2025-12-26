@@ -12,6 +12,7 @@ class user(BaseModel):
     role: Literal['admin', 'user'] = 'user'
     status: Optional[bool] = False
     date: Annotated[dt.datetime, Query(default_factory=dt.datetime.now)]
+    imageUrl: Optional[str] = None
     
     #: Annotated[datetime | None, Body()] = None
     #role: AuthRole.WRITE or READ

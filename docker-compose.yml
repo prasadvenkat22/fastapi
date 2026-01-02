@@ -51,8 +51,10 @@ services:
     ports:
       - 8000:8000
     depends_on:
-     - pgdb
-     - mongo
+      pgdb:
+        condition: service_healthy
+      mongo:
+        condition: service_started
     restart: always
   nginx:
     container_name: "nginx"

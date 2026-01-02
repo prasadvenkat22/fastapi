@@ -7,6 +7,7 @@ class DocumentRequest(BaseModel):
     query: str
     top_k: int = 4
     filters: Optional[Dict] = None
+    embedding_provider: str = "openai"
 
 
 class LLMRequest(BaseModel):
@@ -20,4 +21,10 @@ class LLMRequest(BaseModel):
 class LLMResponse(BaseModel):
     content: str
     metadata: Dict = {}
+
+class DocumentResponse(BaseModel):
+    id: Optional[str]
+    content: str
+    metadata: Dict = {}
+    score: Optional[float] = None
 

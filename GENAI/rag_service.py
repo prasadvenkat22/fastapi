@@ -1,21 +1,17 @@
+from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any
 import os
-import json
-from pydantic import BaseModel
 import httpx
+from .llm_integration import LLMRequest, LLMResponse, DocumentRequest, DocumentResponse
 
-from .llm_integration import LLMRequest, LLMResponse, DocumentRequest
+# region LLM Providers
+class BaseLLM(ABC):
+    @abstractmethod
+    async def generate(self, request: LLMRequest) -> LLMResponse:
+        pass
 
-
-class DocumentResponse(BaseModel):
-    id: Optional[str]
-    content: str
-    metadata: Dict = {}
-    score: Optional[float] = None
-
-
-async def call_llm(request: LLMRequest) -> LLMResponse:
-    if request.llm_provider == "openai":
+class OpenAILLM(BaseLLM):
+    async def generate(self, request: LLMRequest) -> LLMResponse:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY environment variable is not set")
@@ -39,9 +35,22 @@ async def call_llm(request: LLMRequest) -> LLMResponse:
                 return LLMResponse(content=content, metadata={"source": "openai"})
             except Exception as e:
                 return LLMResponse(content=f"Error calling OpenAI: {e}", metadata={"source": "error"})
-    else:
-        return LLMResponse(content=f"LLM provider {request.llm_provider} not supported.", metadata={"source": "error"})
 
+def llm_factory(provider: str) -> BaseLLM:
+    if provider == "openai":
+        return OpenAILLM()
+    # Add other providers here
+    else:
+        raise ValueError(f"LLM provider '{provider}' not supported.")
+
+async def generate_response(request: LLMRequest) -> LLMResponse:
+    try:
+        llm = llm_factory(request.llm_provider)
+        return await llm.generate(request)
+    except ValueError as e:
+        return LLMResponse(content=str(e), metadata={"source": "error"})
+
+# endregion
 
 async def run_rag(
     request: DocumentRequest,
@@ -56,11 +65,10 @@ async def run_rag(
     """
     if uploads:
         # Case 1: Uploaded documents are passed for Q&A or summarization
-        # Create a single prompt from all uploaded content
         full_context = "\n\n".join([u["content"] for u in uploads])
         prompt = f"Based on the following documents, please answer this question: {request.query}\n\nDocuments:\n{full_context}"
         llm_req = LLMRequest(prompt=prompt)
-        llm_response = await call_llm(llm_req)
+        llm_response = await generate_response(llm_req)
         return [
             DocumentResponse(
                 id=None,
@@ -77,11 +85,10 @@ async def run_rag(
         if not results:
             return [DocumentResponse(content="No results found in vector store.")]
 
-        # Create context from vector search results
         context = "\n\n".join([r.content for r in results])
         prompt = f"Based on the following information, answer the question: {request.query}\n\nContext:\n{context}"
         llm_req = LLMRequest(prompt=prompt)
-        llm_response = await call_llm(llm_req)
+        llm_response = await generate_response(llm_req)
         return [
             DocumentResponse(
                 id=None,

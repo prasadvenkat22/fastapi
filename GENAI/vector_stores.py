@@ -1,9 +1,38 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Any
 import os
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings as LangchainOpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
-from .rag_service import DocumentResponse
+from .llm_integration import DocumentResponse
+
+# region Embeddings
+class Embeddings(ABC):
+    @abstractmethod
+    def embed_query(self, text: str) -> List[float]:
+        pass
+
+    @abstractmethod
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        pass
+
+class OpenAIEmbeddings(Embeddings):
+    def __init__(self):
+        self.embeddings = LangchainOpenAIEmbeddings()
+
+    def embed_query(self, text: str) -> List[float]:
+        return self.embeddings.embed_query(text)
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self.embeddings.embed_documents(texts)
+
+def embedding_factory(provider: str) -> Embeddings:
+    if provider == "openai":
+        return OpenAIEmbeddings()
+    # Add other providers here
+    else:
+        raise ValueError(f"Embedding provider '{provider}' not supported.")
+
+# endregion
 
 class VectorDocument:
     def __init__(self, id: str, text: str, metadata: Dict[str, Any], embedding: Optional[List[float]] = None):
@@ -13,6 +42,9 @@ class VectorDocument:
         self.embedding = embedding
 
 class BaseVectorStore(ABC):
+    def __init__(self, embeddings: Embeddings):
+        self.embeddings = embeddings
+        
     @abstractmethod
     async def get_documents(self, query: str, top_k: int, filters: Optional[Dict[str, Any]] = None) -> List[DocumentResponse]:
         pass
@@ -22,14 +54,14 @@ class BaseVectorStore(ABC):
         pass
 
 class FAISSVectorStore(BaseVectorStore):
-    def __init__(self, vs_path: str = os.getenv("GENAI_VECTORSTORE_PATH", "local_vectorstore/db_faiss")):
+    def __init__(self, embeddings: Embeddings, vs_path: str = os.getenv("GENAI_VECTORSTORE_PATH", "local_vectorstore/db_faiss")):
+        super().__init__(embeddings)
         if not vs_path:
             raise ValueError("FAISS vector store path not found.")
         self.vs_path = vs_path
-        self.embeddings = OpenAIEmbeddings()
         self.vectorstore = None
         if os.path.exists(vs_path):
-            self.vectorstore = FAISS.load_local(vs_path, self.embeddings, allow_dangerous_deserialization=True)
+            self.vectorstore = FAISS.load_local(vs_path, self.embeddings.embeddings, allow_dangerous_deserialization=True) # Reaching into the wrapper for now
 
     async def get_documents(self, query: str, top_k: int, filters: Optional[Dict[str, Any]] = None) -> List[DocumentResponse]:
         if not self.vectorstore:
@@ -48,13 +80,15 @@ class FAISSVectorStore(BaseVectorStore):
         return results
 
     async def add_documents(self, documents: List[VectorDocument]):
+        texts = [doc.text for doc in documents]
+        metadatas = [doc.metadata for doc in documents]
+        
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(self.vs_path), exist_ok=True)
+        
         if not self.vectorstore:
-            texts = [doc.text for doc in documents]
-            metadatas = [doc.metadata for doc in documents]
-            self.vectorstore = FAISS.from_texts(texts, self.embeddings, metadatas=metadatas)
+            self.vectorstore = FAISS.from_texts(texts, self.embeddings.embeddings, metadatas=metadatas) # Reaching into the wrapper for now
         else:
-            texts = [doc.text for doc in documents]
-            metadatas = [doc.metadata for doc in documents]
             self.vectorstore.add_texts(texts, metadatas=metadatas)
         
         self.vectorstore.save_local(self.vs_path)
@@ -63,11 +97,11 @@ import asyncpg
 from pgvector.asyncpg import register_vector
 
 class PGVectorStore(BaseVectorStore):
-    def __init__(self, db_url: str = os.getenv("DATABASE_URL")):
+    def __init__(self, embeddings: Embeddings, db_url: str = os.getenv("DATABASE_URL")):
+        super().__init__(embeddings)
         if not db_url:
             raise ValueError("PostgreSQL database URL not found.")
         self.db_url = db_url
-        self.embeddings = OpenAIEmbeddings()
 
     async def _init_db(self):
         conn = await asyncpg.connect(self.db_url)
@@ -100,9 +134,14 @@ class PGVectorStore(BaseVectorStore):
         conn = await asyncpg.connect(self.db_url)
         await register_vector(conn)
         try:
-            for doc in documents:
-                if doc.embedding is None:
-                    doc.embedding = self.embeddings.embed_query(doc.text)
+            texts_to_embed = [doc.text for doc in documents if doc.embedding is None]
+            if texts_to_embed:
+                embeddings = self.embeddings.embed_documents(texts_to_embed)
+                embedding_map = dict(zip(texts_to_embed, embeddings))
+                for doc in documents:
+                    if doc.embedding is None:
+                        doc.embedding = embedding_map[doc.text]
+            
             await conn.executemany(
                 """
                 INSERT INTO documents (id, text, metadata, embedding) 
@@ -115,10 +154,11 @@ class PGVectorStore(BaseVectorStore):
         finally:
             await conn.close()
 
-def vector_store_factory(name: str) -> BaseVectorStore:
+def vector_store_factory(name: str, embedding_provider: str = "openai") -> BaseVectorStore:
+    embeddings = embedding_factory(embedding_provider)
     if name == "faiss":
-        return FAISSVectorStore()
+        return FAISSVectorStore(embeddings)
     elif name == "pgvector":
-        return PGVectorStore()
+        return PGVectorStore(embeddings)
     else:
         raise ValueError(f"Vector store '{name}' not supported.")

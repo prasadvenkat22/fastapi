@@ -11,9 +11,12 @@ from .rag_service import generate_response, run_rag
 from .vector_stores import vector_store_factory, VectorDocument
 
 try:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 except Exception:
-    PdfReader = None
+    try:
+        from PyPDF2 import PdfReader
+    except Exception:
+        PdfReader = None
 
 router = APIRouter(prefix="/api/genai", tags=["GENAI"])
 
@@ -23,7 +26,7 @@ class QueryResponse(BaseModel):
 
 
 @router.post("/query", response_model=QueryResponse)
-async def genai_query(request: DocumentRequest, vector_store_name: str = "faiss"):
+async def genai_query(request: DocumentRequest, vector_store_name: str = "pgvector"):
     """Accept a structured request and return structured results from a vector store."""
     try:
         vs = vector_store_factory(vector_store_name, request.embedding_provider)
@@ -87,7 +90,8 @@ def _process_file(data: bytes, filename: str) -> str:
 async def genai_query_upload(
     files: List[UploadFile] = File(...),
     query: str = Form(...),
-    vector_store_name: str = Form("faiss"),
+    username: str = Form("test_user"),
+    vector_store_name: str = Form("pgvector"),
     embedding_provider: str = Form("openai"),
     llm_provider: str = Form("openai"),
     llm_model: str = Form("gpt-4o-mini"),
@@ -97,7 +101,21 @@ async def genai_query_upload(
 ):
     """
     Accept file uploads, add them to the vector store, and then run a RAG query.
+
+    Parameters:
+    - files: List of files to upload (PDF, CSV, TXT, DOCX, images)
+    - query: Question to ask about the uploaded documents
+    - username: User who uploaded the file (default: test_user)
+    - vector_store_name: Vector store to use (default: pgvector)
+    - embedding_provider: Embedding provider (default: openai)
+    - llm_provider: LLM provider (default: openai)
+    - llm_model: LLM model (default: gpt-4o-mini)
+    - temperature: LLM temperature (default: 0.0)
+    - max_tokens: Maximum tokens for LLM response (default: 800)
+    - top_k: Number of similar documents to retrieve (default: 4)
     """
+    import datetime
+
     documents: List[VectorDocument] = []
     for f in files:
         data = await f.read()
@@ -105,7 +123,13 @@ async def genai_query_upload(
         content = _process_file(data, filename)
         if content:
             doc_id = str(uuid.uuid4())
-            documents.append(VectorDocument(id=doc_id, text=content, metadata={"filename": filename}))
+            metadata = {
+                "filename": filename,
+                "username": username,
+                "uploaded_at": datetime.datetime.utcnow().isoformat(),
+                "file_size": len(data)
+            }
+            documents.append(VectorDocument(id=doc_id, text=content, metadata=metadata))
         await f.close()
 
     try:

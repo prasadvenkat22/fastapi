@@ -33,6 +33,9 @@ class OpenAILLM(BaseLLM):
                 data = resp.json()
                 content = data["choices"][0]["message"]["content"]
                 return LLMResponse(content=content, metadata={"source": "openai"})
+            except httpx.HTTPStatusError as e:
+                error_detail = e.response.text if hasattr(e, 'response') else str(e)
+                return LLMResponse(content=f"Error calling OpenAI: {e}\nDetails: {error_detail}", metadata={"source": "error"})
             except Exception as e:
                 return LLMResponse(content=f"Error calling OpenAI: {e}", metadata={"source": "error"})
 

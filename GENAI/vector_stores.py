@@ -94,6 +94,7 @@ class FAISSVectorStore(BaseVectorStore):
         self.vectorstore.save_local(self.vs_path)
 
 import asyncpg
+import json
 from pgvector.asyncpg import register_vector
 
 class PGVectorStore(BaseVectorStore):
@@ -126,7 +127,7 @@ class PGVectorStore(BaseVectorStore):
             # Cosine similarity is used by default
             query_sql = "SELECT id, text, metadata, 1 - (embedding <=> $1) AS similarity FROM documents ORDER BY similarity DESC LIMIT $2"
             results = await conn.fetch(query_sql, query_embedding, top_k)
-            return [DocumentResponse(id=r['id'], content=r['text'], metadata=r['metadata'], score=r['similarity']) for r in results]
+            return [DocumentResponse(id=r['id'], content=r['text'], metadata=json.loads(r['metadata']) if isinstance(r['metadata'], str) else r['metadata'], score=r['similarity']) for r in results]
         finally:
             await conn.close()
 
@@ -144,12 +145,12 @@ class PGVectorStore(BaseVectorStore):
             
             await conn.executemany(
                 """
-                INSERT INTO documents (id, text, metadata, embedding) 
-                VALUES ($1, $2, $3, $4) 
-                ON CONFLICT (id) 
+                INSERT INTO documents (id, text, metadata, embedding)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (id)
                 DO UPDATE SET text = EXCLUDED.text, metadata = EXCLUDED.metadata, embedding = EXCLUDED.embedding
                 """,
-                [(doc.id, doc.text, doc.metadata, doc.embedding) for doc in documents]
+                [(doc.id, doc.text, json.dumps(doc.metadata), doc.embedding) for doc in documents]
             )
         finally:
             await conn.close()

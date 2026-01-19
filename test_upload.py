@@ -11,14 +11,15 @@ with open("test.txt", "rb") as f:
     files = {"files": ("test.txt", f, "text/plain")}
     data = {
         "query": "What is this file about?",
-        "vector_store_name": "faiss",
+        "username": "test_user",  # Added username parameter
+        "vector_store_name": "pgvector",
         "llm_provider": "openai",
         "llm_model": "gpt-4o-mini",
     }
     response = requests.post(url, files=files, data=data)
 
-print(response.status_code)
-print(response.text)
+print(f"Status Code: {response.status_code}")
+print(f"Response: {response.json()}")
 
 # Clean up the test file
 os.remove("test.txt")

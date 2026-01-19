@@ -4,6 +4,7 @@ import io
 import os
 import csv
 import uuid
+import httpx
 from pydantic import BaseModel
 
 from .llm_integration import DocumentRequest, LLMRequest, LLMResponse, DocumentResponse
@@ -86,6 +87,54 @@ def _process_file(data: bytes, filename: str) -> str:
     return text
 
 
+async def _register_or_update_user(username: str, email: Optional[str] = None) -> bool:
+    """
+    Register or update user in MongoDB via the /api/mongo/users/ endpoint.
+    Returns True if successful, False otherwise.
+    """
+    try:
+        # Try to create user in MongoDB
+        # Generate a valid email from username
+        valid_email = email if email else f"{username.replace('_', '').replace(' ', '')}@genai.app"
+
+        user_data = {
+            "name": username[:16],  # Ensure name is within max length
+            "email": valid_email,
+            "password": "GenAI@2024",  # Default password (8-15 chars)
+            "tenantdb": "genai",
+            "application": "rag",
+            "role": "user",
+            "status": True
+        }
+
+        # Use internal API call to register user
+        base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Check if user already exists
+            try:
+                response = await client.get(f"{base_url}/api/mongo/users/")
+                if response.status_code == 200:
+                    existing_users = response.json()
+                    # Check if username already exists
+                    if any(u.get("name") == username for u in existing_users):
+                        return True  # User already exists, no need to create
+            except Exception:
+                pass  # If check fails, proceed to create
+
+            # Create new user
+            response = await client.post(
+                f"{base_url}/api/mongo/users/",
+                json=user_data
+            )
+
+            return response.status_code in [200, 201]
+    except Exception as e:
+        # Log error but don't fail the upload
+        print(f"Warning: Could not register user '{username}': {e}")
+        return False
+
+
 @router.post("/query/upload", response_model=QueryResponse)
 async def genai_query_upload(
     files: List[UploadFile] = File(...),
@@ -131,6 +180,9 @@ async def genai_query_upload(
             }
             documents.append(VectorDocument(id=doc_id, text=content, metadata=metadata))
         await f.close()
+
+    # Register or update user in MongoDB
+    await _register_or_update_user(username)
 
     try:
         vs = vector_store_factory(vector_store_name, embedding_provider)

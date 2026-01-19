@@ -54,11 +54,11 @@ POST http://localhost:8000/api/genai/query/upload
 
 ## Required Parameters
 
-| Name | Type | Example |
-|------|------|---------|
-| `files` | File | `document.pdf` |
-| `query` | string | `"What is the main topic?"` |
-| `username` | string | `"john_doe"` (optional, defaults to `test_user`) |
+| Name | Type | Example | Notes |
+|------|------|---------|-------|
+| `files` | File | `document.pdf` | Required |
+| `query` | string | `"What is the main topic?"` | Required |
+| `username` | string | `"john_doe"` | **Auto-creates user in MongoDB** (defaults to `test_user`) |
 
 ---
 
@@ -242,18 +242,34 @@ formData.append('llm_model', 'gpt-4o-mini'); // Change model
 
 ---
 
+## User Auto-Registration
+
+**Important:** When you upload a file, the username is automatically registered in MongoDB at `/api/mongo/users/` if it doesn't exist yet.
+
+- **Email**: Auto-generated as `{username}@genai.app`
+- **Password**: Default `GenAI@2024`
+- **No duplicates**: Existing users are not re-created
+
+Check registered users:
+```bash
+curl http://localhost:8000/api/mongo/users/
+```
+
+---
+
 ## Production Checklist
 
 Before deploying to production:
 
 1. [ ] Change `REACT_APP_API_URL` to production URL
-2. [ ] Implement user authentication
+2. [ ] Implement user authentication (users are auto-created with default password)
 3. [ ] Add file size validation on frontend
 4. [ ] Add rate limiting
 5. [ ] Restrict CORS to your domain
 6. [ ] Handle API key rotation
 7. [ ] Add loading indicators
 8. [ ] Add retry logic for failed requests
+9. [ ] Change default user password from `GenAI@2024` to secure random generation
 
 ---
 

@@ -19,6 +19,8 @@ http://localhost:8000/api/genai
 
 Upload documents, store them in the vector database, and ask questions about them.
 
+**✨ Auto-Registration:** When you upload a file, the user specified in the `username` parameter is automatically registered in MongoDB (`/api/mongo/users/`) if they don't already exist. This ensures all document uploads are tracked with valid user accounts.
+
 #### Supported File Types
 - **PDF** (.pdf)
 - **CSV** (.csv)
@@ -32,7 +34,7 @@ Upload documents, store them in the vector database, and ask questions about the
 |-----------|------|----------|---------|-------------|
 | `files` | File[] | Yes | - | One or more files to upload |
 | `query` | string | Yes | - | Question to ask about the documents |
-| `username` | string | No | `test_user` | User who uploaded the file |
+| `username` | string | No | `test_user` | User who uploaded the file (auto-registered in MongoDB if new) |
 | `vector_store_name` | string | No | `pgvector` | Vector store (`pgvector` or `faiss`) |
 | `embedding_provider` | string | No | `openai` | Embedding provider |
 | `llm_provider` | string | No | `openai` | LLM provider |
@@ -79,6 +81,47 @@ console.log(data.results);
     }
   ]
 }
+```
+
+---
+
+### User Auto-Registration
+
+When a user uploads a file via `/api/genai/query/upload`, the system automatically:
+
+1. **Checks** if the username exists in MongoDB
+2. **Creates** a new user if not found
+3. **Registers** them at `/api/mongo/users/` with:
+   - **Name**: Username provided
+   - **Email**: `{username}@genai.app` (auto-generated)
+   - **Password**: `GenAI@2024` (default)
+   - **Tenant**: `genai`
+   - **Application**: `rag`
+   - **Role**: `user`
+   - **Status**: Active
+
+4. **Skips** creation if user already exists (no duplicates)
+
+#### Check Registered Users
+
+```bash
+GET http://localhost:8000/api/mongo/users/
+```
+
+#### Example Response:
+```json
+[
+  {
+    "_id": "696d96e26d11acfafb03c10f",
+    "name": "emma_davis",
+    "email": "emmadavis@genai.app",
+    "tenantdb": "genai",
+    "application": "rag",
+    "role": "user",
+    "status": true,
+    "date": "2026-01-19T02:28:50.151000"
+  }
+]
 ```
 
 ---

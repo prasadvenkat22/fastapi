@@ -63,7 +63,7 @@ services:
     volumes:
       - ./app/nginx/conf.d:/etc/nginx/conf.d
     ports:
-      - 80:8000
+      - 80:80
   streamlit:
     build: .
     env_file:

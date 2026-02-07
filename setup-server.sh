@@ -159,6 +159,10 @@ ENVEOF
 
 log_info "Environment file created."
 
+# Create .env symlink so base docker-compose.yml can resolve env_file: .env
+ln -sf .env.production .env
+log_info "Created .env symlink -> .env.production"
+
 echo ""
 echo "========================================"
 echo "  Setup Complete!"

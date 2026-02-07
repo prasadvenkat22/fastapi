@@ -5,12 +5,12 @@ import pickle
 from pypdf import PdfReader
 from streamlit_extras.add_vertical_space import add_vertical_space
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.chat_models import ChatOpenAI
+from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores.faiss import FAISS
+from langchain_openai import ChatOpenAI
 from langchain.chains.question_answering import load_qa_chain
 # get callback to get stats on query cost
-from langchain.callbacks import get_openai_callback
+from langchain_community.callbacks import get_openai_callback
 import os
 load_dotenv() 
 # Sidebar contents

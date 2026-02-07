@@ -2,18 +2,16 @@ import os
 import streamlit as st
 import pandas as pd
 from langchain_experimental.agents import create_pandas_dataframe_agent
-from langchain.chains import LLMChain
 from langchain_openai import OpenAI
 from dotenv import load_dotenv
 import streamlit as st
 from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter,CharacterTextSplitter
+from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
 from langchain.chains.question_answering import load_qa_chain
 from langchain_community.llms import OpenAI
 from langchain_community.callbacks import get_openai_callback
-from langchain.chains.combine_documents import create_stuff_documents_chain
 
 load_dotenv()  # take environment variables from .env.
 apikey=os.getenv("OPEN_API_KEY")

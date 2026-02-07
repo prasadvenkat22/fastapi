@@ -9,9 +9,10 @@ from PyPDF2 import PdfReader
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
-from langchain.chains.question_answering import load_qa_chain
-from langchain_community.llms import OpenAI
+from langchain_openai import ChatOpenAI
 from langchain_community.callbacks import get_openai_callback
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 load_dotenv()  # take environment variables from .env.
 apikey=os.getenv("OPENAI_API_KEY")
@@ -68,12 +69,16 @@ def main():
 
         if query:
             docs = knowledgeBase.similarity_search(query)
-            llm = OpenAI(openai_api_key=os.environ.get("OPENAI_API_KEY"))
-            chain = load_qa_chain(llm, chain_type="stuff")
+            context = "\n\n".join([doc.page_content for doc in docs])
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key=os.environ.get("OPENAI_API_KEY"))
+            prompt = ChatPromptTemplate.from_template(
+                "Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+            )
+            chain = prompt | llm | StrOutputParser()
             with get_openai_callback() as cost:
-              response = chain.invoke(input={"question": query, "input_documents": docs})
+              response = chain.invoke({"context": context, "question": query})
               print(cost)
-              st.write(response["output_text"])
+              st.write(response)
 
 
 

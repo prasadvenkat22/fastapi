@@ -8,9 +8,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_openai import ChatOpenAI
-from langchain.chains.question_answering import load_qa_chain
 # get callback to get stats on query cost
 from langchain_community.callbacks import get_openai_callback
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 import os
 load_dotenv() 
 # Sidebar contents
@@ -105,10 +106,14 @@ def retrieve_docs(question, vector_store):
 
 # generate the response
 def generate_response(docs, question):
-    llm = ChatOpenAI(temperature=0.0, max_tokens=1000, model_name="gpt-3.5-turbo")
-    chain = load_qa_chain(llm=llm, chain_type="stuff")
+    context = "\n\n".join([doc.page_content for doc in docs])
+    llm = ChatOpenAI(temperature=0.0, max_tokens=1000, model_name="gpt-4o-mini")
+    prompt = ChatPromptTemplate.from_template(
+        "Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+    )
+    chain = prompt | llm | StrOutputParser()
     with get_openai_callback() as cb:
-        response = chain.run(input_documents=docs, question=question)
+        response = chain.invoke({"context": context, "question": question})
         print(cb)
     return response
 

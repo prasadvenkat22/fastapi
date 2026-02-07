@@ -21,6 +21,9 @@ services:
     restart: always
 
   pgdb:
+    # Override env_file to use production config
+    env_file:
+      - .env.production
     deploy:
       resources:
         limits:
@@ -32,6 +35,9 @@ services:
     restart: always
 
   app:
+    # Override env_file to use production config
+    env_file:
+      - .env.production
     deploy:
       resources:
         limits:
@@ -43,6 +49,9 @@ services:
     restart: always
 
   streamlit:
+    # Override env_file to use production config
+    env_file:
+      - .env.production
     deploy:
       resources:
         limits:
@@ -61,5 +70,7 @@ services:
   # Disable pgAdmin in production to save ~200MB RAM
   # To enable for debugging, run with: --profile debug
   pgadmin:
+    env_file:
+      - .env.production
     profiles:
       - debug

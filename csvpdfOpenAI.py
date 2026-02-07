@@ -14,9 +14,9 @@ from langchain_community.llms import OpenAI
 from langchain_community.callbacks import get_openai_callback
 
 load_dotenv()  # take environment variables from .env.
-apikey=os.getenv("OPEN_API_KEY")
+apikey=os.getenv("OPENAI_API_KEY")
 #llm = OpenAI(openai_api_key= apikey)
-os.environ["OPEN_API_KEY"] = apikey
+os.environ["OPENAI_API_KEY"] = apikey
 print(apikey)
 OpenAI.api_key = apikey
 
@@ -33,7 +33,7 @@ def process_text(text):
   chunks = text_splitter.split_text(text)
 
   # convert the chunks of text into embeddings to form a knowledge base
-  embeddings = OpenAIEmbeddings(openai_api_key=os.environ.get("OPEN_API_KEY"))
+  embeddings = OpenAIEmbeddings(openai_api_key=os.environ.get("OPENAI_API_KEY"))
   knowledge_base = FAISS.from_texts(chunks, embeddings)
   return knowledge_base
 def main():
@@ -68,7 +68,7 @@ def main():
 
         if query:
             docs = knowledgeBase.similarity_search(query)
-            llm = OpenAI(openai_api_key=os.environ.get("OPEN_API_KEY"))
+            llm = OpenAI(openai_api_key=os.environ.get("OPENAI_API_KEY"))
             chain = load_qa_chain(llm, chain_type="stuff")
             with get_openai_callback() as cost:
               response = chain.invoke(input={"question": query, "input_documents": docs})

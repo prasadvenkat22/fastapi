@@ -31,6 +31,7 @@ langchain
 langchain-community
 langchain-openai
 langchain-experimental
+langchain-text-splitters
 lxml==6.0.2
 marshmallow==3.26.1
 mongomock==4.3.0

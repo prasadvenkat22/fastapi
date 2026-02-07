@@ -27,7 +27,7 @@ class QueryResponse(BaseModel):
 
 
 @router.post("/query", response_model=QueryResponse)
-async def genai_query(request: DocumentRequest, vector_store_name: str = "pgvector"):
+async def genai_query(request: DocumentRequest, vector_store_name: str = "pgvector", top_k: int = 2):
     """Accept a structured request and return structured results from a vector store."""
     try:
         vs = vector_store_factory(vector_store_name, request.embedding_provider)
@@ -145,8 +145,8 @@ async def genai_query_upload(
     llm_provider: str = Form("openai"),
     llm_model: str = Form("gpt-4o-mini"),
     temperature: float = Form(0.0),
-    max_tokens: int = Form(800),
-    top_k: int = Form(4),
+    max_tokens: int = Form(512),
+    top_k: int = Form(2),
 ):
     """
     Accept file uploads, add them to the vector store, and then run a RAG query.

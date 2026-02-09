@@ -102,3 +102,4 @@ bcrypt
 PyPDF2
 streamlit
 streamlit-extras
+tabulate

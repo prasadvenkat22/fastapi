@@ -64,6 +64,9 @@ services:
       - ./app/nginx/conf.d:/etc/nginx/conf.d
     ports:
       - 80:80
+    depends_on:
+      - app
+      - streamlit
   streamlit:
     build: .
     env_file:

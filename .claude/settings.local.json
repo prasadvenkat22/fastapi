@@ -17,7 +17,12 @@
       "Bash(docker logs:*)",
       "Bash(git ls-tree:*)",
       "Bash(start \"\" \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
-      "Bash(ssh:*)"
+      "Bash(ssh:*)",
+      "Bash(source env/Scripts/activate)",
+      "Bash(docker restart:*)",
+      "Bash(PG_SR_ID=1 MONGO_SR_ID=\"69ca92e12b29bb31d3286cfa\" CUSTOMER_ID=\"69ca92b02b29bb31d3286cf7\" __NEW_LINE_b51e944d7a2eb378__ echo \"=== 5a. COMPLETE SERVICE REQUEST → AUTO-TRANSACTION \\(Postgres\\) ===\" curl -s -X PUT \"http://localhost:8000/CRUD/service-requests/$PG_SR_ID/status\" -H \"Content-Type: application/json\" -d '{\"\"\"\"status\"\"\"\":\"\"\"\"completed\"\"\"\"}')",
+      "Bash(PG_SR_ID=1 CUSTOMER_ID=\"69ca92b02b29bb31d3286cf7\" DEVICE_ID=\"69ca92c32b29bb31d3286cf8\" __NEW_LINE_992431d72fc911d3__ echo \"=== GET: Users \\(Postgres\\) ===\" curl -s http://localhost:8000/CRUD/users/)",
+      "Bash(__NEW_LINE_a2bf4518d183b580__ git:*)"
     ],
     "deny": [],
     "ask": []

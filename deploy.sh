@@ -76,6 +76,9 @@ update() {
     log_info "Cleaning up old images..."
     docker image prune -f
 
+    log_info "Restarting nginx to pick up new container IPs..."
+    docker compose $COMPOSE_FILES restart nginx
+
     log_info "Update complete. Checking status..."
     sleep 3
     status

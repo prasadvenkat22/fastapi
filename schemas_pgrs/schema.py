@@ -1,128 +1,191 @@
-from pydantic import BaseModel
-from typing import List, Annotated, Optional, Dict
-from enum import Enum
-from fastapi import  Depends
-from pydantic import BaseModel, EmailStr,Field
+"""
+Pydantic schemas for the Postgres-only e-commerce API.
+
+Workflow: User registers → creates Customer → links Device to Customer
+          → places ServiceRequest → Transaction auto-created on completion
+          → Invoice generated for Customer
+"""
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from typing import List, Optional, Dict, Literal
 from datetime import datetime
-from typing import Literal
-#from pydantic_extra_types.phone_numbers import PhoneNumber
+
+
+# ---------------------------------------------------------------------------
+# Services / Roles  (kept for existing endpoints)
+# ---------------------------------------------------------------------------
+
 class service(BaseModel):
-    name:str=Field(..., min_length=2)
-    description:str=Field(..., min_length=5)
-    DBName: Literal['postgres','TenantOne', 'TenantTwo'] = 'postgres'
+    name: str = Field(..., min_length=2)
+    description: str = Field(..., min_length=5)
+    DBName: Literal['postgres', 'TenantOne', 'TenantTwo'] = 'postgres'
     createdate: datetime
     imageUrl: Optional[str] = None
 
+
 class Role(BaseModel):
-    role:Literal['user','admin'] = 'user'
-    desc:str
-    imageUrl: Optional[str] = None
+    role: Literal['user', 'admin'] = 'user'
+    desc: str
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
 
 class UserBase(BaseModel):
     email: EmailStr
 
+
 class ServiceUser(UserBase):
-    name:str =Field(..., min_length=3)
-    #password: str  =Field(..., min_length=3)
-    email: EmailStr 
-    service:  str  =Field(..., min_length=2)
+    """Legacy schema used by POST /users/ — kept for backward compat."""
+    name: str = Field(..., min_length=3)
+    email: EmailStr
+    service: str = Field(..., min_length=2)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
-class TransactonBase(BaseModel) :
-    amount:float
-    category:str
-    description:str
-    is_income:bool
-    date:str
-    imageUrl: Optional[str] = None
+class UserCreate(BaseModel):
+    """POST /register/ — creates a user with a hashed password."""
+    name: str = Field(..., min_length=3)
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+
+
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    created_date: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Customers
+# ---------------------------------------------------------------------------
+
+class CustomerCreate(BaseModel):
+    name: str = Field(..., min_length=2)
+    status: Literal['active', 'inactive'] = 'active'
+    contact_name: Optional[str] = None
+    contact_email: Optional[EmailStr] = None
+    contact_phone: Optional[str] = None
+    billing_address: Optional[str] = None
+    tenant_id: Optional[str] = None
+
+
+class CustomerResponse(CustomerCreate):
+    id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Devices  (must be linked to a Customer)
+# ---------------------------------------------------------------------------
+
+class DeviceCreate(BaseModel):
+    customer_id: int = Field(..., description="ID of the customer this device belongs to")
+    device_type: Optional[str] = None
+    serial_number: Optional[str] = None
+    model: Optional[str] = None
+    firmware_version: Optional[str] = None
+    status: Optional[str] = 'active'
+
+
+class DeviceResponse(DeviceCreate):
+    id: int
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Service Requests
+# ---------------------------------------------------------------------------
+
+class ServiceRequestCreate(BaseModel):
+    user_id: int
+    customer_id: Optional[int] = None
+    service_name: str = Field(..., min_length=2)
+    description: str = Field(..., min_length=5)
+    status: Literal['pending', 'in_progress', 'completed', 'cancelled'] = 'pending'
+    notes: Optional[str] = None
+    amount: Optional[float] = None
+
+
+class ServiceRequestResponse(ServiceRequestCreate):
+    id: int
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StatusUpdate(BaseModel):
+    status: Literal['pending', 'in_progress', 'completed', 'cancelled']
+
+
+# ---------------------------------------------------------------------------
+# Transactions
+# ---------------------------------------------------------------------------
+
+class TransactonBase(BaseModel):
+    amount: float
+    category: str
+    description: str
+    is_income: bool
+    date: str
+    user_id: Optional[int] = None
+    customer_id: Optional[int] = None
+
 
 class TransactionModel(TransactonBase):
-    id:int
-    class Config:
-        from_attributes = True
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Invoices
+# ---------------------------------------------------------------------------
+
+class InvoiceCreate(BaseModel):
+    customer_id: int
+    service_request_id: Optional[int] = None
+    amount: float
+    status: Literal['draft', 'sent', 'paid', 'overdue'] = 'draft'
+
+
+class InvoiceResponse(InvoiceCreate):
+    id: int
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Registrations  (legacy — kept for backward compat)
+# ---------------------------------------------------------------------------
 
 class RegistrationBase(BaseModel):
-    firstname:str
-    lastname:str
-    username:str
-    useremail:EmailStr
-    clientname:str
-    servicename:str
-    clientemail:EmailStr
-    contactphoneno:str
-    address :str
-    demodate:datetime
-    createdate:datetime
-    imageUrl: Optional[str] = None
-    # Extended fields for demo booking flow
-    customerId: Optional[str] = None
-    serviceId: Optional[int] = None
-    contact: Optional[Dict] = None
-    preferredSlots: Optional[List[datetime]] = None
-    scheduledSlot: Optional[datetime] = None
-    status: Optional[Literal['requested','scheduled','completed','cancelled']] = 'requested'
-    assignedToUserId: Optional[str] = None
-    source: Optional[str] = None
+    firstname: str
+    lastname: str
+    username: str
+    useremail: EmailStr
+    clientname: str
+    servicename: str
+    clientemail: EmailStr
+    contactphoneno: str
+    address: str
+    demodate: datetime
+    createdate: datetime
+    status: Optional[Literal['requested', 'scheduled', 'completed', 'cancelled']] = 'requested'
     notes: Optional[str] = None
+
+
 class RegistraionModel(RegistrationBase):
-    id:int
-    class Config:
-        from_attributes = True
+    id: int
 
-
-class Contact(BaseModel):
-    name: str
-    email: EmailStr
-    phone: Optional[str] = None
-    company: Optional[str] = None
-
-
-class CustomerBase(BaseModel):
-    name: str = Field(..., min_length=2)
-    status: Optional[Literal['active','inactive']] = 'active'
-    primaryContact: Optional[Contact] = None
-    billing: Optional[Dict] = None
-    tenantId: Optional[str] = None
-    metadata: Optional[Dict] = None
-    createdAt: Optional[datetime] = None
-    updatedAt: Optional[datetime] = None
-    imageUrl: Optional[str] = None
-
-
-class DeviceBase(BaseModel):
-    customerId: Optional[str] = None
-    deviceType: Optional[str] = None
-    serialNumber: Optional[str] = None
-    model: Optional[str] = None
-    firmwareVersion: Optional[str] = None
-    status: Optional[str] = 'active'
-    lastSeenAt: Optional[datetime] = None
-    metadata: Optional[Dict] = None
-
-    createdAt: Optional[datetime] = None
-    updatedAt: Optional[datetime] = None
-    imageUrl: Optional[str] = None
-
-
-class CustomerResponse(CustomerBase):
-    _id: Optional[str] = None
-
-
-class DeviceResponse(DeviceBase):
-    _id: Optional[str] = None
-
-
-class InvoiceBase(BaseModel):
-    transaction_ids: List[str]
-    customer_id: str
-    amount: float
-    status: str
-    imageUrl: Optional[str] = None
-
-
-class InvoiceResponse(InvoiceBase):
-    _id: str
-
+    model_config = ConfigDict(from_attributes=True)

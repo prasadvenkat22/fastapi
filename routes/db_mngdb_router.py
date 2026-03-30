@@ -1,3 +1,10 @@
+# ---------------------------------------------------------------------------
+# MongoDB Router — DISABLED
+# This router is not included in main.py. All active endpoints are in
+# routes/db_pgrs_router.py (Postgres only).
+# To re-enable: uncomment the two lines in main.py marked "MongoDB — disabled".
+# ---------------------------------------------------------------------------
+
 from bson import objectid
 from bson import ObjectId
 from fastapi import status, File, UploadFile,HTTPException
@@ -17,10 +24,14 @@ from schemas_pgrs.schema import (
     RegistrationBase as RegistrationSchema,
     CustomerBase,
     DeviceBase,
+    DeviceCreate,
     CustomerResponse,
     DeviceResponse,
     InvoiceBase,
     InvoiceResponse,
+    ServiceRequestBase,
+    ServiceRequestResponse,
+    StatusUpdate,
 )
 from utils.utils import getResponse, riseHttpExceptionIfNotFound, await_if_coro
 from helpers.save_picture import save_picture
@@ -49,6 +60,7 @@ _coll_map = {
     'customers': 'customers',
     'devices': 'devices',
     'invoices': 'invoices',
+    'service_requests': 'service_requests',
 }
 
 
@@ -84,7 +96,7 @@ async def mongo_get_services():
     return items
 
 
-@router.get('/customers/', response_model=List[CustomerResponse])
+@router.get('/customers/')
 async def mongo_get_customers():
     items = []
     async for c in C('customers').find():
@@ -92,16 +104,16 @@ async def mongo_get_customers():
     return items
 
 
-@router.post('/customers/', response_model=CustomerResponse)
+@router.post('/customers/')
 async def mongo_create_customer(data: CustomerBase):
     payload = data.model_dump(exclude_none=True)
     payload.setdefault('createdAt', datetime.utcnow())
-    res = await await_if_coro(C('customers').insert_one(payload))
-    created = await await_if_coro(C('customers').find_one({'_id': res.inserted_id}))
+    res = await C('customers').insert_one(payload)
+    created = await C('customers').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
-@router.get('/devices/', response_model=List[DeviceResponse])
+@router.get('/devices/')
 async def mongo_get_devices():
     items = []
     async for d in C('devices').find():
@@ -109,12 +121,20 @@ async def mongo_get_devices():
     return items
 
 
-@router.post('/devices/', response_model=DeviceResponse)
-async def mongo_create_device(data: DeviceBase):
+@router.post('/devices/')
+async def mongo_create_device(data: DeviceCreate):
+    # Validate that the referenced customer exists
+    try:
+        cust_obj_id = ObjectId(data.customerId)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid customerId — must be a valid MongoDB ObjectId")
+    customer = await C('customers').find_one({'_id': cust_obj_id})
+    if not customer:
+        raise HTTPException(status_code=404, detail=f"Customer {data.customerId} not found")
     payload = data.model_dump(exclude_none=True)
     payload.setdefault('createdAt', datetime.utcnow())
-    res = await await_if_coro(C('devices').insert_one(payload))
-    created = await await_if_coro(C('devices').find_one({'_id': res.inserted_id}))
+    res = await C('devices').insert_one(payload)
+    created = await C('devices').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
@@ -174,7 +194,7 @@ async def mongo_create_registration(data: RegistrationSchema):
     return serializeDict(created)
 
 
-@router.get('/invoices/', response_model=List[InvoiceResponse])
+@router.get('/invoices/')
 async def mongo_get_invoices():
     items = []
     async for i in C('invoices').find():
@@ -182,17 +202,17 @@ async def mongo_get_invoices():
     return items
 
 
-@router.post('/invoices/', response_model=InvoiceResponse)
+@router.post('/invoices/')
 async def mongo_create_invoice(data: InvoiceBase):
     payload = data.model_dump(exclude_none=True)
     payload.setdefault('createdAt', datetime.utcnow())
-    res = await await_if_coro(C('invoices').insert_one(payload))
-    created = await await_if_coro(C('invoices').find_one({'_id': res.inserted_id}))
+    res = await C('invoices').insert_one(payload)
+    created = await C('invoices').find_one({'_id': res.inserted_id})
     return serializeDict(created)
 
 
 
-@router.get('/customers/{id}', response_model=CustomerResponse)
+@router.get('/customers/{id}')
 async def mongo_get_customer_by_id(id: str):
     try:
         obj_id = ObjectId(id)
@@ -203,7 +223,7 @@ async def mongo_get_customer_by_id(id: str):
     return serializeDict(doc)
 
 
-@router.get('/devices/{id}', response_model=DeviceResponse)
+@router.get('/devices/{id}')
 async def mongo_get_device_by_id(id: str):
     try:
         obj_id = ObjectId(id)
@@ -257,6 +277,101 @@ async def mongo_delete_device(id: str):
     await C('devices').delete_one({'_id': obj_id})
     return getResponse(True)
 
+
+# ---------------------------------------------------------------------------
+# Service Requests
+# ---------------------------------------------------------------------------
+
+@router.get('/service-requests/')
+async def mongo_get_service_requests():
+    items = []
+    async for sr in C('service_requests').find():
+        items.append(serializeDict(sr))
+    return items
+
+
+@router.post('/service-requests/')
+async def mongo_create_service_request(data: ServiceRequestBase):
+    # Validate customer if provided
+    if data.customerId:
+        try:
+            cust_oid = ObjectId(data.customerId)
+            customer = await C('customers').find_one({'_id': cust_oid})
+            if not customer:
+                raise HTTPException(status_code=404, detail=f"Customer {data.customerId} not found")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid customerId")
+    payload = data.model_dump(exclude_none=True)
+    payload['createdAt'] = datetime.utcnow()
+    res = await C('service_requests').insert_one(payload)
+    created = await C('service_requests').find_one({'_id': res.inserted_id})
+    return serializeDict(created)
+
+
+@router.get('/service-requests/{id}')
+async def mongo_get_service_request_by_id(id: str):
+    try:
+        obj_id = ObjectId(id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid id')
+    doc = await C('service_requests').find_one({'_id': obj_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Service request {id} not found")
+    return serializeDict(doc)
+
+
+@router.put('/service-requests/{id}/status')
+async def mongo_update_service_request_status(id: str, status_update: StatusUpdate):
+    try:
+        obj_id = ObjectId(id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid id')
+    doc = await C('service_requests').find_one({'_id': obj_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"Service request {id} not found")
+    update_payload = {'status': status_update.status, 'updatedAt': datetime.utcnow()}
+    # Auto-create a transaction in MongoDB when service is completed with an amount
+    if status_update.status == 'completed' and doc.get('amount'):
+        transaction = {
+            'amount': doc['amount'],
+            'category': 'Service',
+            'description': f"Completed: {doc.get('serviceName', 'N/A')}",
+            'is_income': True,
+            'date': str(datetime.utcnow().date()),
+            'userId': doc.get('userId'),
+            'customerId': doc.get('customerId'),
+            'serviceRequestId': id,
+            'createdAt': datetime.utcnow(),
+        }
+        await C('transactions').insert_one(transaction)
+    await C('service_requests').update_one({'_id': obj_id}, {'$set': update_payload})
+    return {"status": "updated", "service_request_id": id, "new_status": status_update.status}
+
+
+# ---------------------------------------------------------------------------
+# Devices by Customer
+# ---------------------------------------------------------------------------
+
+@router.get('/customers/{customer_id}/devices')
+async def mongo_get_devices_by_customer(customer_id: str):
+    try:
+        cust_oid = ObjectId(customer_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid customer_id')
+    customer = await C('customers').find_one({'_id': cust_oid})
+    if not customer:
+        raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
+    items = []
+    async for d in C('devices').find({'customerId': customer_id}):
+        items.append(serializeDict(d))
+    return items
+
+
+# ---------------------------------------------------------------------------
+# Legacy Customers (kept for backward compat)
+# ---------------------------------------------------------------------------
 
 @router.get(base+'{id}')
 async def getuserbyid(id):

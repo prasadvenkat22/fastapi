@@ -1,212 +1,339 @@
-from fastapi import FastAPI, HTTPException,status, Depends, File, UploadFile
-from pydantic import BaseModel
-
-from typing import List, Annotated
-from schemas_pgrs.schema import ServiceUser,service,Role,TransactionModel,TransactonBase,RegistrationBase,RegistraionModel
-import models_pgdb.models as models
-from config.db_pgrs import engine, SessionLocal
-import models_mgdb.db as _mgdb
-
-def _mdb_col(name: str):
-    return _mgdb.get_collection(name)
 import logging
-logger = logging.getLogger(__name__)
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from sqlalchemy.engine import result
-import json
-import pandas as pd
-import time, datetime
-from numpy import genfromtxt
-from fastapi import APIRouter
+import datetime
+import bcrypt as _bcrypt
 
-router = APIRouter(
-    prefix = '/CRUD',
-    tags = ['Postgres APIs']
+from fastapi import APIRouter, HTTPException, status, Depends
+from typing import List, Annotated
+from sqlalchemy.orm import Session
+
+from config.db_pgrs import engine, SessionLocal
+import models_pgdb.models as models
+from schemas_pgrs.schema import (
+    ServiceUser, service, Role,
+    TransactonBase, TransactionModel,
+    RegistrationBase, RegistraionModel,
+    UserCreate, UserResponse,
+    CustomerCreate, CustomerResponse,
+    DeviceCreate, DeviceResponse,
+    ServiceRequestCreate, ServiceRequestResponse, StatusUpdate,
+    InvoiceCreate, InvoiceResponse,
 )
-from passlib.context import CryptContext
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-class Hasher():
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix='/CRUD', tags=['Postgres APIs'])
+
+
+# ---------------------------------------------------------------------------
+# Password hashing
+# ---------------------------------------------------------------------------
+
+class Hasher:
     @staticmethod
-    def verify_password(plain_password, hashed_password):
-        return pwd_context.verify(plain_password, hashed_password)
+    def verify_password(plain: str, hashed: str) -> bool:
+        return _bcrypt.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
+
     @staticmethod
-    def get_password_hash(password):
-        return pwd_context.hash(password)
-    
-try:
-    models.Base.metadata.create_all(bind=engine)
-except Exception as e:
-    # Do not fail import if Postgres is unavailable during static analysis or tests
-    print('Warning: could not create tables at import time:', e)
+    def get_password_hash(password: str) -> str:
+        return _bcrypt.hashpw(password.encode('utf-8'), _bcrypt.gensalt()).decode('utf-8')
+
+
+# ---------------------------------------------------------------------------
+# DB session dependency
+# ---------------------------------------------------------------------------
+
 def get_db():
-    db= SessionLocal()
+    db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-db_dependency= Annotated[Session, Depends(get_db)]
 
-@router.get("/users/")
+db_dependency = Annotated[Session, Depends(get_db)]
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+@router.post("/register/", response_model=UserResponse)
+async def register_user(usr: UserCreate, db: db_dependency):
+    if db.query(models.User).filter(models.User.email == usr.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    db_user = models.User(
+        name=usr.name,
+        email=usr.email,
+        password_hash=Hasher.get_password_hash(usr.password),
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
+@router.get("/users/", response_model=List[UserResponse])
 async def get_users(db: db_dependency, skip: int = 0, limit: int = 100):
-    result= db.query(models.User).offset(skip).limit(limit).all()
-    if not result:
-        raise HTTPException(status_code=404, detail='Users not found')
-    return result
+    users = db.query(models.User).offset(skip).limit(limit).all()
+    if not users:
+        raise HTTPException(status_code=404, detail='No users found')
+    return users
 
-@router.get("/users/{user_id}")
-async def get_user_id(user_id: int, db:db_dependency):
-    result=db.query(models.User).filter(models.User.id==user_id).first()
-    if not result:
-        raise HTTPException(status_code=404, detail='User ID not found')
-    return result
-@router.get("/services/{service_id}")
-async def get_application_id(service_id:int, db:db_dependency):
-    result=db.query(models.Service).filter(models.Service.id==service_id).first()
-    if not result:
-        raise HTTPException(status_code=404, detail='service_id  not found')
-    return result
+
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def get_user(user_id: int, db: db_dependency):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Customers
+# ---------------------------------------------------------------------------
+
+@router.post("/customers/", response_model=CustomerResponse)
+async def create_customer(data: CustomerCreate, db: db_dependency):
+    db_customer = models.Customer(**data.model_dump())
+    db.add(db_customer)
+    db.commit()
+    db.refresh(db_customer)
+    return db_customer
+
+
+@router.get("/customers/", response_model=List[CustomerResponse])
+async def get_customers(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.Customer).offset(skip).limit(limit).all()
+
+
+@router.get("/customers/{customer_id}", response_model=CustomerResponse)
+async def get_customer(customer_id: int, db: db_dependency):
+    customer = db.query(models.Customer).filter(models.Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail='Customer not found')
+    return customer
+
+
+@router.put("/customers/{customer_id}", response_model=CustomerResponse)
+async def update_customer(customer_id: int, data: CustomerCreate, db: db_dependency):
+    customer = db.query(models.Customer).filter(models.Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail='Customer not found')
+    for field, value in data.model_dump().items():
+        setattr(customer, field, value)
+    customer.updated_at = datetime.datetime.utcnow()
+    db.commit()
+    db.refresh(customer)
+    return customer
+
+
+@router.delete("/customers/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_customer(customer_id: int, db: db_dependency):
+    customer = db.query(models.Customer).filter(models.Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail='Customer not found')
+    db.delete(customer)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Devices
+# ---------------------------------------------------------------------------
+
+@router.post("/devices/", response_model=DeviceResponse)
+async def create_device(data: DeviceCreate, db: db_dependency):
+    customer = db.query(models.Customer).filter(models.Customer.id == data.customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail=f'Customer {data.customer_id} not found')
+    db_device = models.Device(**data.model_dump())
+    db.add(db_device)
+    db.commit()
+    db.refresh(db_device)
+    return db_device
+
+
+@router.get("/devices/", response_model=List[DeviceResponse])
+async def get_devices(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.Device).offset(skip).limit(limit).all()
+
+
+@router.get("/devices/{device_id}", response_model=DeviceResponse)
+async def get_device(device_id: int, db: db_dependency):
+    device = db.query(models.Device).filter(models.Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail='Device not found')
+    return device
+
+
+@router.get("/customers/{customer_id}/devices", response_model=List[DeviceResponse])
+async def get_devices_by_customer(customer_id: int, db: db_dependency):
+    customer = db.query(models.Customer).filter(models.Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail='Customer not found')
+    return db.query(models.Device).filter(models.Device.customer_id == customer_id).all()
+
+
+@router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_device(device_id: int, db: db_dependency):
+    device = db.query(models.Device).filter(models.Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail='Device not found')
+    db.delete(device)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Service Requests
+# ---------------------------------------------------------------------------
+
+@router.post("/service-requests/", response_model=ServiceRequestResponse)
+async def create_service_request(req: ServiceRequestCreate, db: db_dependency):
+    if not db.query(models.User).filter(models.User.id == req.user_id).first():
+        raise HTTPException(status_code=404, detail=f'User {req.user_id} not found')
+    if req.customer_id and not db.query(models.Customer).filter(models.Customer.id == req.customer_id).first():
+        raise HTTPException(status_code=404, detail=f'Customer {req.customer_id} not found')
+    db_req = models.ServiceRequest(**req.model_dump())
+    db.add(db_req)
+    db.commit()
+    db.refresh(db_req)
+    return db_req
+
+
+@router.get("/service-requests/", response_model=List[ServiceRequestResponse])
+async def get_service_requests(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.ServiceRequest).offset(skip).limit(limit).all()
+
+
+@router.get("/service-requests/{id}", response_model=ServiceRequestResponse)
+async def get_service_request(id: int, db: db_dependency):
+    req = db.query(models.ServiceRequest).filter(models.ServiceRequest.id == id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail='Service request not found')
+    return req
+
+
+@router.put("/service-requests/{id}/status")
+async def update_service_request_status(id: int, status_update: StatusUpdate, db: db_dependency):
+    req = db.query(models.ServiceRequest).filter(models.ServiceRequest.id == id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail='Service request not found')
+    req.status = status_update.status
+    req.updated_at = datetime.datetime.utcnow()
+    # Auto-create a transaction on completion if amount is set
+    if status_update.status == 'completed' and req.amount:
+        db.add(models.Transaction(
+            amount=req.amount,
+            category='Service',
+            description=f'Completed: {req.service_name}',
+            is_income=True,
+            date=str(datetime.datetime.utcnow().date()),
+            user_id=req.user_id,
+            customer_id=req.customer_id,
+        ))
+    db.commit()
+    return {"status": "updated", "service_request_id": id, "new_status": status_update.status}
+
+
+# ---------------------------------------------------------------------------
+# Transactions
+# ---------------------------------------------------------------------------
+
+@router.post("/transactions/", response_model=TransactionModel)
+async def create_transaction(transaction: TransactonBase, db: db_dependency):
+    db_tx = models.Transaction(**transaction.model_dump())
+    db.add(db_tx)
+    db.commit()
+    db.refresh(db_tx)
+    return db_tx
+
+
+@router.get("/transactions/", response_model=List[TransactionModel])
+async def get_transactions(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.Transaction).offset(skip).limit(limit).all()
+
+
+# ---------------------------------------------------------------------------
+# Invoices
+# ---------------------------------------------------------------------------
+
+@router.post("/invoices/", response_model=InvoiceResponse)
+async def create_invoice(data: InvoiceCreate, db: db_dependency):
+    if not db.query(models.Customer).filter(models.Customer.id == data.customer_id).first():
+        raise HTTPException(status_code=404, detail=f'Customer {data.customer_id} not found')
+    db_inv = models.Invoice(**data.model_dump())
+    db.add(db_inv)
+    db.commit()
+    db.refresh(db_inv)
+    return db_inv
+
+
+@router.get("/invoices/", response_model=List[InvoiceResponse])
+async def get_invoices(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.Invoice).offset(skip).limit(limit).all()
+
+
+@router.get("/invoices/{invoice_id}", response_model=InvoiceResponse)
+async def get_invoice(invoice_id: int, db: db_dependency):
+    inv = db.query(models.Invoice).filter(models.Invoice.id == invoice_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail='Invoice not found')
+    return inv
+
+
+# ---------------------------------------------------------------------------
+# Services / Roles  (kept for existing data)
+# ---------------------------------------------------------------------------
+
+@router.post("/services/")
+async def create_service(svc: service, db: db_dependency):
+    if db.query(models.Service).filter(models.Service.name == svc.name).first():
+        return {"error": f"Service '{svc.name}' already exists"}
+    db_svc = models.Service(name=svc.name, description=svc.description, DBName=svc.DBName)
+    db.add(db_svc)
+    db.commit()
+    db.refresh(db_svc)
+    return {"status": "created", "service": db_svc}
+
 
 @router.get("/services/")
-async def get_applications(db: db_dependency, skip: int = 0, limit: int = 100):
+async def get_services(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Service).offset(skip).limit(limit).all()
+
+
+@router.post("/roles/")
+async def create_role(r: Role, db: db_dependency):
+    if db.query(models.Role).filter(models.Role.role == r.role).first():
+        return {"error": f"Role '{r.role}' already exists"}
+    db_role = models.Role(role=r.role, description=r.desc)
+    db.add(db_role)
+    db.commit()
+    db.refresh(db_role)
+    return {"status": "created", "role": db_role}
+
 
 @router.get("/roles/")
 async def get_roles(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Role).offset(skip).limit(limit).all()
 
 
-@router.get("/transactions/")
-async def get_transactions(db: db_dependency, skip: int = 0, limit: int = 100):
-    return db.query(models.Transaction).offset(skip).limit(limit).all()
+# ---------------------------------------------------------------------------
+# Registrations  (legacy)
+# ---------------------------------------------------------------------------
+
+@router.post("/registrations/")
+async def create_registration(registration: RegistrationBase, db: db_dependency):
+    _fields = {
+        "firstname", "lastname", "username", "useremail",
+        "clientname", "servicename", "clientemail",
+        "contactphoneno", "address", "demodate", "createdate",
+    }
+    db_reg = models.Registraion(**registration.model_dump(include=_fields))
+    db.add(db_reg)
+    db.commit()
+    db.refresh(db_reg)
+    return {"status": "created", "registration": db_reg}
+
 
 @router.get("/registrations/")
 async def get_registrations(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Registraion).offset(skip).limit(limit).all()
-
-
-@router.post("/users/")
-async def create_user(Usr: ServiceUser, db: db_dependency):
-    try:
-       # hashed_pwd = Hasher.get_password_hash(Usr.password)
-
-        db_user = models.User(name=Usr.name,
-                           #hashed_password=hashed_pwd ,
-                           email=Usr.email)
-        db.add(db_user)
-        db.commit()
-        db.refresh(db_user)
-        # also write to MongoDB users collection (best-effort)
-        try:
-            # Do not mirror any raw password to MongoDB
-            await _mdb_col("users").insert_one(Usr.model_dump(exclude={"password"}))
-        except Exception as exc:
-            logger.warning("MongoDB write failed for users: %s", exc, exc_info=True)
-        #result= create_db_users(Usr.name,Usr.password,resultapp.DBName,Usr.role)
-        return {"status": "User added to Database", "User": db_user}
-        #else:
-            #return {"error": f"User by that Name Exists {Usr.name}"}
-    except Exception:
-       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
- 
-@router.post("/services/")
-async def create_app(Svc: service, db: db_dependency):
-    #  sd-app=models.Applications(**App.dict())
-    try:
-        db_svc = models.Service(
-            name=Svc.name, 
-            description=Svc.description, 
-            DBName = Svc.DBName)
-        result=db.query(models.Service).filter(models.Service.name==Svc.name).first()
-        if not result:
-            db.add(db_svc)
-            db.commit()
-            db.refresh(db_svc)
-            # mirror to MongoDB (best-effort)
-            try:
-                await _mdb_col("services").insert_one(Svc.model_dump())
-            except Exception as exc:
-                logger.warning("MongoDB write failed for services: %s", exc, exc_info=True)
-            return {"status": "Svc added to Database", "App": db_svc}
-        else:
-            return {"error": f"Svc by that Name Exists {db_svc.name}"}
-    except Exception:
-       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
-@router.post("/roles/")
-async def create_role(r: Role, db: db_dependency):
-    #  sd-app=models.Applications(**App.dict())
-    try:
-        db_role = models.Role(role=r.role, description=r.desc)
-        result=db.query(models.Role).filter(models.Role.role==r.role).first()
-        if not result:
-             db.add(db_role)
-             db.commit()
-             db.refresh(db_role)
-             try:
-                 await _mdb_col("roles").insert_one(r.model_dump())
-             except Exception as exc:
-                 logger.warning("MongoDB write failed for roles: %s", exc, exc_info=True)
-             return {"status": "Role added to Database", "Role": db_role}
-        else:
-            return {"error": f"Role by that Name Exists {r.role}"}
-    except Exception:
-       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
-@router.post("/transactions/")
-async def create_transaction(transaction:TransactonBase, db: db_dependency):
-    #  sd-app=models.Applications(**App.dict())
-    try: 
-        db_Trasaction = models.Transaction(**transaction.model_dump(exclude={"imageUrl"}))
-        db.add(db_Trasaction)
-        db.commit()
-        db.refresh(db_Trasaction)
-        try:
-            await _mdb_col("transactions").insert_one(transaction.model_dump())
-        except Exception as exc:
-            logger.warning("MongoDB write failed for transactions: %s", exc, exc_info=True)
-        return {"status": "Transaction added to Database", "Transaction": db_Trasaction}
-    except Exception:
-       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
-@router.post("/registrations/")
-async def create_registration(registration:RegistrationBase, db: db_dependency):
-    #  sd-app=models.Applications(**App.dict())
-    try:
-        _registration_fields = {"firstname","lastname","username","useremail","clientname","servicename","clientemail","contactphoneno","address","demodate","createdate"}
-        db_Registration = models.Registraion(**registration.model_dump(include=_registration_fields))
-        db.add(db_Registration)
-        db.commit()
-        db.refresh(db_Registration)
-        try:
-            await _mdb_col("registrations").insert_one(registration.model_dump())
-        except Exception as exc:
-            logger.warning("MongoDB write failed for registrations: %s", exc, exc_info=True)
-        return {"status": "registration added to Database", "Registratoin": db_Registration}
-
-    except Exception:
-       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data registraion validation / constraint error")
-
-def create_db_users(user, password, tenantdbname,role):
-# write the SQL query inside the text() block
-    try:
-        with engine.connect() as conn:
-            user=user
-            pwd=password
-            role=role
-            json_ = json.dumps({'x': user})
-            if role=='user':
-                sql = text( 'CREATE USER '+ user + ' WITH PASSWORD :p ')
-            else:
-                sql = text( 'CREATE USER '+ user + ' WITH SUPERUSER	NOCREATEDB 	CREATEROLE 	INHERIT NOREPLICATION PASSWORD :p ' )
-
-            print(sql)
-            result = conn.execute(sql,{'p':pwd })
-            conn.commit()
-            with engine.connect() as conn:
-                stmt= text("select * from pg_catalog.pg_user where usename = :u")
-                
-                for row in conn.execute(stmt, {'u':user}):
-                    print(f"{row.usename}")
-
-        return {"status": "User added to Database", "User": user }
-    except Exception:
-       raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")

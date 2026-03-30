@@ -2,8 +2,7 @@ from bson import ObjectId
 from models_mgdb.db import db
 from models_mgdb.users import user
 from schemas_mgdb.serializeobjects import serializeDict, serializeList
-from passlib.context import CryptContext
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt as _bcrypt
 from fastapi import status, File, UploadFile,HTTPException
 from typing import Union
 from fastapi.encoders import jsonable_encoder
@@ -17,12 +16,12 @@ from bson import json_util
 #import pymango
 class Hasher():
     @staticmethod
-    def verify_password(plain_password, hashed_password):
-        return pwd_context.verify(plain_password, hashed_password)
+    def verify_password(plain_password: str, hashed_password: str) -> bool:
+        return _bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
     @staticmethod
-    def get_password_hash(password):
-        return pwd_context.hash(password)
+    def get_password_hash(password: str) -> str:
+        return _bcrypt.hashpw(password.encode('utf-8'), _bcrypt.gensalt()).decode('utf-8')
     
 async def getAllUser() -> list:
     users = []

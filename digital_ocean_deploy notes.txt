@@ -1,0 +1,61 @@
+
+Deploy to a New Droplet — Step by Step                                                                         
+  
+  1. Create the Droplet                                                                                                                                                                                                           
+  - Digital Ocean → Create Droplet
+  - Image: Ubuntu 24.04
+  - Plan: Basic $12/mo (2GB RAM, 1 vCPU)
+  - Auth: SSH key (recommended) or password
+  - Note the IP address after creation
+
+  2. SSH into the Droplet
+
+  ssh root@<YOUR_DROPLET_IP>
+
+  3. Download and Run Setup Script
+
+  cd /opt
+  git clone https://github.com/prasadvenkat22/fastapi.git
+  cd fastapi
+  bash setup-server.sh
+
+  4. The Script Will Prompt You For:
+  ┌─────────────────────┬──────────────────────────────────────────────────────────────────────────┐
+  │       Prompt        │                              What to Enter                               │
+  ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ PostgreSQL password │ Any strong password you choose (e.g. MyStr0ngP@ss) — this creates the DB │
+  ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ pgAdmin password    │ Any password (only used if you enable debug mode)                        │
+  ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ OpenAI API Key      │ Your key starting with sk-proj-... from platform.openai.com              │
+  ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ Domain              │ Your domain, or just press Enter to use the droplet IP                   │
+  ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ Start now?          │ y                                                                        │
+  └─────────────────────┴──────────────────────────────────────────────────────────────────────────┘
+  5. Verify
+
+  ./deploy.sh health
+
+  All 4 checks (FastAPI, Streamlit, PostgreSQL, MongoDB) should show OK.
+
+  6. Access Your App
+
+  - Streamlit: http://<DROPLET_IP>:8501
+  - FastAPI docs: http://<DROPLET_IP>:8000/docs
+  - Via nginx: http://<DROPLET_IP> (port 80)
+
+  ---
+  Useful Commands After Deploy
+
+  ./deploy.sh status    # check containers
+  ./deploy.sh logs      # view logs
+  ./deploy.sh update    # pull latest code & rebuild
+  ./deploy.sh restart   # restart everything
+  ./deploy.sh health    # run health checks
+
+  The passwords you enter during setup are only stored in /opt/fastapi/.env.production on the droplet — they     
+  don't need to match anything pre-existing, the script creates the databases with whatever password you provide.
+
+sales strategy 
+

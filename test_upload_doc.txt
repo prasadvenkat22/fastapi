@@ -1,0 +1,1 @@
+Hello, this is a test document for the genai upload endpoint. It describes a sample service called TestService used for demo bookings.

@@ -16,7 +16,8 @@
       "Bash(docker ps:*)",
       "Bash(docker logs:*)",
       "Bash(git ls-tree:*)",
-      "Bash(start \"\" \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")"
+      "Bash(start \"\" \"C:\\\\Program Files\\\\Docker\\\\Docker\\\\Docker Desktop.exe\")",
+      "Bash(ssh:*)"
     ],
     "deny": [],
     "ask": []

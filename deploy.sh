@@ -119,13 +119,6 @@ health_check() {
         echo -e "${RED}FAILED${NC}"
     fi
 
-    echo -n "Streamlit: "
-    if curl -s -o /dev/null -w "%{http_code}" http://localhost:8501 | grep -q "200"; then
-        echo -e "${GREEN}OK${NC}"
-    else
-        echo -e "${RED}FAILED${NC}"
-    fi
-
     echo -n "PostgreSQL: "
     if docker compose $COMPOSE_FILES exec -T pgdb pg_isready -U postgres > /dev/null 2>&1; then
         echo -e "${GREEN}OK${NC}"

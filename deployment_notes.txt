@@ -1,6 +1,6 @@
 =======================================
  Digital Ocean Deployment Guide
- FastAPI + Streamlit + PostgreSQL + MongoDB
+ FastAPI + PostgreSQL + MongoDB
 =======================================
 
 PREREQUISITES
@@ -50,9 +50,8 @@ STEP 5: Verify Deployment
 =======================================
   ./deploy.sh health
 
-All 4 checks should show OK:
+All 3 checks should show OK:
   - FastAPI: OK
-  - Streamlit: OK
   - PostgreSQL: OK
   - MongoDB: OK
 
@@ -60,25 +59,22 @@ All 4 checks should show OK:
 STEP 6: Access Your App
 =======================================
 Via nginx (port 80) - RECOMMENDED:
-  Streamlit:         http://<DROPLET_IP>/
   FastAPI docs:      http://<DROPLET_IP>/docs
   FastAPI API:       http://<DROPLET_IP>/api/
   FastAPI redoc:     http://<DROPLET_IP>/redoc
 
 Direct access (by port):
-  Streamlit:         http://<DROPLET_IP>:8501
   FastAPI docs:      http://<DROPLET_IP>:8000/docs
 
 =======================================
 NGINX ROUTING (port 80)
 =======================================
 Nginx acts as a reverse proxy on port 80:
-  /              -> Streamlit (port 8501)
+  /              -> FastAPI (port 8000)
   /docs          -> FastAPI Swagger docs
   /redoc         -> FastAPI Redoc docs
   /openapi.json  -> FastAPI OpenAPI spec
   /api/*         -> FastAPI backend endpoints
-  /_stcore/*     -> Streamlit WebSocket
 
 =======================================
 DEPLOY MANAGEMENT COMMANDS
@@ -118,7 +114,6 @@ Stop all services:
   docker compose down
 
 Access locally:
-  Streamlit:    http://localhost:8501
   FastAPI docs: http://localhost:8000/docs
   pgAdmin:      http://localhost:5050
   Nginx:        http://localhost (port 80)
@@ -130,7 +125,6 @@ SERVICES & PORTS
   ----------    -----   -------------------------
   Nginx         80      Reverse proxy (main entry)
   FastAPI       8000    REST API backend
-  Streamlit     8501    Frontend UI
   PostgreSQL    5432    Relational database
   MongoDB       27017   Document database
   pgAdmin       5050    DB admin (debug mode only)

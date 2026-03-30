@@ -66,20 +66,6 @@ services:
       - 80:80
     depends_on:
       - app
-      - streamlit
-  streamlit:
-    build: .
-    env_file:
-      - .env
-    volumes:
-      - .:/app
-    ports:
-      - 8501:8501
-    # links:
-    #   - app
-    restart: always
-    depends_on:
-      - app
 volumes:
  mongo-data:
  postgres-data:

@@ -57,7 +57,6 @@ ufw allow OpenSSH
 ufw allow 80/tcp
 ufw allow 443/tcp
 ufw allow 8000/tcp
-ufw allow 8501/tcp
 ufw --force enable
 log_info "Firewall configured."
 
@@ -178,7 +177,6 @@ echo "  3. ./deploy.sh health"
 echo ""
 echo "Access your application at:"
 echo "  - FastAPI:   http://${EXTERNAL_IP}:8000/docs"
-echo "  - Streamlit: http://${EXTERNAL_IP}:8501"
 echo ""
 
 # Ask if user wants to start now

@@ -37,11 +37,10 @@ Deploy to a New Droplet — Step by Step
 
   ./deploy.sh health
 
-  All 4 checks (FastAPI, Streamlit, PostgreSQL, MongoDB) should show OK.
+  All 3 checks (FastAPI, PostgreSQL, MongoDB) should show OK.
 
   6. Access Your App
 
-  - Streamlit: http://<DROPLET_IP>:8501
   - FastAPI docs: http://<DROPLET_IP>:8000/docs
   - Via nginx: http://<DROPLET_IP> (port 80)
 

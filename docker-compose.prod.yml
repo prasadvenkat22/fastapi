@@ -6,9 +6,8 @@
 #   - PostgreSQL: 384MB
 #   - MongoDB: 256MB
 #   - FastAPI: 512MB
-#   - Streamlit: 384MB
 #   - Nginx: 64MB
-#   - Total: ~1.6GB (leaves ~400MB for OS)
+#   - Total: ~1.2GB (leaves ~800MB for OS)
 
 services:
   mongo:
@@ -44,18 +43,6 @@ services:
           memory: 512M
     # Remove --reload flag for production
     command: bash -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2"
-    # Don't mount local volumes in production
-    volumes: []
-    restart: always
-
-  streamlit:
-    # Override env_file to use production config
-    env_file:
-      - .env.production
-    deploy:
-      resources:
-        limits:
-          memory: 384M
     # Don't mount local volumes in production
     volumes: []
     restart: always

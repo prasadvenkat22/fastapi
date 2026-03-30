@@ -100,6 +100,4 @@ zstandard==0.25.0
 alembic
 bcrypt==4.0.1
 PyPDF2
-streamlit
-streamlit-extras
 tabulate

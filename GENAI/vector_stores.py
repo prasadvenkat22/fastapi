@@ -120,6 +120,7 @@ class PGVectorStore(BaseVectorStore):
             await conn.close()
 
     async def get_documents(self, query: str, top_k: int, filters: Optional[Dict[str, Any]] = None) -> List[DocumentResponse]:
+        await self._init_db()
         conn = await asyncpg.connect(self.db_url)
         await register_vector(conn)
         try:
@@ -132,6 +133,7 @@ class PGVectorStore(BaseVectorStore):
             await conn.close()
 
     async def add_documents(self, documents: List[VectorDocument]):
+        await self._init_db()
         conn = await asyncpg.connect(self.db_url)
         await register_vector(conn)
         try:

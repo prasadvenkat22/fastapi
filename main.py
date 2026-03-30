@@ -24,23 +24,17 @@ app = FastAPI(title="FastAPI-Users-Backend",description = "CRUD API")
 
 
 
-origins = ["*"]
-
-methods = ["*"]
-
-headers = ["*"]
-
 app.add_middleware(
 
     CORSMiddleware,
 
-    allow_origins = origins,
+    allow_origins = ["*"],
 
     allow_credentials = False,
 
-    allow_methods = methods,
+    allow_methods = ["*"],
 
-    allow_headers = headers
+    allow_headers = ["*"]
 
 )
 

@@ -79,7 +79,7 @@ async def get_transactions(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Transaction).offset(skip).limit(limit).all()
 
 @router.get("/registrations/")
-async def get_transactions(db: db_dependency, skip: int = 0, limit: int = 100):
+async def get_registrations(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Registraion).offset(skip).limit(limit).all()
 
 
@@ -90,24 +90,7 @@ async def create_user(Usr: ServiceUser, db: db_dependency):
 
         db_user = models.User(name=Usr.name,
                            #hashed_password=hashed_pwd ,
-                           email=Usr.email, 
-                           service = Usr.service, 
-                           servicedemodate=Usr.servicedemodate)
-        result=db.query(models.User).filter(models.User.name==Usr.name).filter(models.User.service == Usr.service).first()
-        #if result:
-            #return {"error": f"User by that Name and service Exists, {Usr.name} - {Usr.application}"}
-        # resultapp=db.query(models.Service).filter(models.Service.name==Usr.service).first()
-        # if not resultapp:
-        #     return {"error": f"service by that Name Does not Exists-please add the servive first and retry,  {Usr.application}"}
-        # print(db_user.hashed_password)
-        # print(db_user.application)
-        # print(db_user.role)
-        # print(db_user.email)
-        # print(db_user.name)
-        # print(db_user.service)
-        # print(db_user.servicedemodate)
-
-        # if not result:
+                           email=Usr.email)
         db.add(db_user)
         db.commit()
         db.refresh(db_user)
@@ -124,7 +107,6 @@ async def create_user(Usr: ServiceUser, db: db_dependency):
     except Exception:
        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Input Data validation / constraint error")
  
-db_dependency= Annotated[Session, Depends(get_db)]
 @router.post("/services/")
 async def create_app(Svc: service, db: db_dependency):
     #  sd-app=models.Applications(**App.dict())
@@ -171,7 +153,7 @@ async def create_role(r: Role, db: db_dependency):
 async def create_transaction(transaction:TransactonBase, db: db_dependency):
     #  sd-app=models.Applications(**App.dict())
     try: 
-        db_Trasaction = models.Transaction(**transaction.model_dump())
+        db_Trasaction = models.Transaction(**transaction.model_dump(exclude={"imageUrl"}))
         db.add(db_Trasaction)
         db.commit()
         db.refresh(db_Trasaction)
@@ -186,7 +168,8 @@ async def create_transaction(transaction:TransactonBase, db: db_dependency):
 async def create_registration(registration:RegistrationBase, db: db_dependency):
     #  sd-app=models.Applications(**App.dict())
     try:
-        db_Registration = models.Registraion(**registration.model_dump())
+        _registration_fields = {"firstname","lastname","username","useremail","clientname","servicename","clientemail","contactphoneno","address","demodate","createdate"}
+        db_Registration = models.Registraion(**registration.model_dump(include=_registration_fields))
         db.add(db_Registration)
         db.commit()
         db.refresh(db_Registration)

@@ -58,8 +58,8 @@ class RegistrationBase(BaseModel):
     createdate:datetime
     imageUrl: Optional[str] = None
     # Extended fields for demo booking flow
-    customerId: Optional[str]
-    serviceId: Optional[int]
+    customerId: Optional[str] = None
+    serviceId: Optional[int] = None
     contact: Optional[Dict] = None
     preferredSlots: Optional[List[datetime]] = None
     scheduledSlot: Optional[datetime] = None

@@ -5,7 +5,10 @@ from typing import List, Annotated
 from schemas_pgrs.schema import ServiceUser,service,Role,TransactionModel,TransactonBase,RegistrationBase,RegistraionModel
 import models_pgdb.models as models
 from config.db_pgrs import engine, SessionLocal
-from models_mgdb.db import db as mdb
+import models_mgdb.db as _mgdb
+
+def _mdb_col(name: str):
+    return _mgdb.get_collection(name)
 import logging
 logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
@@ -97,7 +100,7 @@ async def create_user(Usr: ServiceUser, db: db_dependency):
         # also write to MongoDB users collection (best-effort)
         try:
             # Do not mirror any raw password to MongoDB
-            await mdb.users.insert_one(Usr.model_dump(exclude={"password"}))
+            await _mdb_col("users").insert_one(Usr.model_dump(exclude={"password"}))
         except Exception as exc:
             logger.warning("MongoDB write failed for users: %s", exc, exc_info=True)
         #result= create_db_users(Usr.name,Usr.password,resultapp.DBName,Usr.role)
@@ -122,7 +125,7 @@ async def create_app(Svc: service, db: db_dependency):
             db.refresh(db_svc)
             # mirror to MongoDB (best-effort)
             try:
-                await mdb.services.insert_one(Svc.model_dump())
+                await _mdb_col("services").insert_one(Svc.model_dump())
             except Exception as exc:
                 logger.warning("MongoDB write failed for services: %s", exc, exc_info=True)
             return {"status": "Svc added to Database", "App": db_svc}
@@ -141,7 +144,7 @@ async def create_role(r: Role, db: db_dependency):
              db.commit()
              db.refresh(db_role)
              try:
-                 await mdb.roles.insert_one(r.model_dump())
+                 await _mdb_col("roles").insert_one(r.model_dump())
              except Exception as exc:
                  logger.warning("MongoDB write failed for roles: %s", exc, exc_info=True)
              return {"status": "Role added to Database", "Role": db_role}
@@ -158,7 +161,7 @@ async def create_transaction(transaction:TransactonBase, db: db_dependency):
         db.commit()
         db.refresh(db_Trasaction)
         try:
-            await mdb.transactions.insert_one(transaction.model_dump())
+            await _mdb_col("transactions").insert_one(transaction.model_dump())
         except Exception as exc:
             logger.warning("MongoDB write failed for transactions: %s", exc, exc_info=True)
         return {"status": "Transaction added to Database", "Transaction": db_Trasaction}
@@ -174,7 +177,7 @@ async def create_registration(registration:RegistrationBase, db: db_dependency):
         db.commit()
         db.refresh(db_Registration)
         try:
-            await mdb.registrations.insert_one(registration.model_dump())
+            await _mdb_col("registrations").insert_one(registration.model_dump())
         except Exception as exc:
             logger.warning("MongoDB write failed for registrations: %s", exc, exc_info=True)
         return {"status": "registration added to Database", "Registratoin": db_Registration}

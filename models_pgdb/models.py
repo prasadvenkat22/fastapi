@@ -13,6 +13,7 @@ class Service(Base):
     createdate = Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
     DBName = Column(String, default='postgres')
+    image_url = Column(String, nullable=True)
 
 
 class Role(Base):
@@ -30,6 +31,7 @@ class User(Base):
     password_hash = Column(String, nullable=True)
     created_date = Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
+    image_url = Column(String, nullable=True)
 
     service_requests = relationship("ServiceRequest", back_populates="user")
     transactions = relationship("Transaction", back_populates="user")
@@ -47,6 +49,7 @@ class Customer(Base):
     tenant_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now())
+    image_url = Column(String, nullable=True)
 
     devices = relationship("Device", back_populates="customer")
     service_requests = relationship("ServiceRequest", back_populates="customer")
@@ -65,6 +68,7 @@ class Device(Base):
     status = Column(String, default='active')
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now())
+    image_url = Column(String, nullable=True)
 
     customer = relationship("Customer", back_populates="devices")
 
@@ -110,9 +114,25 @@ class Invoice(Base):
     amount = Column(Float, nullable=False)
     status = Column(String, default='draft')
     created_at = Column(DateTime, default=func.now())
+    image_url = Column(String, nullable=True)
 
     customer = relationship("Customer", back_populates="invoices")
     service_request = relationship("ServiceRequest", back_populates="invoices")
+
+
+class Product(Base):
+    __tablename__ = "products"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    price = Column(Float, nullable=False)
+    stock = Column(Integer, default=0)
+    category = Column(String, nullable=True)
+    sku = Column(String, unique=True, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now())
+    image_url = Column(String, nullable=True)
 
 
 class Registraion(Base):

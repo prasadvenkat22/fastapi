@@ -17,6 +17,7 @@ from schemas_pgrs.schema import (
     DeviceCreate, DeviceResponse,
     ServiceRequestCreate, ServiceRequestResponse, StatusUpdate,
     InvoiceCreate, InvoiceResponse,
+    ProductCreate, ProductResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,12 +81,36 @@ async def get_users(db: db_dependency, skip: int = 0, limit: int = 100):
     return users
 
 
+@router.post("/users/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(usr: UserCreate, db: db_dependency):
+    if db.query(models.User).filter(models.User.email == usr.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    db_user = models.User(
+        name=usr.name,
+        email=usr.email,
+        password_hash=Hasher.get_password_hash(usr.password),
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
 @router.get("/users/{user_id}", response_model=UserResponse)
 async def get_user(user_id: int, db: db_dependency):
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail='User not found')
     return user
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(user_id: int, db: db_dependency):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    db.delete(user)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +259,15 @@ async def update_service_request_status(id: int, status_update: StatusUpdate, db
     return {"status": "updated", "service_request_id": id, "new_status": status_update.status}
 
 
+@router.delete("/service-requests/{id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_service_request(id: int, db: db_dependency):
+    req = db.query(models.ServiceRequest).filter(models.ServiceRequest.id == id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail='Service request not found')
+    db.delete(req)
+    db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Transactions
 # ---------------------------------------------------------------------------
@@ -250,6 +284,15 @@ async def create_transaction(transaction: TransactonBase, db: db_dependency):
 @router.get("/transactions/", response_model=List[TransactionModel])
 async def get_transactions(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Transaction).offset(skip).limit(limit).all()
+
+
+@router.delete("/transactions/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_transaction(transaction_id: int, db: db_dependency):
+    tx = db.query(models.Transaction).filter(models.Transaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail='Transaction not found')
+    db.delete(tx)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +323,15 @@ async def get_invoice(invoice_id: int, db: db_dependency):
     return inv
 
 
+@router.delete("/invoices/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_invoice(invoice_id: int, db: db_dependency):
+    inv = db.query(models.Invoice).filter(models.Invoice.id == invoice_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail='Invoice not found')
+    db.delete(inv)
+    db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Services / Roles  (kept for existing data)
 # ---------------------------------------------------------------------------
@@ -300,6 +352,15 @@ async def get_services(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Service).offset(skip).limit(limit).all()
 
 
+@router.delete("/services/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_service(service_id: int, db: db_dependency):
+    svc = db.query(models.Service).filter(models.Service.id == service_id).first()
+    if not svc:
+        raise HTTPException(status_code=404, detail='Service not found')
+    db.delete(svc)
+    db.commit()
+
+
 @router.post("/roles/")
 async def create_role(r: Role, db: db_dependency):
     if db.query(models.Role).filter(models.Role.role == r.role).first():
@@ -314,6 +375,15 @@ async def create_role(r: Role, db: db_dependency):
 @router.get("/roles/")
 async def get_roles(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Role).offset(skip).limit(limit).all()
+
+
+@router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_role(role_id: int, db: db_dependency):
+    role = db.query(models.Role).filter(models.Role.id == role_id).first()
+    if not role:
+        raise HTTPException(status_code=404, detail='Role not found')
+    db.delete(role)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +407,49 @@ async def create_registration(registration: RegistrationBase, db: db_dependency)
 @router.get("/registrations/")
 async def get_registrations(db: db_dependency, skip: int = 0, limit: int = 100):
     return db.query(models.Registraion).offset(skip).limit(limit).all()
+
+
+@router.delete("/registrations/{registration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_registration(registration_id: int, db: db_dependency):
+    reg = db.query(models.Registraion).filter(models.Registraion.id == registration_id).first()
+    if not reg:
+        raise HTTPException(status_code=404, detail='Registration not found')
+    db.delete(reg)
+    db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Products
+# ---------------------------------------------------------------------------
+
+@router.post("/products/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+async def create_product(data: ProductCreate, db: db_dependency):
+    if data.sku and db.query(models.Product).filter(models.Product.sku == data.sku).first():
+        raise HTTPException(status_code=400, detail=f"SKU '{data.sku}' already exists")
+    db_product = models.Product(**data.model_dump())
+    db.add(db_product)
+    db.commit()
+    db.refresh(db_product)
+    return db_product
+
+
+@router.get("/products/", response_model=List[ProductResponse])
+async def get_products(db: db_dependency, skip: int = 0, limit: int = 100):
+    return db.query(models.Product).offset(skip).limit(limit).all()
+
+
+@router.get("/products/{product_id}", response_model=ProductResponse)
+async def get_product(product_id: int, db: db_dependency):
+    product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail='Product not found')
+    return product
+
+
+@router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_product(product_id: int, db: db_dependency):
+    product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail='Product not found')
+    db.delete(product)
+    db.commit()

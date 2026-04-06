@@ -56,6 +56,7 @@ class UserResponse(BaseModel):
     name: str
     email: str
     created_date: Optional[datetime] = None
+    image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -78,6 +79,7 @@ class CustomerResponse(CustomerCreate):
     id: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -98,6 +100,7 @@ class DeviceCreate(BaseModel):
 class DeviceResponse(DeviceCreate):
     id: int
     created_at: Optional[datetime] = None
+    image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -161,6 +164,30 @@ class InvoiceCreate(BaseModel):
 class InvoiceResponse(InvoiceCreate):
     id: int
     created_at: Optional[datetime] = None
+    image_url: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Products
+# ---------------------------------------------------------------------------
+
+class ProductCreate(BaseModel):
+    name: str = Field(..., min_length=2)
+    description: Optional[str] = None
+    price: float = Field(..., gt=0)
+    stock: int = Field(0, ge=0)
+    category: Optional[str] = None
+    sku: Optional[str] = None
+    is_active: bool = True
+
+
+class ProductResponse(ProductCreate):
+    id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    image_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

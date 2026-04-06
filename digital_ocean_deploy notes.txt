@@ -1,7 +1,8 @@
 
-Deploy to a New Droplet — Step by Step                                                                         
-  
-  1. Create the Droplet                                                                                                                                                                                                           
+Deploy to a New Droplet — Step by Step
+Last updated: 2026-04-05 | Server: 142.93.177.153 | Domain: dataiqsystems.com
+
+  1. Create the Droplet
   - Digital Ocean → Create Droplet
   - Image: Ubuntu 24.04
   - Plan: Basic $12/mo (2GB RAM, 1 vCPU)
@@ -33,16 +34,35 @@ Deploy to a New Droplet — Step by Step
   ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ Start now?          │ y                                                                        │
   └─────────────────────┴──────────────────────────────────────────────────────────────────────────┘
-  5. Verify
+
+  5. Run Alembic Migrations (required after first deploy or schema changes)
+
+  docker exec app bash -c "alembic upgrade head"
+
+  Run this any time new columns or tables are added (e.g. image_url columns, Product table).
+
+  6. Verify
 
   ./deploy.sh health
 
   All 3 checks (FastAPI, PostgreSQL, MongoDB) should show OK.
 
-  6. Access Your App
+  7. Access Your App
 
-  - FastAPI docs: http://<DROPLET_IP>:8000/docs
-  - Via nginx: http://<DROPLET_IP> (port 80)
+  - FastAPI docs:   https://dataiqsystems.com/docs
+  - API base:       https://dataiqsystems.com/CRUD/
+  - Image uploads:  https://dataiqsystems.com/images/
+  - Static files:   https://dataiqsystems.com/static/
+  - pgAdmin:        http://142.93.177.153:5050  (dev only — disabled in prod by default)
+
+  ---
+  Routine Deploy (update existing server with latest code)
+
+  ssh root@142.93.177.153
+  cd /opt/fastapi
+  git pull origin main
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build app
+  docker exec app bash -c "alembic upgrade head"   # only needed if models changed
 
   ---
   Useful Commands After Deploy
@@ -53,8 +73,63 @@ Deploy to a New Droplet — Step by Step
   ./deploy.sh restart   # restart everything
   ./deploy.sh health    # run health checks
 
-  The passwords you enter during setup are only stored in /opt/fastapi/.env.production on the droplet — they     
-  don't need to match anything pre-existing, the script creates the databases with whatever password you provide.
+  docker logs app --tail 50              # FastAPI app logs
+  docker exec app bash -c "alembic current"   # check migration state
+  docker exec app bash -c "alembic upgrade head"  # apply pending migrations
 
-sales strategy 
+  ---
+  Nginx Config Notes
+
+  Two nginx config files are mounted from ./app/nginx/conf.d/ into the nginx container:
+  - default.conf        — HTTP (port 80) catch-all, proxies all API routes to app:8000
+  - dataiqsystems.conf  — HTTPS (port 443) for dataiqsystems.com with SSL cert
+
+  Both files must have matching location blocks. Current proxied routes:
+    /CRUD/          → FastAPI CRUD endpoints
+    /api/           → FastAPI API endpoints
+    /FileUploads/   → CSV/file upload endpoints
+    /images/        → Image upload/retrieve/delete (added 2026-04-05)
+    /static/        → Uploaded image files served by FastAPI (added 2026-04-05)
+    /docs           → FastAPI Swagger UI
+    /openapi.json   → OpenAPI schema
+    /redoc          → ReDoc UI
+    /               → Next.js frontend (data-ai-solutions-web-1:3000)
+
+  After editing nginx config files, restart nginx:
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml restart nginx
+
+  ---
+  Database Schema Changes
+
+  Alembic is configured with autogenerate. To create a migration after model changes:
+
+  docker exec app bash -c "alembic revision --autogenerate -m 'describe change'"
+  docker exec app bash -c "alembic upgrade head"
+
+  Migrations are stored in alembic/versions/ and committed to git.
+
+  ---
+  Current API Entities (as of 2026-04-05)
+
+  All entities support POST, GET (list), GET (by id), DELETE.
+  All entities have an image_url field populated via POST /images/upload?entity=<name>&id=<id>.
+
+  Entity          Table               Image support
+  ─────────────── ─────────────────── ─────────────
+  User            users               yes
+  Customer        customers           yes
+  Device          devices             yes
+  Service         services            yes
+  Invoice         invoices            yes
+  Product         products            yes
+  ServiceRequest  service_requests    no
+  Transaction     transactions        no
+  Registration    registrations       no
+  Role            roles               no
+
+  ---
+  The passwords you enter during setup are only stored in /opt/fastapi/.env.production on the droplet —
+  they don't need to match anything pre-existing, the script creates the databases with whatever password you provide.
+
+sales strategy
 

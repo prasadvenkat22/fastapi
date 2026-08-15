@@ -1,7 +1,7 @@
 # GENAI RAG API Documentation
 
 ## Overview
-This API provides RAG (Retrieval-Augmented Generation) capabilities with document upload, vector storage, and intelligent querying using OpenAI LLMs and PostgreSQL pgvector.
+This API provides RAG (Retrieval-Augmented Generation) capabilities with document upload, vector storage, and intelligent querying using Claude (Anthropic) LLMs, Voyage AI embeddings, and PostgreSQL pgvector.
 
 ---
 
@@ -36,10 +36,9 @@ Upload documents, store them in the vector database, and ask questions about the
 | `query` | string | Yes | - | Question to ask about the documents |
 | `username` | string | No | `test_user` | User who uploaded the file (auto-registered in MongoDB if new) |
 | `vector_store_name` | string | No | `pgvector` | Vector store (`pgvector` or `faiss`) |
-| `embedding_provider` | string | No | `openai` | Embedding provider |
-| `llm_provider` | string | No | `openai` | LLM provider |
-| `llm_model` | string | No | `gpt-4o-mini` | LLM model to use |
-| `temperature` | float | No | `0.0` | LLM temperature (0.0-1.0) |
+| `embedding_provider` | string | No | `voyage` | Embedding provider |
+| `llm_provider` | string | No | `anthropic` | LLM provider |
+| `llm_model` | string | No | `claude-opus-5` | LLM model to use |
 | `max_tokens` | int | No | `800` | Max tokens in response |
 | `top_k` | int | No | `4` | Number of similar documents to retrieve |
 
@@ -137,7 +136,7 @@ Query the vector store without uploading new documents.
   "query": "What are the company's policies?",
   "top_k": 4,
   "filters": {},
-  "embedding_provider": "openai"
+  "embedding_provider": "voyage"
 }
 ```
 
@@ -179,9 +178,8 @@ Send a direct query to the LLM without RAG.
 ```json
 {
   "prompt": "Explain quantum computing in simple terms",
-  "llm_provider": "openai",
-  "llm_model": "gpt-4o-mini",
-  "temperature": 0.7,
+  "llm_provider": "anthropic",
+  "llm_model": "claude-opus-5",
   "max_tokens": 500
 }
 ```
@@ -191,10 +189,47 @@ Send a direct query to the LLM without RAG.
 {
   "content": "Quantum computing is...",
   "metadata": {
-    "source": "openai"
+    "source": "anthropic"
   }
 }
 ```
+
+---
+
+### 4. Multi-Agent CSV/PDF Supervisor
+**Endpoint:** `POST /api/genai/agent/upload`
+
+Upload a CSV and/or a PDF and ask a question about it. A LangGraph supervisor inspects
+which file type(s) were uploaded and routes the query to the matching specialist agent:
+a pandas-dataframe agent for CSV analysis, a FAISS-backed RAG agent for PDF Q&A, or both
+(with a final Claude call synthesizing the two answers into one).
+
+#### Request Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `files` | File[] | Yes | One or more `.csv` / `.pdf` files |
+| `query` | string | Yes | Question to ask about the uploaded file(s) |
+
+#### Example Request (cURL)
+```bash
+curl -X POST "http://localhost:8000/api/genai/agent/upload" \
+  -F "files=@sales.csv" \
+  -F "files=@contract.pdf" \
+  -F "query=What was total revenue, and what does the contract say about renewal?"
+```
+
+#### Example Response
+```json
+{
+  "final_answer": "Total revenue was $482,000 across all rows. The contract renews automatically...",
+  "csv_answer": "Total revenue was $482,000 across all rows.",
+  "pdf_answer": "The contract renews automatically unless...",
+  "agents_used": ["csv_agent", "pdf_agent"]
+}
+```
+
+> **Security note:** the CSV agent runs with `allow_dangerous_code=True` (LangChain's pandas dataframe agent executes model-generated Python against the uploaded data). Only expose this endpoint to trusted users/uploads.
 
 ---
 
@@ -219,13 +254,15 @@ You can filter documents by metadata using the `filters` parameter in queries.
 
 ### PostgreSQL + pgvector (Default)
 - **Extension:** pgvector v0.8.1
-- **Embedding Dimensions:** 1536 (OpenAI)
+- **Embedding Dimensions:** 1024 (Voyage AI `voyage-4` — 200M tokens free per account)
 - **Similarity Metric:** Cosine distance
 - **Table:** `documents` with columns:
   - `id` (TEXT PRIMARY KEY)
   - `text` (TEXT)
   - `metadata` (JSONB)
-  - `embedding` (VECTOR(1536))
+  - `embedding` (VECTOR(1024))
+
+> **Migrating from the OpenAI-embeddings version:** if a `documents` table already exists with `VECTOR(1536)` data from OpenAI embeddings, it must be dropped and recreated (`DROP TABLE documents;`) — the new Voyage embeddings are a different dimension and are not compatible with old rows.
 
 ### Query Documents by User
 ```sql
@@ -245,7 +282,7 @@ Set `vector_store_name=faiss` for local file-based storage.
 #### 400 Bad Request
 ```json
 {
-  "detail": "OpenAI API error: Invalid API key"
+  "detail": "Anthropic API error: Invalid API key"
 }
 ```
 
@@ -281,7 +318,8 @@ Required environment variables in `.env`:
 
 ```env
 DATABASE_URL=postgresql://postgres:password@pgdb:5432/postgres
-OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+VOYAGE_API_KEY=pa-...
 GENAI_VECTORSTORE_PATH=local_vectorstore/db_faiss  # For FAISS
 ```
 
@@ -292,7 +330,7 @@ GENAI_VECTORSTORE_PATH=local_vectorstore/db_faiss  # For FAISS
 1. **File Size Limits:** Default FastAPI limit is 10MB. Adjust in main.py if needed.
 2. **Batch Processing:** Upload multiple files in a single request for efficiency.
 3. **Top-K Selection:** Higher `top_k` values provide more context but slower responses.
-4. **Temperature:** Lower values (0.0-0.3) for factual, higher (0.7-1.0) for creative.
+4. **Effort/model choice:** Claude Opus 5 doesn't accept `temperature` (sampling params are rejected) — steer response style via the prompt itself, or swap `llm_model` for a cheaper/faster Claude model.
 
 ---
 
@@ -334,7 +372,7 @@ print(response.json())
 2. **Authentication:** Add user authentication before production deployment.
 3. **Rate Limiting:** Implement rate limiting for production use.
 4. **File Validation:** Validates file types and sanitizes inputs.
-5. **API Keys:** Store OpenAI keys securely in environment variables.
+5. **API Keys:** Store Anthropic and Voyage keys securely in environment variables.
 
 ---
 
@@ -342,8 +380,11 @@ print(response.json())
 
 ### Common Issues
 
-**Issue:** "OpenAI API 400 Error"
-- **Solution:** Check if `OPENAI_API_KEY` is valid and not expired
+**Issue:** "Anthropic API 400/401 Error"
+- **Solution:** Check if `ANTHROPIC_API_KEY` is valid and not expired
+
+**Issue:** "Voyage AI embedding error"
+- **Solution:** Check if `VOYAGE_API_KEY` is valid and not expired
 
 **Issue:** "Database connection error"
 - **Solution:** Ensure PostgreSQL container is running: `docker-compose up -d`
@@ -357,6 +398,11 @@ print(response.json())
 ---
 
 ## Changelog
+
+### v1.2.0
+- Migrated LLM calls from OpenAI to Claude (Anthropic Messages API, default `claude-opus-5`)
+- Migrated embeddings from OpenAI to Voyage AI (`voyage-4`, 1024 dimensions, 200M free tokens/account)
+- Added `POST /api/genai/agent/upload` — a LangGraph supervisor that routes CSV uploads to a pandas-dataframe agent and PDF uploads to a RAG Q&A agent
 
 ### v1.1.0
 - Added `username` parameter for tracking uploads

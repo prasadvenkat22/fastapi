@@ -13,8 +13,8 @@ with open("test.txt", "rb") as f:
         "query": "What is this file about?",
         "username": "test_user",  # Added username parameter
         "vector_store_name": "pgvector",
-        "llm_provider": "openai",
-        "llm_model": "gpt-4o-mini",
+        "llm_provider": "anthropic",
+        "llm_model": "claude-opus-5",
     }
     response = requests.post(url, files=files, data=data)
 

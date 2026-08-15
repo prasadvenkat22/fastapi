@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any
 import os
-import httpx
+import anthropic
 from .llm_integration import LLMRequest, LLMResponse, DocumentRequest, DocumentResponse
 
 # region LLM Providers
@@ -10,38 +10,29 @@ class BaseLLM(ABC):
     async def generate(self, request: LLMRequest) -> LLMResponse:
         pass
 
-class OpenAILLM(BaseLLM):
+class AnthropicLLM(BaseLLM):
     async def generate(self, request: LLMRequest) -> LLMResponse:
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY environment variable is not set")
+            raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
 
-        base = os.getenv("OPENAI_API_BASE", "https://api.openai.com")
-        url = f"{base.rstrip('/')}/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        payload = {
-            "model": request.llm_model,
-            "messages": [{"role": "user", "content": request.prompt}],
-            "temperature": request.temperature,
-            "max_tokens": request.max_tokens,
-        }
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                resp = await client.post(url, headers=headers, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                return LLMResponse(content=content, metadata={"source": "openai"})
-            except httpx.HTTPStatusError as e:
-                error_detail = e.response.text if hasattr(e, 'response') else str(e)
-                return LLMResponse(content=f"Error calling OpenAI: {e}\nDetails: {error_detail}", metadata={"source": "error"})
-            except Exception as e:
-                return LLMResponse(content=f"Error calling OpenAI: {e}", metadata={"source": "error"})
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        try:
+            response = await client.messages.create(
+                model=request.llm_model,
+                max_tokens=request.max_tokens,
+                messages=[{"role": "user", "content": request.prompt}],
+            )
+            content = next((b.text for b in response.content if b.type == "text"), "")
+            return LLMResponse(content=content, metadata={"source": "anthropic"})
+        except anthropic.APIStatusError as e:
+            return LLMResponse(content=f"Error calling Anthropic: {e}\nDetails: {e.message}", metadata={"source": "error"})
+        except Exception as e:
+            return LLMResponse(content=f"Error calling Anthropic: {e}", metadata={"source": "error"})
 
 def llm_factory(provider: str) -> BaseLLM:
-    if provider == "openai":
-        return OpenAILLM()
+    if provider == "anthropic":
+        return AnthropicLLM()
     # Add other providers here
     else:
         raise ValueError(f"LLM provider '{provider}' not supported.")

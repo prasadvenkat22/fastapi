@@ -234,10 +234,9 @@ const API_URL = process.env.REACT_APP_API_URL;
 ## Advanced Options (Optional)
 
 ```javascript
-formData.append('temperature', '0.7');      // 0.0 = factual, 1.0 = creative
-formData.append('max_tokens', '1000');      // Longer responses
-formData.append('top_k', '5');              // More context from documents
-formData.append('llm_model', 'gpt-4o-mini'); // Change model
+formData.append('max_tokens', '1000');           // Longer responses
+formData.append('top_k', '5');                   // More context from documents
+formData.append('llm_model', 'claude-opus-5');   // Change model
 ```
 
 ---

@@ -1,8 +1,7 @@
 from fastapi import APIRouter, HTTPException, File, UploadFile, Form
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 import io
 import os
-import csv
 import uuid
 import httpx
 from pydantic import BaseModel
@@ -10,6 +9,7 @@ from pydantic import BaseModel
 from .llm_integration import DocumentRequest, LLMRequest, LLMResponse, DocumentResponse
 from .rag_service import generate_response, run_rag
 from .vector_stores import vector_store_factory, VectorDocument
+from .agents.supervisor import run_supervisor
 
 try:
     from pypdf import PdfReader
@@ -141,10 +141,9 @@ async def genai_query_upload(
     query: str = Form(...),
     username: str = Form("test_user"),
     vector_store_name: str = Form("pgvector"),
-    embedding_provider: str = Form("openai"),
-    llm_provider: str = Form("openai"),
-    llm_model: str = Form("gpt-4o-mini"),
-    temperature: float = Form(0.0),
+    embedding_provider: str = Form("voyage"),
+    llm_provider: str = Form("anthropic"),
+    llm_model: str = Form("claude-opus-5"),
     max_tokens: int = Form(512),
     top_k: int = Form(2),
 ):
@@ -156,10 +155,9 @@ async def genai_query_upload(
     - query: Question to ask about the uploaded documents
     - username: User who uploaded the file (default: test_user)
     - vector_store_name: Vector store to use (default: pgvector)
-    - embedding_provider: Embedding provider (default: openai)
-    - llm_provider: LLM provider (default: openai)
-    - llm_model: LLM model (default: gpt-4o-mini)
-    - temperature: LLM temperature (default: 0.0)
+    - embedding_provider: Embedding provider (default: voyage)
+    - llm_provider: LLM provider (default: anthropic)
+    - llm_model: LLM model (default: claude-opus-5)
     - max_tokens: Maximum tokens for LLM response (default: 800)
     - top_k: Number of similar documents to retrieve (default: 4)
     """
@@ -193,8 +191,64 @@ async def genai_query_upload(
         
         # The uploads parameter is no longer needed since the documents are in the vector store
         results = await run_rag(doc_request, vs, uploads=None)
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     return QueryResponse(results=results)
+
+
+class AgentUploadResponse(BaseModel):
+    final_answer: str
+    csv_answer: Optional[str] = None
+    pdf_answer: Optional[str] = None
+    agents_used: List[str]
+
+
+@router.post("/agent/upload", response_model=AgentUploadResponse)
+async def genai_agent_upload(
+    files: List[UploadFile] = File(...),
+    query: str = Form(...),
+):
+    """
+    Multi-step LangGraph supervisor: uploads one or more CSV/PDF files, and the
+    supervisor routes the query to a pandas-dataframe agent (CSV), a RAG Q&A
+    agent (PDF), or both — synthesizing a single answer when both are present.
+
+    Parameters:
+    - files: List of files to upload (CSV and/or PDF)
+    - query: Question to ask about the uploaded file(s)
+    """
+    csv_text: Optional[str] = None
+    pdf_text: Optional[str] = None
+
+    for f in files:
+        data = await f.read()
+        filename = getattr(f, "filename", "uploaded_file")
+        content = _process_file(data, filename)
+        if filename.lower().endswith(".csv"):
+            csv_text = content
+        elif filename.lower().endswith(".pdf"):
+            pdf_text = content
+        await f.close()
+
+    if not csv_text and not pdf_text:
+        raise HTTPException(status_code=400, detail="Upload at least one .csv or .pdf file.")
+
+    try:
+        state = run_supervisor(query=query, csv_text=csv_text, pdf_text=pdf_text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    agents_used = []
+    if state.get("csv_answer"):
+        agents_used.append("csv_agent")
+    if state.get("pdf_answer"):
+        agents_used.append("pdf_agent")
+
+    return AgentUploadResponse(
+        final_answer=state.get("final_answer", ""),
+        csv_answer=state.get("csv_answer"),
+        pdf_answer=state.get("pdf_answer"),
+        agents_used=agents_used,
+    )

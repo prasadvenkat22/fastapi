@@ -1,9 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Any
 import os
-from langchain_openai import OpenAIEmbeddings as LangchainOpenAIEmbeddings
+from langchain_voyageai import VoyageAIEmbeddings as LangchainVoyageAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from .llm_integration import DocumentResponse
+
+# Voyage AI embedding dimension for the "voyage-4" model — used to size the pgvector column below.
+# voyage-4 gives 200M free tokens per account before billing kicks in.
+VOYAGE_EMBEDDING_DIM = 1024
 
 # region Embeddings
 class Embeddings(ABC):
@@ -15,9 +19,12 @@ class Embeddings(ABC):
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         pass
 
-class OpenAIEmbeddings(Embeddings):
+class VoyageEmbeddings(Embeddings):
     def __init__(self):
-        self.embeddings = LangchainOpenAIEmbeddings()
+        self.embeddings = LangchainVoyageAIEmbeddings(
+            model="voyage-4",
+            voyage_api_key=os.environ.get("VOYAGE_API_KEY"),
+        )
 
     def embed_query(self, text: str) -> List[float]:
         return self.embeddings.embed_query(text)
@@ -26,8 +33,8 @@ class OpenAIEmbeddings(Embeddings):
         return self.embeddings.embed_documents(texts)
 
 def embedding_factory(provider: str) -> Embeddings:
-    if provider == "openai":
-        return OpenAIEmbeddings()
+    if provider == "voyage":
+        return VoyageEmbeddings()
     # Add other providers here
     else:
         raise ValueError(f"Embedding provider '{provider}' not supported.")
@@ -108,12 +115,12 @@ class PGVectorStore(BaseVectorStore):
         conn = await asyncpg.connect(self.db_url)
         try:
             await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            await conn.execute("""
+            await conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY,
                     text TEXT,
                     metadata JSONB,
-                    embedding VECTOR(1536)
+                    embedding VECTOR({VOYAGE_EMBEDDING_DIM})
                 )
             """)
         finally:
@@ -157,7 +164,7 @@ class PGVectorStore(BaseVectorStore):
         finally:
             await conn.close()
 
-def vector_store_factory(name: str, embedding_provider: str = "openai") -> BaseVectorStore:
+def vector_store_factory(name: str, embedding_provider: str = "voyage") -> BaseVectorStore:
     embeddings = embedding_factory(embedding_provider)
     if name == "faiss":
         return FAISSVectorStore(embeddings)

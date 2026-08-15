@@ -7,14 +7,13 @@ class DocumentRequest(BaseModel):
     query: str
     top_k: int = 4
     filters: Optional[Dict] = None
-    embedding_provider: str = "openai"
+    embedding_provider: str = "voyage"
 
 
 class LLMRequest(BaseModel):
     prompt: str
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4o-mini"
-    temperature: float = 0.0
+    llm_provider: str = "anthropic"
+    llm_model: str = "claude-opus-5"
     max_tokens: int = 800
 
 

@@ -28,7 +28,9 @@ Last updated: 2026-04-05 | Server: 142.93.177.153 | Domain: dataiqsystems.com
   ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ pgAdmin password    │ Any password (only used if you enable debug mode)                        │
   ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
-  │ OpenAI API Key      │ Your key starting with sk-proj-... from platform.openai.com              │
+  │ Anthropic API Key   │ Your key starting with sk-ant-... from console.anthropic.com             │
+  ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ Voyage AI API Key   │ Your key starting with pa-... from dash.voyageai.com                     │
   ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ Domain              │ Your domain, or just press Enter to use the droplet IP                   │
   ├─────────────────────┼──────────────────────────────────────────────────────────────────────────┤

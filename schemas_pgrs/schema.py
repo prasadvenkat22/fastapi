@@ -193,6 +193,21 @@ class ProductResponse(ProductCreate):
 
 
 # ---------------------------------------------------------------------------
+# Entity image gallery (multiple images per entity record)
+# ---------------------------------------------------------------------------
+
+class EntityImageResponse(BaseModel):
+    id: int
+    entity_type: str
+    entity_id: int
+    image_url: str
+    sort_order: int
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
 # Registrations  (legacy — kept for backward compat)
 # ---------------------------------------------------------------------------
 

@@ -135,6 +135,20 @@ class Product(Base):
     image_url = Column(String, nullable=True)
 
 
+class EntityImage(Base):
+    """One row per uploaded image, supporting multiple images per entity record
+    (e.g. several photos for one product/property). entity_type/entity_id form a
+    polymorphic reference — no FK constraint, since entity_type spans several
+    tables (products, customers, users, ...)."""
+    __tablename__ = "entity_images"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    entity_type = Column(String, nullable=False, index=True)
+    entity_id = Column(Integer, nullable=False, index=True)
+    image_url = Column(String, nullable=False)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+
 class Registraion(Base):
     __tablename__ = "registrations"
     id = Column(Integer, primary_key=True, index=True)

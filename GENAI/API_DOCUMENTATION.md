@@ -35,7 +35,7 @@ Upload documents, store them in the vector database, and ask questions about the
 | `files` | File[] | Yes | - | One or more files to upload |
 | `query` | string | Yes | - | Question to ask about the documents |
 | `username` | string | No | `test_user` | User who uploaded the file (auto-registered in MongoDB if new) |
-| `vector_store_name` | string | No | `pgvector` | Vector store (`pgvector` or `faiss`) |
+| `vector_store_name` | string | No | `pgvector` | Vector store (pgvector only — everything is persisted, nothing is kept only in process memory) |
 | `embedding_provider` | string | No | `voyage` | Embedding provider |
 | `llm_provider` | string | No | `anthropic` | LLM provider |
 | `llm_model` | string | No | `claude-opus-5` | LLM model to use |
@@ -201,7 +201,7 @@ Send a direct query to the LLM without RAG.
 
 Upload a CSV and/or a PDF and ask a question about it. A LangGraph supervisor inspects
 which file type(s) were uploaded and routes the query to the matching specialist agent:
-a pandas-dataframe agent for CSV analysis, a FAISS-backed RAG agent for PDF Q&A, or both
+a pandas-dataframe agent for CSV analysis, a pgvector-backed RAG agent for PDF Q&A, or both
 (with a final Claude call synthesizing the two answers into one).
 
 #### Request Parameters
@@ -252,7 +252,7 @@ You can filter documents by metadata using the `filters` parameter in queries.
 
 ## Vector Storage
 
-### PostgreSQL + pgvector (Default)
+### PostgreSQL + pgvector (Only Supported Backend)
 - **Extension:** pgvector v0.8.1
 - **Embedding Dimensions:** 1024 (Voyage AI `voyage-4` — 200M tokens free per account)
 - **Similarity Metric:** Cosine distance
@@ -269,9 +269,6 @@ You can filter documents by metadata using the `filters` parameter in queries.
 SELECT * FROM documents
 WHERE metadata->>'username' = 'john_doe';
 ```
-
-### FAISS (Optional)
-Set `vector_store_name=faiss` for local file-based storage.
 
 ---
 
@@ -320,7 +317,6 @@ Required environment variables in `.env`:
 DATABASE_URL=postgresql://postgres:password@pgdb:5432/postgres
 ANTHROPIC_API_KEY=sk-ant-...
 VOYAGE_API_KEY=pa-...
-GENAI_VECTORSTORE_PATH=local_vectorstore/db_faiss  # For FAISS
 ```
 
 ---
@@ -398,6 +394,11 @@ print(response.json())
 ---
 
 ## Changelog
+
+### v1.3.0
+- Removed FAISS support entirely — pgvector is now the only vector store backend, so nothing is held only in local process memory (an in-memory FAISS index is lost on restart, isn't shared across workers, and gets rebuilt from scratch every request)
+- The PDF agent (`/api/genai/agent/upload`) now embeds and persists PDF chunks to the shared pgvector `documents` table (scoped to that upload via a metadata filter) instead of building a throwaway in-memory FAISS index per request
+- Added real metadata-filter support to `PGVectorStore.get_documents` (the `filters` parameter was previously accepted but silently ignored)
 
 ### v1.2.0
 - Migrated LLM calls from OpenAI to Claude (Anthropic Messages API, default `claude-opus-5`)

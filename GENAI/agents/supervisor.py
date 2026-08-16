@@ -6,6 +6,7 @@ from langgraph.graph import END, StateGraph
 from .csv_agent import run_csv_agent
 from .pdf_agent import run_pdf_agent
 from .state import SupervisorState
+from .utils import extract_text
 
 
 def _supervisor(state: SupervisorState) -> dict:
@@ -23,7 +24,7 @@ def _route(state: SupervisorState) -> Union[str, List[str]]:
     return branches or "synthesize"
 
 
-def _synthesize(state: SupervisorState) -> dict:
+async def _synthesize(state: SupervisorState) -> dict:
     csv_answer = state.get("csv_answer")
     pdf_answer = state.get("pdf_answer")
 
@@ -35,8 +36,8 @@ def _synthesize(state: SupervisorState) -> dict:
             f"A PDF-analysis agent answered:\n{pdf_answer}\n\n"
             "Combine these into one coherent answer for the user."
         )
-        response = llm.invoke(prompt)
-        return {"final_answer": response.content}
+        response = await llm.ainvoke(prompt)
+        return {"final_answer": extract_text(response.content)}
 
     return {"final_answer": csv_answer or pdf_answer or "No CSV or PDF content was provided to analyze."}
 
@@ -61,7 +62,7 @@ def build_supervisor_graph():
     return graph.compile()
 
 
-def run_supervisor(query: str, csv_text: Optional[str] = None, pdf_text: Optional[str] = None) -> SupervisorState:
+async def run_supervisor(query: str, csv_text: Optional[str] = None, pdf_text: Optional[str] = None) -> SupervisorState:
     app = build_supervisor_graph()
     initial_state: SupervisorState = {"query": query, "csv_text": csv_text, "pdf_text": pdf_text}
-    return app.invoke(initial_state)
+    return await app.ainvoke(initial_state)

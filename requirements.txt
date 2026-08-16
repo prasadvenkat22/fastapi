@@ -14,7 +14,6 @@ distro==1.9.0
 dnspython==2.8.0
 email-validator==2.3.0
 et_xmlfile==2.0.0
-faiss-cpu==1.12.0
 fastapi==0.118.0
 frozenlist==1.8.0
 greenlet==3.2.4

@@ -1,9 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Any
 import os
+import re
 from langchain_voyageai import VoyageAIEmbeddings as LangchainVoyageAIEmbeddings
-from langchain_community.vectorstores import FAISS
 from .llm_integration import DocumentResponse
+
+# Metadata filter keys are interpolated into the SQL query (asyncpg can't bind
+# a JSONB path key as a parameter) — restrict to a safe charset to prevent injection.
+_SAFE_FILTER_KEY = re.compile(r"^[a-zA-Z0-9_]+$")
 
 # Voyage AI embedding dimension for the "voyage-4" model — used to size the pgvector column below.
 # voyage-4 gives 200M free tokens per account before billing kicks in.
@@ -60,46 +64,6 @@ class BaseVectorStore(ABC):
     async def add_documents(self, documents: List[VectorDocument]):
         pass
 
-class FAISSVectorStore(BaseVectorStore):
-    def __init__(self, embeddings: Embeddings, vs_path: str = os.getenv("GENAI_VECTORSTORE_PATH", "local_vectorstore/db_faiss")):
-        super().__init__(embeddings)
-        if not vs_path:
-            raise ValueError("FAISS vector store path not found.")
-        self.vs_path = vs_path
-        self.vectorstore = None
-        if os.path.exists(vs_path):
-            self.vectorstore = FAISS.load_local(vs_path, self.embeddings.embeddings, allow_dangerous_deserialization=True) # Reaching into the wrapper for now
-
-    async def get_documents(self, query: str, top_k: int, filters: Optional[Dict[str, Any]] = None) -> List[DocumentResponse]:
-        if not self.vectorstore:
-            return []
-        
-        docs_and_scores = self.vectorstore.similarity_search_with_score(query, k=top_k, filter=filters)
-        
-        results = []
-        for doc, score in docs_and_scores:
-            results.append(DocumentResponse(
-                id=getattr(doc, "metadata", {}).get("id"),
-                content=doc.page_content,
-                metadata=getattr(doc, "metadata", {}),
-                score=float(score)
-            ))
-        return results
-
-    async def add_documents(self, documents: List[VectorDocument]):
-        texts = [doc.text for doc in documents]
-        metadatas = [doc.metadata for doc in documents]
-        
-        # Ensure the directory exists
-        os.makedirs(os.path.dirname(self.vs_path), exist_ok=True)
-        
-        if not self.vectorstore:
-            self.vectorstore = FAISS.from_texts(texts, self.embeddings.embeddings, metadatas=metadatas) # Reaching into the wrapper for now
-        else:
-            self.vectorstore.add_texts(texts, metadatas=metadatas)
-        
-        self.vectorstore.save_local(self.vs_path)
-
 import asyncpg
 import json
 from pgvector.asyncpg import register_vector
@@ -132,9 +96,26 @@ class PGVectorStore(BaseVectorStore):
         await register_vector(conn)
         try:
             query_embedding = self.embeddings.embed_query(query)
+            params: List[Any] = [query_embedding]
+            where_clause = ""
+            if filters:
+                conditions = []
+                for key, value in filters.items():
+                    if not _SAFE_FILTER_KEY.match(key):
+                        raise ValueError(f"Invalid filter key: {key!r}")
+                    params.append(str(value))
+                    conditions.append(f"metadata->>'{key}' = ${len(params)}")
+                where_clause = "WHERE " + " AND ".join(conditions)
+            params.append(top_k)
             # Cosine similarity is used by default
-            query_sql = "SELECT id, text, metadata, 1 - (embedding <=> $1) AS similarity FROM documents ORDER BY similarity DESC LIMIT $2"
-            results = await conn.fetch(query_sql, query_embedding, top_k)
+            query_sql = f"""
+                SELECT id, text, metadata, 1 - (embedding <=> $1) AS similarity
+                FROM documents
+                {where_clause}
+                ORDER BY similarity DESC
+                LIMIT ${len(params)}
+            """
+            results = await conn.fetch(query_sql, *params)
             return [DocumentResponse(id=r['id'], content=r['text'], metadata=json.loads(r['metadata']) if isinstance(r['metadata'], str) else r['metadata'], score=r['similarity']) for r in results]
         finally:
             await conn.close()
@@ -164,11 +145,9 @@ class PGVectorStore(BaseVectorStore):
         finally:
             await conn.close()
 
-def vector_store_factory(name: str, embedding_provider: str = "voyage") -> BaseVectorStore:
+def vector_store_factory(name: str = "pgvector", embedding_provider: str = "voyage") -> BaseVectorStore:
     embeddings = embedding_factory(embedding_provider)
-    if name == "faiss":
-        return FAISSVectorStore(embeddings)
-    elif name == "pgvector":
+    if name == "pgvector":
         return PGVectorStore(embeddings)
     else:
         raise ValueError(f"Vector store '{name}' not supported.")

@@ -236,7 +236,7 @@ async def genai_agent_upload(
         raise HTTPException(status_code=400, detail="Upload at least one .csv or .pdf file.")
 
     try:
-        state = run_supervisor(query=query, csv_text=csv_text, pdf_text=pdf_text)
+        state = await run_supervisor(query=query, csv_text=csv_text, pdf_text=pdf_text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -6,7 +6,8 @@
 PREREQUISITES
 - Digital Ocean account
 - SSH key added to your DO account
-- OpenAI API key from platform.openai.com
+- Anthropic API key from console.anthropic.com
+- Voyage AI API key from dash.voyageai.com
 
 =======================================
 STEP 1: Create a Droplet
@@ -39,7 +40,8 @@ The script will ask for:
   ----------------------   ------------------------------------------
   PostgreSQL password      Any strong password (creates the DB with it)
   pgAdmin password         Any password (only for debug mode)
-  OpenAI API Key           Your key starting with sk-proj-...
+  Anthropic API Key        Your key starting with sk-ant-...
+  Voyage AI API Key        Your key starting with pa-...
   Domain                   Your domain, or press Enter to use the IP
   Start now?               y
 
@@ -146,8 +148,8 @@ GenAI file upload + RAG query:
   POST /api/genai/query/upload
   - files: CSV, PDF, TXT, DOCX
   - query: question about the uploaded documents
-  - vector_store_name: faiss or pgvector
-  - llm_model: gpt-4o-mini (default)
+  - vector_store_name: pgvector (only supported backend)
+  - llm_model: claude-opus-5 (default)
 
 GenAI direct query:
   POST /api/genai/query
@@ -164,9 +166,11 @@ Problem: "env file .env not found"
 Problem: Container keeps restarting
   Fix: docker compose logs <service> --tail 50
 
-Problem: OpenAI API key error
-  Fix: Edit .env.production, fix the OPENAI_API_KEY line (no quotes),
-       then ./deploy.sh restart
+Problem: Anthropic/Voyage API key error
+  Fix: Edit .env.production, fix the ANTHROPIC_API_KEY / VOYAGE_API_KEY
+       line (no quotes), then ./deploy.sh restart. Note: keys are only
+       shown in full once at creation in each provider's console — if
+       you copied from a masked list view, generate a fresh key instead.
 
 Problem: Out of memory
   Fix: Use docker-compose.prod.yml (deploy.sh uses it automatically)

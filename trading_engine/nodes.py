@@ -32,6 +32,10 @@ POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
 TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "20.0"))
 STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-10.0"))  # unchanged from the original spec — only take-profit moved to 20%
 
+# Standard Wilder's RSI(14) thresholds.
+RSI_OVERBOUGHT = float(os.getenv("TRADING_RSI_OVERBOUGHT", "70.0"))
+RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
+
 RSS_FEEDS = [
     "https://finance.yahoo.com/news/rssindex",
     "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
@@ -105,6 +109,36 @@ def bollinger_agent(state: TradingState) -> dict:
         zone = "NORMAL"
 
     return {"bollinger_zone": zone}
+
+
+def rsi_agent(state: TradingState) -> dict:
+    """Standard 14-period RSI (Wilder's smoothing) over the fetched intraday
+    bar series. >=70 overbought (fading a stretched high — pairs with
+    Bollinger UPPER_BAND for the bearish trigger), <=30 oversold (bouncing
+    off a stretched low — pairs with Bollinger LOWER_BAND for the bullish
+    trigger)."""
+    bars = fetch_qqq_bars()
+    close = bars["Close"]
+
+    delta = close.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    latest = rsi.iloc[-1]
+
+    if latest >= RSI_OVERBOUGHT:
+        zone = "OVERBOUGHT"
+    elif latest <= RSI_OVERSOLD:
+        zone = "OVERSOLD"
+    else:
+        zone = "NEUTRAL"
+
+    return {"rsi_zone": zone}
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +238,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     macd = state.get("macd_signal")
     sma = state.get("sma_trend")
     bb = state.get("bollinger_zone")
+    rsi = state.get("rsi_zone")
     count = state.get("buy_more_count", 0)
 
     position = broker.get_open_position()
@@ -244,9 +279,18 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # trigger, same market_sentiment=GOOD gate (a calm macro environment is
         # required to open a new position either direction). No new entries
         # past the cutoff — a same-day spread opened too late has too little
-        # of the trading day left to work before it expires.
-        bullish = macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "LOWER_BAND" and sentiment == "GOOD"
-        bearish = macd == "BEARISH" and sma == "BELOW_SMA" and bb == "UPPER_BAND" and sentiment == "GOOD"
+        # of the trading day left to work before it expires. RSI confirms the
+        # Bollinger band-touch isn't already exhausted: OVERSOLD backs up
+        # LOWER_BAND for the bullish bounce, OVERBOUGHT backs up UPPER_BAND
+        # for the bearish fade.
+        bullish = (
+            macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "LOWER_BAND"
+            and rsi == "OVERSOLD" and sentiment == "GOOD"
+        )
+        bearish = (
+            macd == "BEARISH" and sma == "BELOW_SMA" and bb == "UPPER_BAND"
+            and rsi == "OVERBOUGHT" and sentiment == "GOOD"
+        )
 
         if bullish or bearish:
             spot = float(fetch_qqq_bars()["Close"].iloc[-1])

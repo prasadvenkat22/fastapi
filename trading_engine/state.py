@@ -9,6 +9,7 @@ class TradingState(TypedDict):
     macd_signal: str          # 'BULLISH', 'BEARISH', or 'NEUTRAL'
     sma_trend: str             # 'ABOVE_SMA' or 'BELOW_SMA'
     bollinger_zone: str        # 'UPPER_BAND', 'LOWER_BAND', or 'NORMAL'
+    rsi_zone: str              # 'OVERBOUGHT' (>=70), 'OVERSOLD' (<=30), or 'NEUTRAL'
     market_sentiment: str      # 'GOOD' or 'BAD'
     execution_status: str      # 'BUY_CALL', 'BUY_MORE', 'SELL_ALL', 'HOLD'
     buy_more_count: int        # Tracking safety scale-ins

@@ -18,6 +18,7 @@ class TradingLog(Base):
     macd_signal = Column(String, nullable=True)
     sma_trend = Column(String, nullable=True)
     bollinger_zone = Column(String, nullable=True)
+    rsi_zone = Column(String, nullable=True)
     market_sentiment = Column(String, nullable=True)
     raw_log_payload = Column(JSONB, nullable=True)
 

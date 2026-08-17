@@ -103,6 +103,7 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         macd_signal=final_state.get("macd_signal", ""),
         sma_trend=final_state.get("sma_trend", ""),
         bollinger_zone=final_state.get("bollinger_zone", ""),
+        rsi_zone=final_state.get("rsi_zone", ""),
         market_sentiment=final_state.get("market_sentiment", ""),
         raw_log_payload={k: v for k, v in final_state.items() if k != "messages"},
     ))

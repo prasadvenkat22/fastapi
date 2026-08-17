@@ -20,6 +20,7 @@ class TradingCycleResponse(BaseModel):
     macd_signal: str
     sma_trend: str
     bollinger_zone: str
+    rsi_zone: str
     market_sentiment: str
     buy_more_count: int
 
@@ -31,6 +32,7 @@ class TradingLogResponse(BaseModel):
     macd_signal: str
     sma_trend: str
     bollinger_zone: str
+    rsi_zone: Optional[str] = None
     market_sentiment: str
     raw_log_payload: Dict[str, Any]
 

@@ -66,16 +66,21 @@ def macd_agent(state: TradingState) -> dict:
 
 
 def sma_agent(state: TradingState) -> dict:
-    """Closing price vs. the 20- and 50-period simple moving averages
-    (computed over the fetched intraday bar series)."""
+    """Closing price vs. the 20- and 50-period EMAs (computed over the
+    fetched intraday bar series). Uses EMA rather than a simple moving
+    average so this trend filter reacts on the same timescale as MACD
+    (which is itself EMA(12,26,9)-based) — important for same-day (0DTE)
+    positions where a laggy SMA can confirm a trend after most of the day's
+    move is already gone. The state field/values (sma_trend,
+    ABOVE_SMA/BELOW_SMA) are kept as-is; only the underlying average changed."""
     bars = fetch_qqq_bars()
     close = bars["Close"]
 
-    sma20 = close.rolling(window=20).mean().iloc[-1]
-    sma50 = close.rolling(window=50).mean().iloc[-1] if len(close) >= 50 else sma20
+    ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+    ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1] if len(close) >= 50 else ema20
     last_close = close.iloc[-1]
 
-    trend = "ABOVE_SMA" if (last_close > sma20 and last_close > sma50) else "BELOW_SMA"
+    trend = "ABOVE_SMA" if (last_close > ema20 and last_close > ema50) else "BELOW_SMA"
     return {"sma_trend": trend}
 
 

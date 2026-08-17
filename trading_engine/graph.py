@@ -1,16 +1,17 @@
 from langgraph.graph import END, START, StateGraph
 
+from .broker import MockBrokerClient
 from .nodes import bollinger_agent, execution_risk_agent, macd_agent, market_signals_agent, sma_agent
 from .state import TradingState
 
 
-def build_trading_graph():
+def build_trading_graph(broker: MockBrokerClient = None):
     graph = StateGraph(TradingState)
     graph.add_node("macd_agent", macd_agent)
     graph.add_node("sma_agent", sma_agent)
     graph.add_node("bollinger_agent", bollinger_agent)
     graph.add_node("market_signals_agent", market_signals_agent)
-    graph.add_node("execution_risk_agent", execution_risk_agent)
+    graph.add_node("execution_risk_agent", lambda state: execution_risk_agent(state, broker=broker))
 
     # START fans out to all 4 indicator nodes in parallel
     graph.add_edge(START, "macd_agent")
@@ -29,8 +30,8 @@ def build_trading_graph():
     return graph.compile()
 
 
-async def run_trading_cycle() -> TradingState:
-    app = build_trading_graph()
+async def run_trading_cycle(broker: MockBrokerClient = None) -> TradingState:
+    app = build_trading_graph(broker=broker)
     initial_state: TradingState = {
         "messages": [],
         "macd_signal": "",

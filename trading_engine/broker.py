@@ -20,6 +20,20 @@ def round_to_strike(price: float, increment: float = STRIKE_INCREMENT) -> float:
     return round(price / increment) * increment
 
 
+def estimate_intrinsic_value(strategy: str, long_strike: float, short_strike: float, spot: float) -> float:
+    """Approximate a debit vertical spread's current per-spread value from
+    intrinsic value only (spot vs. strikes), ignoring time value/greeks —
+    there's no live option-chain quote feed wired up, so this is the honest
+    mocked stand-in: what the spread would be worth if it expired right now,
+    clamped to the spread's width."""
+    width = abs(short_strike - long_strike)
+    if strategy == BULL_CALL_SPREAD:
+        value = spot - long_strike
+    else:  # BEAR_PUT_SPREAD
+        value = long_strike - spot
+    return round(max(0.0, min(value, width)), 4)
+
+
 @dataclass
 class MockSpreadPosition:
     """A 2-leg debit vertical spread: long the ITM leg, short the ATM leg."""
@@ -67,22 +81,46 @@ class MockBrokerClient:
         return max(int(budget // cost_per_contract), 0)
 
     def place_bull_call_spread(self, underlying: str, quantity: int, long_strike: float, short_strike: float) -> dict:
-        """Mock order placement — logs the intent, places nothing."""
+        """Mock order placement — no network call, no real order. Updates the
+        in-memory position so callers (e.g. the router, to persist state
+        across cycles) can read back what's now open via get_open_position()."""
+        self._position = MockSpreadPosition(
+            strategy=BULL_CALL_SPREAD, underlying=underlying, quantity=quantity,
+            long_strike=long_strike, short_strike=short_strike,
+            entry_net_debit=self._mock_net_debit_estimate, current_net_value=self._mock_net_debit_estimate,
+        )
         return {
             "status": "mock_filled", "action": BULL_CALL_SPREAD, "underlying": underlying,
             "quantity": quantity, "long_strike": long_strike, "short_strike": short_strike,
         }
 
     def place_bear_put_spread(self, underlying: str, quantity: int, long_strike: float, short_strike: float) -> dict:
+        self._position = MockSpreadPosition(
+            strategy=BEAR_PUT_SPREAD, underlying=underlying, quantity=quantity,
+            long_strike=long_strike, short_strike=short_strike,
+            entry_net_debit=self._mock_net_debit_estimate, current_net_value=self._mock_net_debit_estimate,
+        )
         return {
             "status": "mock_filled", "action": BEAR_PUT_SPREAD, "underlying": underlying,
             "quantity": quantity, "long_strike": long_strike, "short_strike": short_strike,
         }
 
     def place_buy_more(self, underlying: str, quantity: int) -> dict:
+        pos = self._position
+        if pos is not None:
+            total_qty = pos.quantity + quantity
+            # Weighted-average entry debit across the original lot (at its
+            # entry price) and the new lot (bought at today's current value).
+            weighted_debit = ((pos.entry_net_debit * pos.quantity) + (pos.current_net_value * quantity)) / total_qty
+            self._position = MockSpreadPosition(
+                strategy=pos.strategy, underlying=pos.underlying, quantity=total_qty,
+                long_strike=pos.long_strike, short_strike=pos.short_strike,
+                entry_net_debit=round(weighted_debit, 4), current_net_value=pos.current_net_value,
+            )
         return {"status": "mock_filled", "action": "BUY_MORE", "underlying": underlying, "quantity": quantity}
 
     def sell_all(self, underlying: str) -> dict:
+        self._position = None
         return {"status": "mock_filled", "action": "SELL_ALL", "underlying": underlying}
 
 

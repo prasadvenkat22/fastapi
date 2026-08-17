@@ -1,0 +1,14 @@
+import operator
+from typing import Annotated, Sequence, TypedDict
+
+from langchain_core.messages import BaseMessage
+
+
+class TradingState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], operator.add]
+    macd_signal: str          # 'BULLISH', 'BEARISH', or 'NEUTRAL'
+    sma_trend: str             # 'ABOVE_SMA' or 'BELOW_SMA'
+    bollinger_zone: str        # 'UPPER_BAND', 'LOWER_BAND', or 'NORMAL'
+    market_sentiment: str      # 'GOOD' or 'BAD'
+    execution_status: str      # 'BUY_CALL', 'BUY_MORE', 'SELL_ALL', 'HOLD'
+    buy_more_count: int        # Tracking safety scale-ins

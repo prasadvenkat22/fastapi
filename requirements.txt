@@ -102,3 +102,5 @@ alembic
 bcrypt==4.0.1
 PyPDF2
 tabulate
+feedparser
+yfinance

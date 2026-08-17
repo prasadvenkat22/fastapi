@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 import routes.db_pgrs_router as db_pgrs_router
 import routes.dbfile_pgrs_router as dbfile_pgrs_router
 import routes.image_router as image_router
+import routes.trading_router as trading_router
 import GENAI.router as genai_router
 
 # MongoDB router — disabled; uncomment to re-enable /api/mongo/* endpoints
@@ -26,6 +27,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(db_pgrs_router.router)
 app.include_router(dbfile_pgrs_router.router)
 app.include_router(image_router.router)
+app.include_router(trading_router.router)
 app.include_router(genai_router.router)
 
 # app.include_router(db_mngdb_router.router)  # MongoDB — disabled

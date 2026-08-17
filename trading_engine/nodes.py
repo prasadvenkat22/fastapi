@@ -281,21 +281,28 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # entries past the cutoff — a same-day spread opened too late has
         # too little of the trading day left to work before it expires.
         #
-        # Bearish has two distinct setups (bullish is fade-only for now —
-        # asymmetric on purpose until/unless a bullish continuation variant
-        # is requested too):
-        #   - Fade: MACD/EMA bearish while price is still stretched UP at
-        #     the UPPER_BAND with RSI OVERBOUGHT — a topping/reversal read,
-        #     betting the rally is exhausted.
-        #   - Continuation: MACD/EMA bearish AND price is already down at
-        #     the LOWER_BAND with RSI OVERSOLD — a breakdown-in-progress
-        #     read, betting the slide keeps going. This is what a grinding
-        #     move to new lows (never touching the upper band) looks like,
-        #     which the fade-only trigger couldn't catch.
-        bullish = (
+        # Both directions now have two distinct setups, mirrored:
+        #   - Fade: MACD/EMA one direction while price is stretched to the
+        #     OPPOSITE band with RSI at that opposite extreme — a
+        #     topping/bottoming reversal read, betting the prior move is
+        #     exhausted. (Bullish fade: bearish price action stretched down
+        #     to LOWER_BAND/OVERSOLD, momentum turning up. Bearish fade:
+        #     bullish price action stretched up to UPPER_BAND/OVERBOUGHT,
+        #     momentum turning down.)
+        #   - Continuation: MACD/EMA AND price/RSI all agree in the SAME
+        #     direction — a breakout/breakdown-in-progress read, betting the
+        #     move keeps going. This is what a clean trending move (never
+        #     touching the opposite band) looks like, which the fade-only
+        #     trigger couldn't catch.
+        bullish_fade = (
             macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "LOWER_BAND"
             and rsi == "OVERSOLD" and sentiment == "GOOD"
         )
+        bullish_continuation = (
+            macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "UPPER_BAND"
+            and rsi == "OVERBOUGHT" and sentiment == "GOOD"
+        )
+        bullish = bullish_fade or bullish_continuation
         bearish_fade = (
             macd == "BEARISH" and sma == "BELOW_SMA" and bb == "UPPER_BAND"
             and rsi == "OVERBOUGHT" and sentiment == "GOOD"

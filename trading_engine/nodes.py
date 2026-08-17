@@ -136,11 +136,10 @@ async def market_signals_agent(state: TradingState) -> dict:
     # and there's no honest free approximation for a real tick index (needs
     # tick-by-tick trade data no snapshot-quote API provides). The
     # Institutional Divergence Filter that depended on it is dropped for now.
-    # $ADDQ is self-computed from NASDAQ_BREADTH_BASKET (see data_feed.py) —
-    # scaled to that basket's size, not the original spec's full-market
-    # threshold, since this is a smaller representative sample.
-    advance_ratio_threshold = float(os.getenv("BREADTH_ADVANCE_RATIO_THRESHOLD", "0.15"))
-    breadth_is_bullish = breadth.addq > (breadth.basket_size * advance_ratio_threshold)
+    # $ADDQ is self-computed from NASDAQ_BREADTH_BASKET (see data_feed.py):
+    # net advancers/decliners > 0 (more names advancing than declining) is
+    # bullish breadth, <= 0 is bearish.
+    breadth_is_bullish = breadth.addq > 0
 
     llm = ChatAnthropic(model="claude-opus-5", max_tokens=1024).with_structured_output(MarketSentimentOutput)
     prompt = (

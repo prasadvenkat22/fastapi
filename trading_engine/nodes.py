@@ -275,22 +275,36 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 action = "SELL_ALL"
     elif not past_cutoff:
         # Bullish: bull call debit spread (long ITM call, short ATM call).
-        # Bearish: bear put debit spread (long ITM put, short ATM put) — mirrored
-        # trigger, same market_sentiment=GOOD gate (a calm macro environment is
-        # required to open a new position either direction). No new entries
-        # past the cutoff — a same-day spread opened too late has too little
-        # of the trading day left to work before it expires. RSI confirms the
-        # Bollinger band-touch isn't already exhausted: OVERSOLD backs up
-        # LOWER_BAND for the bullish bounce, OVERBOUGHT backs up UPPER_BAND
-        # for the bearish fade.
+        # Bearish: bear put debit spread (long ITM put, short ATM put). Same
+        # market_sentiment=GOOD gate either direction (a calm macro
+        # environment is required to open a new position at all). No new
+        # entries past the cutoff — a same-day spread opened too late has
+        # too little of the trading day left to work before it expires.
+        #
+        # Bearish has two distinct setups (bullish is fade-only for now —
+        # asymmetric on purpose until/unless a bullish continuation variant
+        # is requested too):
+        #   - Fade: MACD/EMA bearish while price is still stretched UP at
+        #     the UPPER_BAND with RSI OVERBOUGHT — a topping/reversal read,
+        #     betting the rally is exhausted.
+        #   - Continuation: MACD/EMA bearish AND price is already down at
+        #     the LOWER_BAND with RSI OVERSOLD — a breakdown-in-progress
+        #     read, betting the slide keeps going. This is what a grinding
+        #     move to new lows (never touching the upper band) looks like,
+        #     which the fade-only trigger couldn't catch.
         bullish = (
             macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "LOWER_BAND"
             and rsi == "OVERSOLD" and sentiment == "GOOD"
         )
-        bearish = (
+        bearish_fade = (
             macd == "BEARISH" and sma == "BELOW_SMA" and bb == "UPPER_BAND"
             and rsi == "OVERBOUGHT" and sentiment == "GOOD"
         )
+        bearish_continuation = (
+            macd == "BEARISH" and sma == "BELOW_SMA" and bb == "LOWER_BAND"
+            and rsi == "OVERSOLD" and sentiment == "GOOD"
+        )
+        bearish = bearish_fade or bearish_continuation
 
         if bullish or bearish:
             spot = float(fetch_qqq_bars()["Close"].iloc[-1])

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+import routes.auth_router as auth_router
 import routes.db_pgrs_router as db_pgrs_router
 import routes.dbfile_pgrs_router as dbfile_pgrs_router
 import routes.image_router as image_router
@@ -24,6 +25,7 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+app.include_router(auth_router.router)
 app.include_router(db_pgrs_router.router)
 app.include_router(dbfile_pgrs_router.router)
 app.include_router(image_router.router)

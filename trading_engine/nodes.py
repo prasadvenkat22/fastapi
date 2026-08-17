@@ -173,8 +173,20 @@ async def market_signals_agent(state: TradingState) -> dict:
 
 
 def _is_past_cutoff(cutoff_hour: int = 14) -> bool:
+    """No new entries and no BUY_MORE past this hour (EST) — these are
+    same-day (0DTE) QQQ spreads, so a fresh or added position needs enough
+    of the trading day left to actually work before expiration."""
     now_est = datetime.now(ZoneInfo("America/New_York"))
     return now_est.hour >= cutoff_hour
+
+
+def _is_past_force_close(hour: int = 15, minute: int = 45) -> bool:
+    """Hard close-out cutoff, independent of P&L — QQQ options expire at
+    today's close, so any open spread must be flattened before then rather
+    than allowed to ride into expiration (assignment/pin risk on the short
+    leg, and an OTM long leg simply expires worthless)."""
+    now_est = datetime.now(ZoneInfo("America/New_York"))
+    return (now_est.hour, now_est.minute) >= (hour, minute)
 
 
 def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -> dict:
@@ -192,14 +204,19 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     position = broker.get_open_position()
     available_cash = broker.get_available_cash()
     past_cutoff = _is_past_cutoff()
+    force_close = _is_past_force_close()
 
     action = "HOLD"
 
     if position is not None:
         return_pct = position.return_pct
 
+        # Rule Z: same-day expiration hard close — overrides P&L entirely.
+        if force_close:
+            broker.sell_all(position.underlying)
+            action = "SELL_ALL"
         # Rule A: Take Profit (+20%)
-        if return_pct >= TAKE_PROFIT_PCT:
+        elif return_pct >= TAKE_PROFIT_PCT:
             broker.sell_all(position.underlying)
             action = "SELL_ALL"
         # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
@@ -216,11 +233,13 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 # Past the 2PM EST cutoff, or sentiment/cash/count don't clear the bar — fall back to stop loss.
                 broker.sell_all(position.underlying)
                 action = "SELL_ALL"
-    else:
+    elif not past_cutoff:
         # Bullish: bull call debit spread (long ITM call, short ATM call).
         # Bearish: bear put debit spread (long ITM put, short ATM put) — mirrored
         # trigger, same market_sentiment=GOOD gate (a calm macro environment is
-        # required to open a new position either direction).
+        # required to open a new position either direction). No new entries
+        # past the cutoff — a same-day spread opened too late has too little
+        # of the trading day left to work before it expires.
         bullish = macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "LOWER_BAND" and sentiment == "GOOD"
         bearish = macd == "BEARISH" and sma == "BELOW_SMA" and bb == "UPPER_BAND" and sentiment == "GOOD"
 

@@ -30,6 +30,19 @@ KILL_SWITCH_PATH = "KILL_SWITCH.txt"
 
 # Debit-spread strategy config — see execution_risk_agent below.
 POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
+
+# Share of the budget the opening trade may consume. The remainder is held
+# back to fund scale-ins.
+#
+# This has to be below 1.0 for scale-ins to exist at all. estimate_spread_
+# quantity() buys as many contracts as the amount handed to it affords, so
+# passing the whole budget left available_cash at exactly $0 on every entry
+# — and the buy-more gate, which requires cash on hand, could therefore
+# never pass at any budget. Rule 3 of the exit ladder was unreachable.
+ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.4"))
+
+# Cap on scale-ins per position, unchanged from the original hardcoded 3.
+MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "3"))
 TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "20.0"))
 STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-10.0"))  # unchanged from the original spec — only take-profit moved to 20%
 
@@ -315,11 +328,18 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
         # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
         elif return_pct <= STOP_LOSS_PCT:
+            # place_buy_more adds `position.quantity` more contracts — it
+            # doubles the position — so the affordability check has to price
+            # that whole lot. Checking a single contract's cost (as this once
+            # did) authorised roughly a 5x larger purchase than it verified,
+            # and repeated doubling would have compounded the gap: 5 -> 10 ->
+            # 20 -> 40 contracts, each step approved by a one-contract test.
+            scale_in_cost = position.current_net_value * 100 * position.quantity
             if (
                 not past_cutoff
                 and sentiment == "GOOD"
-                and count < 3
-                and available_cash >= (position.current_net_value * 100)
+                and count < MAX_SCALE_INS
+                and available_cash >= scale_in_cost
             ):
                 broker.place_buy_more(position.underlying, position.quantity)
                 action = "BUY_MORE"
@@ -387,7 +407,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         if bullish or bearish:
             spot = float(fetch_qqq_bars()["Close"].iloc[-1])
             atm_strike = round_to_strike(spot)
-            quantity = broker.estimate_spread_quantity(POSITION_BUDGET)
+            quantity = broker.estimate_spread_quantity(POSITION_BUDGET * ENTRY_FRACTION)
 
             if quantity > 0:
                 if bullish:

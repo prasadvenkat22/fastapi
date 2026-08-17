@@ -5,12 +5,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from config.db_pgrs import SessionLocal
-from models_pgdb.trading_models import OpenPosition, TradingLog
-from schemas_pgrs.trading_schema import KillSwitchResponse, TradingCycleResponse
-from trading_engine.broker import MockBrokerClient, MockSpreadPosition, estimate_intrinsic_value
+from models_pgdb.trading_models import OpenPosition, TradeHistory
+from schemas_pgrs.trading_schema import (
+    KillSwitchResponse,
+    OpenPositionResponse,
+    SchedulerStatusResponse,
+    TradeHistoryResponse,
+    TradingCycleResponse,
+)
+from trading_engine import scheduler
+from trading_engine.broker import estimate_intrinsic_value
 from trading_engine.data_feed import TradierDataError, fetch_qqq_bars
-from trading_engine.graph import run_trading_cycle
-from trading_engine.nodes import KILL_SWITCH_PATH, POSITION_BUDGET
+from trading_engine.nodes import KILL_SWITCH_PATH
+from trading_engine.service import execute_and_persist_cycle
 
 router = APIRouter(prefix="/trading", tags=["Trading"])
 
@@ -30,65 +37,18 @@ db_dependency = Annotated[Session, Depends(get_db)]
 async def run_daily_cycle(db: db_dependency):
     """Runs the LangGraph decision engine once: technical indicators + market
     sentiment fan in to the execution_risk_agent, which returns a final
-    decision against the mocked broker. Writes a TradingLog row either way."""
+    decision against the mocked broker. Persists any open position and
+    writes a TradingLog row either way."""
 
     if os.path.exists(KILL_SWITCH_PATH):
         raise HTTPException(status_code=400, detail="KILL_SWITCH.txt is present — trading is halted.")
 
-    open_row = db.query(OpenPosition).first()
-
-    if open_row is not None:
-        # No live option-chain feed is wired up — reprice the open spread
-        # from intrinsic value against today's live QQQ spot as an honest
-        # mocked approximation (ignores time value/greeks).
-        spot = float(fetch_qqq_bars()["Close"].iloc[-1])
-        current_value = estimate_intrinsic_value(open_row.strategy, open_row.long_strike, open_row.short_strike, spot)
-        position = MockSpreadPosition(
-            strategy=open_row.strategy,
-            underlying=open_row.underlying,
-            quantity=open_row.quantity,
-            long_strike=open_row.long_strike,
-            short_strike=open_row.short_strike,
-            entry_net_debit=open_row.entry_net_debit,
-            current_net_value=current_value,
-        )
-        spent = open_row.quantity * open_row.entry_net_debit * 100
-        broker = MockBrokerClient(position=position, available_cash=max(POSITION_BUDGET - spent, 0))
-    else:
-        broker = MockBrokerClient(position=None, available_cash=POSITION_BUDGET)
-
     try:
-        final_state = await run_trading_cycle(broker=broker)
+        final_state = await execute_and_persist_cycle(db)
     except TradierDataError as e:
         raise HTTPException(status_code=424, detail=f"Market-breadth data unavailable: {e}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Trading cycle failed: {e}")
-
-    # Sync the persisted position with whatever the broker ended up holding —
-    # entered, added to, or closed out — so the next cycle picks it up correctly.
-    new_position = broker.get_open_position()
-    if open_row is not None:
-        db.delete(open_row)
-    if new_position is not None:
-        db.add(OpenPosition(
-            strategy=new_position.strategy,
-            underlying=new_position.underlying,
-            quantity=new_position.quantity,
-            long_strike=new_position.long_strike,
-            short_strike=new_position.short_strike,
-            entry_net_debit=new_position.entry_net_debit,
-        ))
-
-    log = TradingLog(
-        execution_status=final_state.get("execution_status", ""),
-        macd_signal=final_state.get("macd_signal", ""),
-        sma_trend=final_state.get("sma_trend", ""),
-        bollinger_zone=final_state.get("bollinger_zone", ""),
-        market_sentiment=final_state.get("market_sentiment", ""),
-        raw_log_payload={k: v for k, v in final_state.items() if k != "messages"},
-    )
-    db.add(log)
-    db.commit()
 
     return TradingCycleResponse(
         execution_status=final_state.get("execution_status", ""),
@@ -100,10 +60,84 @@ async def run_daily_cycle(db: db_dependency):
     )
 
 
+@router.get("/position", response_model=OpenPositionResponse)
+async def get_open_position(db: db_dependency):
+    """The currently open spread, if any, repriced live from intrinsic value
+    against today's QQQ spot — the unrealized P&L view. No live option-chain
+    feed is wired up, so this is a mocked approximation of real premium."""
+
+    row = db.query(OpenPosition).first()
+    if row is None:
+        return OpenPositionResponse(open=False)
+
+    spot = float(fetch_qqq_bars()["Close"].iloc[-1])
+    current_value = estimate_intrinsic_value(row.strategy, row.long_strike, row.short_strike, spot)
+    unrealized_pct = round(((current_value - row.entry_net_debit) / row.entry_net_debit) * 100, 2)
+    unrealized_dollars = round((current_value - row.entry_net_debit) * row.quantity * 100, 2)
+
+    return OpenPositionResponse(
+        open=True,
+        strategy=row.strategy,
+        underlying=row.underlying,
+        quantity=row.quantity,
+        long_strike=row.long_strike,
+        short_strike=row.short_strike,
+        entry_net_debit=row.entry_net_debit,
+        current_spot=spot,
+        estimated_current_value=current_value,
+        unrealized_pnl_pct=unrealized_pct,
+        unrealized_pnl_dollars=unrealized_dollars,
+        opened_at=row.opened_at,
+    )
+
+
+@router.get("/history", response_model=TradeHistoryResponse)
+async def get_trade_history(db: db_dependency):
+    """Realized P&L from every closed trade, oldest to newest, plus the
+    running total — this is where a closed position's profit or loss
+    actually lives once its OpenPosition row is gone."""
+
+    rows = db.query(TradeHistory).order_by(TradeHistory.closed_at.asc()).all()
+    total = round(sum(r.realized_pnl_dollars for r in rows), 2)
+    return TradeHistoryResponse(total_realized_pnl_dollars=total, trade_count=len(rows), trades=rows)
+
+
+@router.post("/scheduler/start", response_model=SchedulerStatusResponse)
+async def start_scheduler(interval_minutes: int = Query(5, ge=1, le=60)):
+    """Starts the background loop that re-runs the trading cycle on an
+    interval during market hours (9:30AM-4:00PM EST, weekdays) — never
+    starts on its own, only via this endpoint. Calling it again while
+    already running just reports the current status."""
+
+    scheduler.start(interval_seconds=interval_minutes * 60)
+    return SchedulerStatusResponse(
+        scheduler_running=scheduler.is_running(),
+        interval_seconds=scheduler.get_interval_seconds(),
+    )
+
+
+@router.post("/scheduler/stop", response_model=SchedulerStatusResponse)
+async def stop_scheduler():
+    scheduler.stop()
+    return SchedulerStatusResponse(
+        scheduler_running=scheduler.is_running(),
+        interval_seconds=scheduler.get_interval_seconds(),
+    )
+
+
+@router.get("/scheduler/status", response_model=SchedulerStatusResponse)
+async def scheduler_status():
+    return SchedulerStatusResponse(
+        scheduler_running=scheduler.is_running(),
+        interval_seconds=scheduler.get_interval_seconds(),
+    )
+
+
 @router.post("/kill-switch/toggle", response_model=KillSwitchResponse)
 async def toggle_kill_switch(action: str = Query(..., pattern="^(ACTIVATE|DEACTIVATE)$")):
-    """ACTIVATE creates KILL_SWITCH.txt (blocks /run-daily-cycle and forces
-    execution_risk_agent to a HALTED state); DEACTIVATE removes it."""
+    """ACTIVATE creates KILL_SWITCH.txt (blocks /run-daily-cycle and the
+    scheduler, and forces execution_risk_agent to a HALTED state);
+    DEACTIVATE removes it."""
 
     if action == "ACTIVATE":
         with open(KILL_SWITCH_PATH, "w") as f:

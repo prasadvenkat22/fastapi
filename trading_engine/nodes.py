@@ -180,7 +180,7 @@ def _is_past_cutoff(cutoff_hour: int = 14) -> bool:
     return now_est.hour >= cutoff_hour
 
 
-def _is_past_force_close(hour: int = 15, minute: int = 45) -> bool:
+def is_past_force_close(hour: int = 15, minute: int = 45) -> bool:
     """Hard close-out cutoff, independent of P&L — QQQ options expire at
     today's close, so any open spread must be flattened before then rather
     than allowed to ride into expiration (assignment/pin risk on the short
@@ -204,7 +204,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     position = broker.get_open_position()
     available_cash = broker.get_available_cash()
     past_cutoff = _is_past_cutoff()
-    force_close = _is_past_force_close()
+    force_close = is_past_force_close()
 
     action = "HOLD"
 

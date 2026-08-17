@@ -46,3 +46,25 @@ class OpenPosition(Base):
     short_strike = Column(Float, nullable=False)
     entry_net_debit = Column(Float, nullable=False)
     opened_at = Column(DateTime(timezone=True), default=func.now())
+
+
+class TradeHistory(Base):
+    """Realized P&L record, written whenever an open position is fully
+    closed (take-profit, stop-loss, or the 0DTE force-close cutoff) — the
+    OpenPosition row for a closed trade gets deleted, so without this the
+    result of that trade would just disappear."""
+
+    __tablename__ = "trading_history"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy = Column(String, nullable=False)
+    underlying = Column(String, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    long_strike = Column(Float, nullable=False)
+    short_strike = Column(Float, nullable=False)
+    entry_net_debit = Column(Float, nullable=False)
+    exit_net_value = Column(Float, nullable=False)
+    realized_pnl_dollars = Column(Float, nullable=False)
+    realized_pnl_pct = Column(Float, nullable=False)
+    close_reason = Column(String, nullable=False)  # TAKE_PROFIT / STOP_LOSS / FORCE_CLOSE
+    opened_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), default=func.now())

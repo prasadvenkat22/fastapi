@@ -82,3 +82,18 @@ class TradeHistoryResponse(BaseModel):
     total_realized_pnl_dollars: float
     trade_count: int
     trades: list[TradeHistoryEntry]
+
+
+class TradingStatusResponse(BaseModel):
+    """One-call dashboard combining kill switch, scheduler, open position,
+    and realized P&L — everything /trading/position, /trading/history, and
+    /trading/scheduler/status report individually, in a single response."""
+
+    kill_switch_active: bool
+    scheduler_running: bool
+    scheduler_interval_seconds: int
+    position: OpenPositionResponse
+    total_realized_pnl_dollars: float
+    closed_trade_count: int
+    last_execution_status: Optional[str] = None
+    last_cycle_at: Optional[datetime] = None

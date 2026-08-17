@@ -5,13 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from config.db_pgrs import SessionLocal
-from models_pgdb.trading_models import OpenPosition, TradeHistory
+from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 from schemas_pgrs.trading_schema import (
     KillSwitchResponse,
     OpenPositionResponse,
     SchedulerStatusResponse,
     TradeHistoryResponse,
     TradingCycleResponse,
+    TradingStatusResponse,
 )
 from trading_engine import scheduler
 from trading_engine.broker import estimate_intrinsic_value
@@ -60,12 +61,7 @@ async def run_daily_cycle(db: db_dependency):
     )
 
 
-@router.get("/position", response_model=OpenPositionResponse)
-async def get_open_position(db: db_dependency):
-    """The currently open spread, if any, repriced live from intrinsic value
-    against today's QQQ spot — the unrealized P&L view. No live option-chain
-    feed is wired up, so this is a mocked approximation of real premium."""
-
+def _build_open_position_response(db: Session) -> OpenPositionResponse:
     row = db.query(OpenPosition).first()
     if row is None:
         return OpenPositionResponse(open=False)
@@ -89,6 +85,15 @@ async def get_open_position(db: db_dependency):
         unrealized_pnl_dollars=unrealized_dollars,
         opened_at=row.opened_at,
     )
+
+
+@router.get("/position", response_model=OpenPositionResponse)
+async def get_open_position(db: db_dependency):
+    """The currently open spread, if any, repriced live from intrinsic value
+    against today's QQQ spot — the unrealized P&L view. No live option-chain
+    feed is wired up, so this is a mocked approximation of real premium."""
+
+    return _build_open_position_response(db)
 
 
 @router.get("/history", response_model=TradeHistoryResponse)
@@ -131,6 +136,34 @@ async def scheduler_status():
         scheduler_running=scheduler.is_running(),
         interval_seconds=scheduler.get_interval_seconds(),
     )
+
+
+@router.get("/status", response_model=TradingStatusResponse)
+async def get_trading_status(db: db_dependency):
+    """One-call dashboard: kill switch, scheduler, the currently open
+    position (with live unrealized P&L), running realized P&L, and the
+    most recent cycle's result — everything at a glance."""
+
+    history_rows = db.query(TradeHistory).all()
+    total_pnl = round(sum(r.realized_pnl_dollars for r in history_rows), 2)
+    last_log = db.query(TradingLog).order_by(TradingLog.timestamp.desc()).first()
+
+    return TradingStatusResponse(
+        kill_switch_active=os.path.exists(KILL_SWITCH_PATH),
+        scheduler_running=scheduler.is_running(),
+        scheduler_interval_seconds=scheduler.get_interval_seconds(),
+        position=_build_open_position_response(db),
+        total_realized_pnl_dollars=total_pnl,
+        closed_trade_count=len(history_rows),
+        last_execution_status=last_log.execution_status if last_log else None,
+        last_cycle_at=last_log.timestamp if last_log else None,
+    )
+
+
+@router.get("/kill-switch/status", response_model=KillSwitchResponse)
+async def kill_switch_status():
+    """Read-only check — unlike /kill-switch/toggle, this never flips it."""
+    return KillSwitchResponse(kill_switch_active=os.path.exists(KILL_SWITCH_PATH))
 
 
 @router.post("/kill-switch/toggle", response_model=KillSwitchResponse)

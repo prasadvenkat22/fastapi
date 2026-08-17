@@ -126,16 +126,24 @@ async def market_signals_agent(state: TradingState) -> dict:
 
     similar_past_headlines = await query_similar_headlines(headlines, embeddings, top_k=3) if headlines else []
 
-    is_divergent = breadth.addq > 400 and breadth.tickq < -800
-    if is_divergent:
-        logger.warning("🚨 MARKET TRAP DETECTED — $ADDQ=%.1f $TICKQ=%.1f", breadth.addq, breadth.tickq)
+    # $TICKQ is intentionally not used — confirmed live against both Tradier
+    # sandbox and production that this symbol doesn't exist in their catalog,
+    # and there's no honest free approximation for a real tick index (needs
+    # tick-by-tick trade data no snapshot-quote API provides). The
+    # Institutional Divergence Filter that depended on it is dropped for now.
+    # $ADDQ is self-computed from NASDAQ_BREADTH_BASKET (see data_feed.py) —
+    # scaled to that basket's size, not the original spec's full-market
+    # threshold, since this is a smaller representative sample.
+    advance_ratio_threshold = float(os.getenv("BREADTH_ADVANCE_RATIO_THRESHOLD", "0.15"))
+    breadth_is_bullish = breadth.addq > (breadth.basket_size * advance_ratio_threshold)
 
     llm = ChatAnthropic(model="claude-opus-5", max_tokens=1024).with_structured_output(MarketSentimentOutput)
     prompt = (
         "You are a macro risk classifier for a same-day QQQ options trading system. "
         "Classify today's market risk as GOOD (safe to hold/enter a bullish position) or BAD (risk-off).\n\n"
-        f"Nasdaq Advance-Decline Difference ($ADDQ): {breadth.addq}\n"
-        f"Nasdaq Net Tick Index ($TICKQ): {breadth.tickq}\n"
+        f"Nasdaq breadth (self-computed from a {breadth.basket_size}-stock basket): "
+        f"{breadth.advancers} advancing, {breadth.decliners} declining, {breadth.unchanged} unchanged "
+        f"(net {breadth.addq:+.0f})\n"
         f"CBOE Volatility Index (VIX): {vix}\n\n"
         f"Today's headlines:\n" + "\n".join(f"- {h}" for h in headlines[:20]) + "\n\n"
         + (
@@ -147,9 +155,7 @@ async def market_signals_agent(state: TradingState) -> dict:
     llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
 
     sentiment = "GOOD" if (
-        not is_divergent
-        and breadth.addq > 300
-        and breadth.tickq > -200
+        breadth_is_bullish
         and vix < 22.0
         and llm_result.verdict == "GOOD"
     ) else "BAD"

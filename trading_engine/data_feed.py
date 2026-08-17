@@ -1,15 +1,21 @@
 """Live market data for the trading graph.
 
-Price/VIX bars come from yfinance (free, no key required). Market-breadth
-internals ($ADDQ / $TICKQ) come from Tradier's market-data quotes endpoint —
-these are niche symbols and not every data vendor carries them under this
-exact naming convention, so the fetch raises a clear, specific error rather
-than silently returning zeros if Tradier's feed doesn't resolve them.
+Price/VIX bars come from yfinance (free, no key required). Market breadth is
+self-computed: confirmed live, against both Tradier sandbox and production
+with a real account, that Tradier's symbol catalog does not carry $ADDQ or
+$TICKQ at all (explicit "unmatched_symbols" response, and a lookup search for
+both tickers under several naming variants returned nothing) — so rather than
+depend on a vendor that doesn't have this data, we compute our own advance/
+decline breadth from a basket of Nasdaq-100 constituents via the same Tradier
+quotes endpoint (which does handle ordinary equity symbols fine).
+
+There is no self-computed equivalent for $TICKQ (the real Net Tick Index
+needs tick-by-tick trade classification data no snapshot-quote API provides)
+— it's intentionally dropped rather than approximated poorly.
 """
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 import httpx
 import pandas as pd
@@ -18,15 +24,32 @@ import yfinance as yf
 TRADIER_SANDBOX_URL = "https://sandbox.tradier.com/v1/markets/quotes"
 TRADIER_PRODUCTION_URL = "https://api.tradier.com/v1/markets/quotes"
 
+# Representative basket of large, liquid Nasdaq-100 constituents used to
+# approximate market breadth. Not the literal current index membership —
+# index composition changes over time and would need its own maintained data
+# source to track exactly; this static list is a reasonable, honest proxy.
+NASDAQ_BREADTH_BASKET = [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "GOOG", "AMZN", "META", "AVGO", "TSLA", "COST",
+    "NFLX", "AMD", "PEP", "ADBE", "CSCO", "TMUS", "LIN", "INTC", "INTU", "QCOM",
+    "TXN", "AMAT", "CMCSA", "HON", "AMGN", "BKNG", "ISRG", "VRTX", "SBUX", "GILD",
+    "MU", "ADI", "LRCX", "PANW", "REGN", "MDLZ", "PYPL", "SNPS", "CDNS", "KLAC",
+    "MELI", "CRWD", "MAR", "ORLY", "CSX", "ABNB", "FTNT", "ADP", "PCAR", "NXPI",
+    "MNST", "PAYX", "ROP", "DXCM", "AEP", "ODFL", "KDP", "EXC", "CTAS", "CHTR",
+    "MRVL", "WDAY", "KHC",
+]
+
 
 class TradierDataError(RuntimeError):
-    """Raised when Tradier's quotes feed can't be reached or doesn't carry a requested symbol."""
+    """Raised when Tradier's quotes feed can't be reached."""
 
 
 @dataclass
 class MarketBreadth:
-    addq: float   # Nasdaq Advance-Decline Difference
-    tickq: float  # Nasdaq Net Tick Index
+    addq: float          # self-computed Advance-Decline Difference (advancers - decliners)
+    advancers: int
+    decliners: int
+    unchanged: int
+    basket_size: int
 
 
 def fetch_qqq_bars(period: str = "5d", interval: str = "1m") -> pd.DataFrame:
@@ -46,12 +69,10 @@ def fetch_vix() -> float:
 
 
 async def fetch_market_breadth() -> MarketBreadth:
-    """Nasdaq Advance-Decline Difference ($ADDQ) and Net Tick Index ($TICKQ) via Tradier.
-
-    Requires TRADIER_API_KEY. TRADIER_ENV selects sandbox (default) vs production.
-    Symbol names are configurable (TRADIER_ADDQ_SYMBOL / TRADIER_TICKQ_SYMBOL) —
-    Tradier may not carry these exact tickers depending on your account's data
-    entitlements; adjust the env vars if the default names don't resolve.
+    """Self-computed Nasdaq breadth: queries NASDAQ_BREADTH_BASKET via Tradier's
+    quotes endpoint in one batched call and classifies each name as advancing,
+    declining, or unchanged on the day. Requires TRADIER_API_KEY; TRADIER_ENV
+    selects sandbox (default) vs production.
     """
     api_key = os.getenv("TRADIER_API_KEY")
     if not api_key:
@@ -60,14 +81,11 @@ async def fetch_market_breadth() -> MarketBreadth:
     env = os.getenv("TRADIER_ENV", "sandbox").lower()
     base_url = TRADIER_PRODUCTION_URL if env == "production" else TRADIER_SANDBOX_URL
 
-    addq_symbol = os.getenv("TRADIER_ADDQ_SYMBOL", "$ADDQ")
-    tickq_symbol = os.getenv("TRADIER_TICKQ_SYMBOL", "$TICKQ")
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         try:
             response = await client.get(
                 base_url,
-                params={"symbols": f"{addq_symbol},{tickq_symbol}", "greeks": "false"},
+                params={"symbols": ",".join(NASDAQ_BREADTH_BASKET), "greeks": "false"},
                 headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
             )
             response.raise_for_status()
@@ -78,18 +96,27 @@ async def fetch_market_breadth() -> MarketBreadth:
 
     payload = response.json()
     quote_data = payload.get("quotes", {}).get("quote")
-    if quote_data is None:
-        raise TradierDataError(f"Tradier returned no quotes for {addq_symbol}/{tickq_symbol} — check symbol availability for your account.")
+    if not quote_data:
+        raise TradierDataError("Tradier returned no quotes for the Nasdaq breadth basket.")
 
     quotes = quote_data if isinstance(quote_data, list) else [quote_data]
-    by_symbol = {q.get("symbol"): q for q in quotes}
 
-    addq_quote = by_symbol.get(addq_symbol)
-    tickq_quote = by_symbol.get(tickq_symbol)
+    advancers = decliners = unchanged = 0
+    for q in quotes:
+        change = q.get("change")
+        if change is None:
+            continue
+        if change > 0:
+            advancers += 1
+        elif change < 0:
+            decliners += 1
+        else:
+            unchanged += 1
 
-    if not addq_quote or addq_quote.get("last") is None:
-        raise TradierDataError(f"Tradier did not return a resolvable value for '{addq_symbol}'. This symbol may not be carried by your data feed.")
-    if not tickq_quote or tickq_quote.get("last") is None:
-        raise TradierDataError(f"Tradier did not return a resolvable value for '{tickq_symbol}'. This symbol may not be carried by your data feed.")
-
-    return MarketBreadth(addq=float(addq_quote["last"]), tickq=float(tickq_quote["last"]))
+    return MarketBreadth(
+        addq=float(advancers - decliners),
+        advancers=advancers,
+        decliners=decliners,
+        unchanged=unchanged,
+        basket_size=len(quotes),
+    )

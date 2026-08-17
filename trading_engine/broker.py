@@ -6,6 +6,7 @@ Models defined-risk debit vertical spreads (bull call spread / bear put
 spread) rather than a naked long option: buy one ITM leg, sell one ATM leg
 against it. Max loss is capped at the net debit paid, unlike a naked long."""
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -125,9 +126,13 @@ class MockBrokerClient:
 
 
 def default_mock_broker() -> MockBrokerClient:
-    """Flat starting state — no open position, $1000 QQQ position budget —
-    used by /trading/run-daily-cycle since the graph always calls
-    execution_risk_agent without an explicit broker. To exercise the
-    stop-loss/take-profit/buy-more branches instead, pass a MockBrokerClient
-    with an explicit MockSpreadPosition (see the manual test scripts)."""
-    return MockBrokerClient(position=None, available_cash=1000.00)
+    """Flat starting state — no open position, TRADING_POSITION_BUDGET cash
+    (same env var nodes.POSITION_BUDGET reads, so the two never drift).
+    execution_risk_agent falls back to this only when called without an
+    explicit broker (e.g. a direct/test call) — the real
+    /trading/run-daily-cycle path always builds its own broker via
+    trading_engine/service.py, which prices the persisted position instead.
+    To exercise the stop-loss/take-profit/buy-more branches directly, pass a
+    MockBrokerClient with an explicit MockSpreadPosition instead."""
+    budget = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
+    return MockBrokerClient(position=None, available_cash=budget)

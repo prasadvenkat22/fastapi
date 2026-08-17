@@ -27,7 +27,9 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False, default='TestUser')
-    email = Column(String, nullable=False, default="TestEmail@test.com")
+    # unique: email is the login identifier, so two rows sharing one would
+    # make authentication ambiguous.
+    email = Column(String, nullable=False, unique=True, default="TestEmail@test.com")
     password_hash = Column(String, nullable=True)
     created_date = Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)

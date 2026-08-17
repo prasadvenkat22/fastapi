@@ -47,6 +47,12 @@ class OpenPosition(Base):
     short_strike = Column(Float, nullable=False)
     entry_net_debit = Column(Float, nullable=False)
     opened_at = Column(DateTime(timezone=True), default=func.now())
+    # Signal readings at entry — carried through to TradeHistory on close so
+    # the setup that triggered this trade isn't lost.
+    entry_macd_signal = Column(String, nullable=True)
+    entry_sma_trend = Column(String, nullable=True)
+    entry_bollinger_zone = Column(String, nullable=True)
+    entry_rsi_zone = Column(String, nullable=True)
 
 
 class TradeHistory(Base):
@@ -69,3 +75,30 @@ class TradeHistory(Base):
     close_reason = Column(String, nullable=False)  # TAKE_PROFIT / STOP_LOSS / FORCE_CLOSE
     opened_at = Column(DateTime(timezone=True), nullable=True)
     closed_at = Column(DateTime(timezone=True), default=func.now())
+    entry_macd_signal = Column(String, nullable=True)
+    entry_sma_trend = Column(String, nullable=True)
+    entry_bollinger_zone = Column(String, nullable=True)
+    entry_rsi_zone = Column(String, nullable=True)
+
+
+class TradeSetupVector(Base):
+    """Embedded record of a closed trade's entry setup + outcome, written
+    whenever a TradeHistory row is created. Pure logging for now -- there's
+    no meaningful trade history yet to learn from (entries are rare by
+    design), so this isn't wired into any live decision. Once enough real
+    closed trades accumulate, query_similar_setups() in
+    trading_engine/setup_vector_store.py is ready to back a similarity-based
+    veto gate as a follow-up."""
+
+    __tablename__ = "trade_setup_vectors"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    setup_text = Column(String, nullable=False)
+    strategy = Column(String, nullable=False)
+    macd_signal = Column(String, nullable=True)
+    sma_trend = Column(String, nullable=True)
+    bollinger_zone = Column(String, nullable=True)
+    rsi_zone = Column(String, nullable=True)
+    realized_pnl_pct = Column(Float, nullable=False)
+    close_reason = Column(String, nullable=False)
+    closed_at = Column(DateTime(timezone=True), default=func.now())
+    setup_embedding = Column(Vector(EMBEDDING_DIM), nullable=True)

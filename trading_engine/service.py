@@ -7,15 +7,21 @@ Also where realized P&L gets recorded: an OpenPosition row is deleted
 whenever a position fully closes, so without writing a TradeHistory row here
 first, the result of that trade (profit or loss) would simply disappear."""
 
+import logging
+
 from sqlalchemy.orm import Session
 
+from GENAI.vector_stores import VoyageEmbeddings
 from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 
 from .broker import MockBrokerClient, MockSpreadPosition, estimate_intrinsic_value
 from .data_feed import fetch_qqq_bars
 from .graph import run_trading_cycle
 from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
+from .setup_vector_store import store_trade_setup
 from .state import TradingState
+
+logger = logging.getLogger(__name__)
 
 
 def _classify_close_reason(return_pct: float) -> str:
@@ -63,8 +69,11 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
     # on every HOLD cycle.
     new_position = broker.get_open_position()
 
+    closed_trade = None  # set below if a position fully closed this cycle
+
     if open_row is not None and new_position is None:
         realized_dollars = (pre_close_current_value - open_row.entry_net_debit) * open_row.quantity * 100
+        close_reason = _classify_close_reason(pre_close_return_pct)
         db.add(TradeHistory(
             strategy=open_row.strategy,
             underlying=open_row.underlying,
@@ -75,13 +84,26 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             exit_net_value=pre_close_current_value,
             realized_pnl_dollars=round(realized_dollars, 2),
             realized_pnl_pct=pre_close_return_pct,
-            close_reason=_classify_close_reason(pre_close_return_pct),
+            close_reason=close_reason,
             opened_at=open_row.opened_at,
+            entry_macd_signal=open_row.entry_macd_signal,
+            entry_sma_trend=open_row.entry_sma_trend,
+            entry_bollinger_zone=open_row.entry_bollinger_zone,
+            entry_rsi_zone=open_row.entry_rsi_zone,
         ))
+        closed_trade = {
+            "strategy": open_row.strategy,
+            "macd_signal": open_row.entry_macd_signal,
+            "sma_trend": open_row.entry_sma_trend,
+            "bollinger_zone": open_row.entry_bollinger_zone,
+            "rsi_zone": open_row.entry_rsi_zone,
+            "realized_pnl_pct": pre_close_return_pct,
+            "close_reason": close_reason,
+        }
         db.delete(open_row)
     elif open_row is not None and new_position is not None:
         # Still open — unchanged (HOLD) or updated (BUY_MORE). Update in
-        # place, preserving the original opened_at.
+        # place, preserving the original opened_at and entry signals.
         open_row.strategy = new_position.strategy
         open_row.underlying = new_position.underlying
         open_row.quantity = new_position.quantity
@@ -96,6 +118,10 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             long_strike=new_position.long_strike,
             short_strike=new_position.short_strike,
             entry_net_debit=new_position.entry_net_debit,
+            entry_macd_signal=final_state.get("macd_signal"),
+            entry_sma_trend=final_state.get("sma_trend"),
+            entry_bollinger_zone=final_state.get("bollinger_zone"),
+            entry_rsi_zone=final_state.get("rsi_zone"),
         ))
 
     db.add(TradingLog(
@@ -108,5 +134,22 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         raw_log_payload={k: v for k, v in final_state.items() if k != "messages"},
     ))
     db.commit()
+
+    if closed_trade is not None:
+        try:
+            await store_trade_setup(
+                strategy=closed_trade["strategy"],
+                macd_signal=closed_trade["macd_signal"],
+                sma_trend=closed_trade["sma_trend"],
+                bollinger_zone=closed_trade["bollinger_zone"],
+                rsi_zone=closed_trade["rsi_zone"],
+                realized_pnl_pct=closed_trade["realized_pnl_pct"],
+                close_reason=closed_trade["close_reason"],
+                embeddings=VoyageEmbeddings(),
+            )
+        except Exception:
+            # Best-effort — a Voyage hiccup here shouldn't undo an already
+            # committed, correctly-closed trade.
+            logger.exception("Failed to store trade setup vector for closed trade")
 
     return final_state

@@ -76,6 +76,10 @@ class TradeHistoryEntry(BaseModel):
     close_reason: str
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
+    entry_macd_signal: Optional[str] = None
+    entry_sma_trend: Optional[str] = None
+    entry_bollinger_zone: Optional[str] = None
+    entry_rsi_zone: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

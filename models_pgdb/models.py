@@ -32,9 +32,16 @@ class User(Base):
     created_date = Column(DateTime(timezone=True), default=func.now())
     disabled = Column(Boolean, default=False)
     image_url = Column(String, nullable=True)
+    # Nullable on purpose. The roles table existed with its own CRUD routes
+    # but nothing referenced it, so no user has ever held a role — a NOT NULL
+    # column would have to invent one for every existing row. NULL means "no
+    # role assigned", which authorization must read as no permissions rather
+    # than as a default grant.
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=True, index=True)
 
     service_requests = relationship("ServiceRequest", back_populates="user")
     transactions = relationship("Transaction", back_populates="user")
+    role = relationship("Role")
 
 
 class Customer(Base):

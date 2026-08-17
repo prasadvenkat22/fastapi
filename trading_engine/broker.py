@@ -87,17 +87,9 @@ class MockBrokerClient:
 
 
 def default_mock_broker() -> MockBrokerClient:
-    """A representative starting position — a bull call spread currently down
-    ~10% — useful for manual testing of the stop-loss/buy-more branches."""
-    return MockBrokerClient(
-        position=MockSpreadPosition(
-            strategy=BULL_CALL_SPREAD,
-            underlying="QQQ",
-            quantity=5,
-            long_strike=728.0,
-            short_strike=731.0,
-            entry_net_debit=2.00,
-            current_net_value=1.80,
-        ),
-        available_cash=2500.00,
-    )
+    """Flat starting state — no open position, $1000 QQQ position budget —
+    used by /trading/run-daily-cycle since the graph always calls
+    execution_risk_agent without an explicit broker. To exercise the
+    stop-loss/take-profit/buy-more branches instead, pass a MockBrokerClient
+    with an explicit MockSpreadPosition (see the manual test scripts)."""
+    return MockBrokerClient(position=None, available_cash=1000.00)

@@ -72,13 +72,40 @@ class TradeHistory(Base):
     exit_net_value = Column(Float, nullable=False)
     realized_pnl_dollars = Column(Float, nullable=False)
     realized_pnl_pct = Column(Float, nullable=False)
-    close_reason = Column(String, nullable=False)  # TAKE_PROFIT / STOP_LOSS / FORCE_CLOSE
+    close_reason = Column(String, nullable=False)  # TAKE_PROFIT / STOP_LOSS / RISK_OFF / FORCE_CLOSE
     opened_at = Column(DateTime(timezone=True), nullable=True)
     closed_at = Column(DateTime(timezone=True), default=func.now())
     entry_macd_signal = Column(String, nullable=True)
     entry_sma_trend = Column(String, nullable=True)
     entry_bollinger_zone = Column(String, nullable=True)
     entry_rsi_zone = Column(String, nullable=True)
+
+
+class BreadthReading(Base):
+    """One cycle's market-breadth snapshot, kept so breadth can be read as a
+    trend rather than a single instant.
+
+    VIX doesn't need this — its intraday move comes free with the 1-minute
+    bar series we already fetch. Breadth arrives from Tradier's quotes
+    endpoint as a bare snapshot with no history attached, so the only way to
+    know whether it is improving or collapsing is to write each reading down
+    and compare against earlier ones from the same session."""
+
+    __tablename__ = "trading_breadth_readings"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    addq = Column(Float, nullable=False)          # advancers - decliners
+    advancers = Column(Integer, nullable=False)
+    decliners = Column(Integer, nullable=False)
+    unchanged = Column(Integer, nullable=False)
+    basket_size = Column(Integer, nullable=False)
+    # addq normalised to [-1, 1] by basket size, so thresholds stay valid if
+    # NASDAQ_BREADTH_BASKET is ever resized.
+    net_ratio = Column(Float, nullable=False)
+    # server_default, not default: main.py's startup create_all() can win the
+    # race against alembic and create this table from the model, and a
+    # client-side default would leave the column with no database default at
+    # all — silently drifting from what the migration declares.
+    recorded_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class TradeSetupVector(Base):

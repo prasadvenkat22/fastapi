@@ -24,7 +24,14 @@ from .state import TradingState
 logger = logging.getLogger(__name__)
 
 
-def _classify_close_reason(return_pct: float) -> str:
+def _classify_close_reason(exit_reason: str, return_pct: float) -> str:
+    """Prefer the reason the rule engine actually recorded when it closed the
+    position (nodes.execution_risk_agent). Re-deriving it from P&L here can't
+    tell a RISK_OFF exit from an ordinary stop — both are just "losing" — and
+    re-checking the clock could disagree with the agent across a minute
+    boundary. The P&L fallback covers a close arriving with no reason set."""
+    if exit_reason:
+        return exit_reason
     if is_past_force_close():
         return "FORCE_CLOSE"
     if return_pct >= TAKE_PROFIT_PCT:
@@ -73,7 +80,7 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
 
     if open_row is not None and new_position is None:
         realized_dollars = (pre_close_current_value - open_row.entry_net_debit) * open_row.quantity * 100
-        close_reason = _classify_close_reason(pre_close_return_pct)
+        close_reason = _classify_close_reason(final_state.get("exit_reason", ""), pre_close_return_pct)
         db.add(TradeHistory(
             strategy=open_row.strategy,
             underlying=open_row.underlying,

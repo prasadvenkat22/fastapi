@@ -19,6 +19,7 @@ from langchain_anthropic import ChatAnthropic
 from GENAI.vector_stores import VoyageEmbeddings
 from schemas_pgrs.trading_schema import MarketSentimentOutput
 
+from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .broker import ITM_OFFSET, MockBrokerClient, default_mock_broker, round_to_strike
 from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_vix
 from .state import TradingState
@@ -31,6 +32,26 @@ KILL_SWITCH_PATH = "KILL_SWITCH.txt"
 POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
 TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "20.0"))
 STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-10.0"))  # unchanged from the original spec — only take-profit moved to 20%
+
+# Tightened stop that applies only while macro is risk-off (market_sentiment
+# == 'BAD'). Riding a losing 0DTE spread all the way to the full -10% stop
+# into a deteriorating tape gives up twice the capital for a position whose
+# thesis has already broken; cutting at -5% and re-entering later if
+# conditions improve is the cheaper path — entries are re-evaluated every
+# scheduler cycle anyway, so nothing is permanently forfeited by leaving.
+RISK_OFF_STOP_LOSS_PCT = float(os.getenv("TRADING_RISK_OFF_STOP_LOSS_PCT", "-5.0"))
+
+# Macro risk-off thresholds. VIX is judged on both level and session move:
+# a spike of this magnitude is treated as risk-off even from a low base.
+VIX_LEVEL_MAX = float(os.getenv("TRADING_VIX_LEVEL_MAX", "22.0"))
+VIX_SPIKE_PCT = float(os.getenv("TRADING_VIX_SPIKE_PCT", "10.0"))
+
+# Breadth is judged on level and trend alike. Expressed as a drop in net
+# breadth ratio (advancers-minus-decliners over basket size) from its peak
+# over the recent window: 0.40 is roughly a fifth of the basket flipping
+# from advancing to declining inside half an hour — participation draining
+# out of a tape that still prints positive.
+BREADTH_COLLAPSE_RATIO = float(os.getenv("TRADING_BREADTH_COLLAPSE_RATIO", "0.40"))
 
 # Standard Wilder's RSI(14) thresholds.
 RSI_OVERBOUGHT = float(os.getenv("TRADING_RSI_OVERBOUGHT", "70.0"))
@@ -161,6 +182,7 @@ async def market_signals_agent(state: TradingState) -> dict:
     from .vector_store import query_similar_headlines, store_headlines  # local import avoids a circular import with graph wiring
 
     breadth = await fetch_market_breadth()
+    breadth_trend = record_and_summarize(breadth)
     vix = fetch_vix()
     headlines = _scrape_headlines()
 
@@ -177,8 +199,22 @@ async def market_signals_agent(state: TradingState) -> dict:
     # Institutional Divergence Filter that depended on it is dropped for now.
     # $ADDQ is self-computed from NASDAQ_BREADTH_BASKET (see data_feed.py):
     # net advancers/decliners > 0 (more names advancing than declining) is
-    # bullish breadth, <= 0 is bearish.
-    breadth_is_bullish = breadth.addq > 0
+    # bullish breadth, <= 0 is bearish. That level check is necessary but not
+    # sufficient — breadth that peaked at +45 and has bled down to +3 still
+    # satisfies it while describing a market losing participation by the
+    # minute, so a drawdown check against the recent window's peak runs
+    # alongside it (see breadth_history.py for why breadth needs persistence
+    # to know this and VIX doesn't, and why the window is rolling rather than
+    # session-anchored).
+    breadth_is_collapsing = breadth_trend.drawdown_from_recent_peak <= -BREADTH_COLLAPSE_RATIO
+    breadth_is_bullish = breadth.addq > 0 and not breadth_is_collapsing
+
+    if breadth_is_collapsing:
+        logger.warning(
+            "Breadth collapsing: net ratio %.2f, down %.2f from the recent peak of %.2f (%d readings today) — forcing risk-off.",
+            breadth_trend.net_ratio, breadth_trend.drawdown_from_recent_peak,
+            breadth_trend.recent_peak_ratio, breadth_trend.reading_count,
+        )
 
     llm = ChatAnthropic(model="claude-opus-5", max_tokens=1024).with_structured_output(MarketSentimentOutput)
     prompt = (
@@ -187,7 +223,19 @@ async def market_signals_agent(state: TradingState) -> dict:
         f"Nasdaq breadth (self-computed from a {breadth.basket_size}-stock basket): "
         f"{breadth.advancers} advancing, {breadth.decliners} declining, {breadth.unchanged} unchanged "
         f"(net {breadth.addq:+.0f})\n"
-        f"CBOE Volatility Index (VIX): {vix}\n\n"
+        + (
+            f"Breadth trend today: net ratio {breadth_trend.net_ratio:+.2f}, "
+            f"{breadth_trend.change_from_open:+.2f} from the open, "
+            f"{breadth_trend.drawdown_from_session_peak:+.2f} from today's peak, "
+            f"{breadth_trend.drawdown_from_recent_peak:+.2f} from the last "
+            f"{RECENT_WINDOW_MINUTES:.0f} minutes' peak "
+            f"(across {breadth_trend.reading_count} readings). A large drop from today's peak "
+            f"with only a small recent drop is a slow all-day bleed rather than a sudden break.\n"
+            if breadth_trend.has_history
+            else "Breadth trend today: first reading of the session — no trend yet\n"
+        )
+        + f"CBOE Volatility Index (VIX): {vix.level:.2f} "
+        + f"({vix.change_pct:+.1f}% from today's open of {vix.session_open:.2f})\n\n"
         f"Today's headlines:\n" + "\n".join(f"- {h}" for h in headlines[:20]) + "\n\n"
         + (
             "Similar historical headlines and what followed (for context):\n"
@@ -197,9 +245,14 @@ async def market_signals_agent(state: TradingState) -> dict:
     )
     llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
 
+    # VIX is gated on level *and* velocity — a sharp intraday spike is
+    # risk-off even when the absolute level is still under the ceiling,
+    # which is exactly the mid-session regime change a level-only check
+    # sleeps through.
     sentiment = "GOOD" if (
         breadth_is_bullish
-        and vix < 22.0
+        and vix.level < VIX_LEVEL_MAX
+        and vix.change_pct < VIX_SPIKE_PCT
         and llm_result.verdict == "GOOD"
     ) else "BAD"
 
@@ -247,6 +300,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     force_close = is_past_force_close()
 
     action = "HOLD"
+    exit_reason = ""
 
     if position is not None:
         return_pct = position.return_pct
@@ -254,11 +308,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # Rule Z: same-day expiration hard close — overrides P&L entirely.
         if force_close:
             broker.sell_all(position.underlying)
-            action = "SELL_ALL"
+            action, exit_reason = "SELL_ALL", "FORCE_CLOSE"
         # Rule A: Take Profit (+20%)
         elif return_pct >= TAKE_PROFIT_PCT:
             broker.sell_all(position.underlying)
-            action = "SELL_ALL"
+            action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
         # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
         elif return_pct <= STOP_LOSS_PCT:
             if (
@@ -272,7 +326,24 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             else:
                 # Past the 2PM EST cutoff, or sentiment/cash/count don't clear the bar — fall back to stop loss.
                 broker.sell_all(position.underlying)
-                action = "SELL_ALL"
+                action, exit_reason = "SELL_ALL", "STOP_LOSS"
+        # Rule D: risk-off exit — macro has turned BAD (deteriorating breadth,
+        # a VIX spike, or a risk-off headline read) while the position is
+        # already losing. Cut at -5% rather than waiting for the full -10%
+        # stop: the setup that justified the entry no longer holds, and a
+        # re-entry is available on any later cycle if conditions recover.
+        #
+        # Deliberately evaluated *after* the -10% stop above so a position
+        # that already breached the full stop is still recorded as STOP_LOSS
+        # — this rule only owns the band between the two thresholds, which
+        # keeps the close reasons feeding the setup vector store honest.
+        elif sentiment == "BAD" and return_pct <= RISK_OFF_STOP_LOSS_PCT:
+            logger.warning(
+                "Risk-off exit: macro sentiment BAD with position at %.2f%% — closing early "
+                "rather than riding to the %.1f%% stop.", return_pct, STOP_LOSS_PCT,
+            )
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "RISK_OFF"
     elif not past_cutoff:
         # Bullish: bull call debit spread (long ITM call, short ATM call).
         # Bearish: bear put debit spread (long ITM put, short ATM put). Same
@@ -330,5 +401,6 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
 
     return {
         "execution_status": action,
+        "exit_reason": exit_reason,
         "buy_more_count": count + 1 if action == "BUY_MORE" else count,
     }

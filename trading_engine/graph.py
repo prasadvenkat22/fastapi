@@ -43,6 +43,7 @@ async def run_trading_cycle(broker: MockBrokerClient = None) -> TradingState:
         "rsi_zone": "",
         "market_sentiment": "",
         "execution_status": "",
+        "exit_reason": "",
         "buy_more_count": 0,
     }
     return await app.ainvoke(initial_state)

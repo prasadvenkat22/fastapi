@@ -16,10 +16,15 @@ needs tick-by-tick trade classification data no snapshot-quote API provides)
 
 import os
 from dataclasses import dataclass
+from datetime import time
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
 import yfinance as yf
+
+NY = ZoneInfo("America/New_York")
+MARKET_OPEN_ET = time(9, 30)
 
 TRADIER_SANDBOX_URL = "https://sandbox.tradier.com/v1/markets/quotes"
 TRADIER_PRODUCTION_URL = "https://api.tradier.com/v1/markets/quotes"
@@ -44,6 +49,17 @@ class TradierDataError(RuntimeError):
 
 
 @dataclass
+class VixReading:
+    """VIX as both a level and a session move. The level alone can't tell a
+    calm tape from one that is deteriorating fast: VIX at 18 but +30% on the
+    day is a risk-off market that a plain `vix < 22` check reads as benign.
+    """
+    level: float          # latest VIX print
+    session_open: float   # first regular-session bar of the day
+    change_pct: float     # % move from session open (positive = fear rising)
+
+
+@dataclass
 class MarketBreadth:
     addq: float          # self-computed Advance-Decline Difference (advancers - decliners)
     advancers: int
@@ -60,12 +76,39 @@ def fetch_qqq_bars(period: str = "5d", interval: str = "1m") -> pd.DataFrame:
     return bars
 
 
-def fetch_vix() -> float:
-    """Latest CBOE Volatility Index value via yfinance."""
+def fetch_vix() -> VixReading:
+    """CBOE Volatility Index via yfinance, as a level plus its move since the
+    session open.
+
+    The session delta comes from the same 1-minute bar series we already
+    fetch, so no prior-cycle state has to be persisted to know whether
+    volatility is spiking right now.
+
+    The anchor is deliberately the 09:30 ET cash open rather than the first
+    bar returned: Cboe publishes VIX through an extended session starting
+    around 03:15 ET, and yfinance hands back all of it (~775 bars, not the
+    ~390 of regular hours). Anchoring on bar zero would measure the move
+    since the middle of the night, burying an opening-bell spike under hours
+    of overnight drift.
+    """
     bars = yf.Ticker("^VIX").history(period="1d", interval="1m")
     if bars.empty:
         raise RuntimeError("yfinance returned no VIX data.")
-    return float(bars["Close"].iloc[-1])
+
+    # Pre-market cycles have no regular-hours bar yet; fall back to the full
+    # series rather than failing, since the engine doesn't trade then anyway.
+    try:
+        ny_times = bars.index.tz_convert(NY).time
+        regular_hours = bars[ny_times >= MARKET_OPEN_ET]
+    except TypeError:  # tz-naive index — shouldn't happen for intraday data
+        regular_hours = bars
+    session_bars = regular_hours if not regular_hours.empty else bars
+
+    level = float(bars["Close"].iloc[-1])
+    session_open = float(session_bars["Open"].iloc[0])
+    change_pct = ((level - session_open) / session_open) * 100.0 if session_open else 0.0
+
+    return VixReading(level=level, session_open=session_open, change_pct=change_pct)
 
 
 async def fetch_market_breadth() -> MarketBreadth:

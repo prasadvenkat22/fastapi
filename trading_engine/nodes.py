@@ -19,13 +19,18 @@ from langchain_anthropic import ChatAnthropic
 from GENAI.vector_stores import VoyageEmbeddings
 from schemas_pgrs.trading_schema import MarketSentimentOutput
 
-from .broker import MockBrokerClient, default_mock_broker
+from .broker import ITM_OFFSET, MockBrokerClient, default_mock_broker, round_to_strike
 from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_vix
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
 
 KILL_SWITCH_PATH = "KILL_SWITCH.txt"
+
+# Debit-spread strategy config — see execution_risk_agent below.
+POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
+TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "20.0"))
+STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-10.0"))  # unchanged from the original spec — only take-profit moved to 20%
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/news/rssindex",
@@ -192,26 +197,48 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     action = "HOLD"
 
     if position is not None:
-        return_pct = ((position.current_market_premium - position.entry_cost_basis) / position.entry_cost_basis) * 100
+        return_pct = position.return_pct
 
-        # Rule A: Take Profit
-        if return_pct >= 10.0:
+        # Rule A: Take Profit (+20%)
+        if return_pct >= TAKE_PROFIT_PCT:
+            broker.sell_all(position.underlying)
             action = "SELL_ALL"
-        # Rule B / C: Stop Loss vs. Buy More
-        elif return_pct <= -10.0:
+        # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
+        elif return_pct <= STOP_LOSS_PCT:
             if (
                 not past_cutoff
                 and sentiment == "GOOD"
                 and count < 3
-                and available_cash >= (position.current_market_premium * 100)
+                and available_cash >= (position.current_net_value * 100)
             ):
+                broker.place_buy_more(position.underlying, position.quantity)
                 action = "BUY_MORE"
             else:
                 # Past the 2PM EST cutoff, or sentiment/cash/count don't clear the bar — fall back to stop loss.
+                broker.sell_all(position.underlying)
                 action = "SELL_ALL"
     else:
-        if macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "LOWER_BAND" and sentiment == "GOOD":
-            action = "BUY_CALL"
+        # Bullish: bull call debit spread (long ITM call, short ATM call).
+        # Bearish: bear put debit spread (long ITM put, short ATM put) — mirrored
+        # trigger, same market_sentiment=GOOD gate (a calm macro environment is
+        # required to open a new position either direction).
+        bullish = macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "LOWER_BAND" and sentiment == "GOOD"
+        bearish = macd == "BEARISH" and sma == "BELOW_SMA" and bb == "UPPER_BAND" and sentiment == "GOOD"
+
+        if bullish or bearish:
+            spot = float(fetch_qqq_bars()["Close"].iloc[-1])
+            atm_strike = round_to_strike(spot)
+            quantity = broker.estimate_spread_quantity(POSITION_BUDGET)
+
+            if quantity > 0:
+                if bullish:
+                    long_strike, short_strike = atm_strike - ITM_OFFSET, atm_strike
+                    broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike)
+                    action = "BUY_CALL_SPREAD"
+                else:
+                    long_strike, short_strike = atm_strike + ITM_OFFSET, atm_strike
+                    broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike)
+                    action = "BUY_PUT_SPREAD"
 
     return {
         "execution_status": action,

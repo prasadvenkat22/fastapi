@@ -1,11 +1,20 @@
 
 Deploy to a New Droplet — Step by Step
-Last updated: 2026-04-05 | Server: 142.93.177.153 | Domain: dataiqsystems.com
+Last updated: 2026-08-17 | Server: 159.223.127.31 | Domain: dataiqsystems.com
+
+  NOTE: the IP above was stale until 2026-08-17 (it read 142.93.177.153, an
+  older droplet). If SSH times out, verify the current IP in the DO control
+  panel before assuming a firewall problem.
+
+  Current droplet: 2 vCPU / 4GB RAM / 77GB disk, resized 2026-08-17 from
+  1 vCPU / 2GB. The trading engine's LangChain+LangGraph imports across 2
+  uvicorn workers do not fit comfortably in 2GB.
 
   1. Create the Droplet
   - Digital Ocean → Create Droplet
   - Image: Ubuntu 24.04
-  - Plan: Basic $12/mo (2GB RAM, 1 vCPU)
+  - Plan: Basic (4GB RAM, 2 vCPU) — 2GB is too small once the trading
+    engine is deployed; see the note above.
   - Auth: SSH key (recommended) or password
   - Note the IP address after creation
 
@@ -55,12 +64,12 @@ Last updated: 2026-04-05 | Server: 142.93.177.153 | Domain: dataiqsystems.com
   - API base:       https://dataiqsystems.com/CRUD/
   - Image uploads:  https://dataiqsystems.com/images/
   - Static files:   https://dataiqsystems.com/static/
-  - pgAdmin:        http://142.93.177.153:5050  (dev only — disabled in prod by default)
+  - pgAdmin:        http://159.223.127.31:5050  (dev only — disabled in prod by default)
 
   ---
   Routine Deploy (update existing server with latest code)
 
-  ssh root@142.93.177.153
+  ssh root@159.223.127.31
   cd /opt/fastapi
   git pull origin main
   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build app

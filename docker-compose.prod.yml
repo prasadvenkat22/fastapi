@@ -40,7 +40,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          # 1G, not 512M: the app runs 2 uvicorn workers and each loads its
+          # own copy of LangChain/LangGraph/pandas for the trading engine.
+          # Measured 455M at idle against the old 512M cap — under 60M of
+          # headroom before a trading cycle allocated anything.
+          memory: 1G
     # Remove --reload flag for production
     command: bash -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2"
     # Don't mount local volumes in production

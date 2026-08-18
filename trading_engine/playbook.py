@@ -44,6 +44,8 @@ class PlaybookWindow:
     end: time
     placement: str      # ITM or ATM
     width: float        # distance between the strikes, in dollars
+    take_profit_pct: float  # per-strategy, because the structures have very
+                            # different ceilings — see the note below
     note: str
 
 
@@ -55,12 +57,17 @@ WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
         start=time(9, 45), end=time(10, 15), placement=ATM, width=3.0,
+        take_profit_pct=60.0,
         note="Opening range resolved. Pay for leverage while a real directional "
-             "leg is most likely; this is the window that can capture a big day.",
+             "leg is most likely; this is the window that can capture a big day. "
+             "Takes profit at 60%, not 30%: an ATM spread entered near $1.14 "
+             "maxes out around +163%, so a 30% target would book the small win "
+             "and throw away the entire reason for choosing this structure.",
     ),
     PlaybookWindow(
         name="MORNING_DRIFT",
         start=time(10, 15), end=time(11, 30), placement=ITM, width=3.0,
+        take_profit_pct=30.0,
         note="No clear regime — the momentum leg is spent and the midday range "
              "has not formed. Conservative structure; a candidate for removal "
              "if it does not earn its place.",
@@ -68,12 +75,14 @@ WINDOWS = (
     PlaybookWindow(
         name="ITM_GRINDER",
         start=time(11, 30), end=time(13, 30), placement=ITM, width=3.0,
+        take_profit_pct=30.0,
         note="Midday lull. Volume dries up and QQQ tends to consolidate, so a "
              "positive-theta structure that also pays when price sits still.",
     ),
     PlaybookWindow(
         name="AFTERNOON_ITM",
         start=time(13, 30), end=time(14, 0), placement=ITM, width=3.0,
+        take_profit_pct=30.0,
         note="Theta is accelerating but a debit spread wants time to work. The "
              "playbook calls for an OTM credit spread here instead; until that "
              "exists this is the conservative stand-in.",
@@ -107,3 +116,18 @@ def strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool) -> tup
     if window.placement == ATM:
         return (atm_strike, atm_strike + w) if bullish else (atm_strike, atm_strike - w)
     return (atm_strike - w, atm_strike) if bullish else (atm_strike + w, atm_strike)
+
+
+def take_profit_for(playbook_name: str, default: float) -> float:
+    """The take-profit target for the strategy that OPENED a position.
+
+    Looked up by name rather than by the current clock: a position opened in
+    ATM_MOMENTUM is still an ATM structure at 13:00, and judging it against
+    the ITM target that happens to be in force then would book it early for
+    no reason. `default` covers positions opened before per-strategy targets
+    existed, and any whose window has since been retired.
+    """
+    for w in WINDOWS:
+        if w.name == playbook_name:
+            return w.take_profit_pct
+    return default

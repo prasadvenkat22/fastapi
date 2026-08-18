@@ -16,6 +16,7 @@ from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 
 from .broker import MockBrokerClient, MockSpreadPosition, estimate_spread_value
 from .data_feed import fetch_qqq_bars
+from .equity import current_equity
 from .graph import run_trading_cycle
 from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
 from .setup_vector_store import store_trade_setup
@@ -62,13 +63,16 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             short_strike=open_row.short_strike,
             entry_net_debit=open_row.entry_net_debit,
             current_net_value=current_value,
+            playbook=open_row.playbook or "",
         )
         pre_close_current_value = current_value
         pre_close_return_pct = position.return_pct
         spent = open_row.quantity * open_row.entry_net_debit * 100
         broker = MockBrokerClient(position=position, available_cash=max(POSITION_BUDGET - spent, 0))
     else:
-        broker = MockBrokerClient(position=None, available_cash=POSITION_BUDGET)
+        # Flat: cash available is realized equity, not the static budget, so
+        # sizing follows the account rather than a number frozen in the env.
+        broker = MockBrokerClient(position=None, available_cash=current_equity(POSITION_BUDGET).equity)
 
     final_state = await run_trading_cycle(broker=broker)
 

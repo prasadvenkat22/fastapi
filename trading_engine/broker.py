@@ -114,6 +114,7 @@ class MockSpreadPosition:
     short_strike: float
     entry_net_debit: float    # per-spread cost paid to enter (long premium - short premium)
     current_net_value: float  # per-spread current value (long mark - short mark)
+    playbook: str = ""        # named strategy that opened it; drives its take-profit target
 
     @property
     def return_pct(self) -> float:
@@ -154,7 +155,7 @@ class MockBrokerClient:
         return max(int(budget // (debit * 100)), 0)
 
     def place_bull_call_spread(self, underlying: str, quantity: int, long_strike: float, short_strike: float,
-                               net_debit: Optional[float] = None) -> dict:
+                               net_debit: Optional[float] = None, playbook: str = "") -> dict:
         """Mock order placement — no network call, no real order. Updates the
         in-memory position so callers (e.g. the router, to persist state
         across cycles) can read back what's now open via get_open_position().
@@ -167,7 +168,7 @@ class MockBrokerClient:
         self._position = MockSpreadPosition(
             strategy=BULL_CALL_SPREAD, underlying=underlying, quantity=quantity,
             long_strike=long_strike, short_strike=short_strike,
-            entry_net_debit=debit, current_net_value=debit,
+            entry_net_debit=debit, current_net_value=debit, playbook=playbook,
         )
         return {
             "status": "mock_filled", "action": BULL_CALL_SPREAD, "underlying": underlying,
@@ -175,12 +176,12 @@ class MockBrokerClient:
         }
 
     def place_bear_put_spread(self, underlying: str, quantity: int, long_strike: float, short_strike: float,
-                              net_debit: Optional[float] = None) -> dict:
+                              net_debit: Optional[float] = None, playbook: str = "") -> dict:
         debit = self._mock_net_debit_estimate if net_debit is None else net_debit
         self._position = MockSpreadPosition(
             strategy=BEAR_PUT_SPREAD, underlying=underlying, quantity=quantity,
             long_strike=long_strike, short_strike=short_strike,
-            entry_net_debit=debit, current_net_value=debit,
+            entry_net_debit=debit, current_net_value=debit, playbook=playbook,
         )
         return {
             "status": "mock_filled", "action": BEAR_PUT_SPREAD, "underlying": underlying,
@@ -195,7 +196,7 @@ class MockBrokerClient:
             # entry price) and the new lot (bought at today's current value).
             weighted_debit = ((pos.entry_net_debit * pos.quantity) + (pos.current_net_value * quantity)) / total_qty
             self._position = MockSpreadPosition(
-                strategy=pos.strategy, underlying=pos.underlying, quantity=total_qty,
+                strategy=pos.strategy, underlying=pos.underlying, quantity=total_qty, playbook=pos.playbook,
                 long_strike=pos.long_strike, short_strike=pos.short_strike,
                 entry_net_debit=round(weighted_debit, 4), current_net_value=pos.current_net_value,
             )

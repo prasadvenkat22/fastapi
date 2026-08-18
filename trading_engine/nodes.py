@@ -20,7 +20,8 @@ from GENAI.vector_stores import VoyageEmbeddings
 from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
-from .playbook import strikes_for, window_for
+from .equity import current_equity
+from .playbook import strikes_for, take_profit_for, window_for
 from .broker import (
     BEAR_PUT_SPREAD,
     BULL_CALL_SPREAD,
@@ -83,7 +84,7 @@ VIX_SPIKE_PCT = float(os.getenv("TRADING_VIX_SPIKE_PCT", "10.0"))
 
 # 10-year Treasury yield, judged purely on intraday velocity. The Nasdaq-100
 # is the longest-duration equity index, so its multiple moves inversely with
-# real rates � a sharp yield spike is a direct headwind that neither VIX nor
+# real rates — a sharp yield spike is a direct headwind that neither VIX nor
 # breadth necessarily shows. A typical session moves the 10Y 3-6bp; 8bp is a
 # real move against a long tech position.
 #
@@ -384,7 +385,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "FORCE_CLOSE"
         # Rule A: Take Profit (+20%)
-        elif return_pct >= TAKE_PROFIT_PCT:
+        # Judged against the target of the strategy that OPENED this
+        # position, not whatever window the clock is in now: an ATM spread is
+        # still an ATM spread at 13:00, and holding it to the ITM target would
+        # book it early for no reason.
+        elif return_pct >= take_profit_for(position.playbook, TAKE_PROFIT_PCT):
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
         # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
@@ -466,16 +471,29 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         bearish = bearish_fade or bearish_continuation
 
         if bullish or bearish:
-            spot = float(fetch_qqq_bars()["Close"].iloc[-1])
-            atm_strike = round_to_strike(spot)
-
             # Strike placement comes from the time-of-day window, so the same
             # signal produces a leveraged ATM structure during the morning
             # momentum leg and a positive-theta ITM one through the midday
             # lull. window is None outside every window — that is a no-entry
             # period, including any gap left by retiring a strategy.
             window = window_for()
+
+            # Size against realized equity rather than the static budget:
+            # after a run of losses the account is smaller and the position
+            # should be too. And stop opening anything once the day's losses
+            # reach the limit. An already-open position is still managed,
+            # since refusing to manage what you hold is not risk control.
+            #
+            # Both checks run before the price fetch below, so a halted or
+            # out-of-window cycle costs nothing.
+            eq = current_equity(POSITION_BUDGET)
+            if eq.halted:
+                window = None
+                action = "HALTED_DAILY_LOSS"
+
             if window is not None:
+                spot = float(fetch_qqq_bars()["Close"].iloc[-1])
+                atm_strike = round_to_strike(spot)
                 strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
                 long_strike, short_strike = strikes_for(window, atm_strike, bullish)
 
@@ -483,20 +501,22 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 # cycle. Sizing uses that price too, or the position costs
                 # something other than the budget it was sized against.
                 net_debit = estimate_spread_value(strategy, long_strike, short_strike, spot)
-                quantity = broker.estimate_spread_quantity(POSITION_BUDGET * ENTRY_FRACTION, net_debit)
+                quantity = broker.estimate_spread_quantity(eq.equity * ENTRY_FRACTION, net_debit)
 
                 if quantity > 0:
                     playbook = window.name
                     logger.info(
-                        "Entering %s via %s: %s %d contracts, long %.1f / short %.1f at $%.2f",
+                        "Entering %s via %s: %s %d contracts, long %.1f / short %.1f at $%.2f "
+                        "(equity $%.2f, target +%.0f%%)",
                         "BULL" if bullish else "BEAR", window.name, window.placement,
                         quantity, long_strike, short_strike, net_debit,
+                        eq.equity, window.take_profit_pct,
                     )
                     if bullish:
-                        broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit)
+                        broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit, window.name)
                         action = "BUY_CALL_SPREAD"
                     else:
-                        broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike, net_debit)
+                        broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike, net_debit, window.name)
                         action = "BUY_PUT_SPREAD"
 
     return {

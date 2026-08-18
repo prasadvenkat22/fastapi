@@ -127,7 +127,10 @@ def take_profit_for(playbook_name: str, default: float) -> float:
     no reason. `default` covers positions opened before per-strategy targets
     existed, and any whose window has since been retired.
     """
+    # Names carry a tier suffix ("ITM_GRINDER:RELAXED") so the scoreboard can
+    # split them; the exit target belongs to the window, not the tier.
+    base = (playbook_name or "").split(":", 1)[0]
     for w in WINDOWS:
-        if w.name == playbook_name:
+        if w.name == base:
             return w.take_profit_pct
     return default

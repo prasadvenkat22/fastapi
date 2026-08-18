@@ -54,6 +54,10 @@ ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.4"))
 # Cap on scale-ins per position, unchanged from the original hardcoded 3.
 MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "3"))
 
+# Whether the RELAXED entry tier trades at all. Set false to fall back to the
+# original strict gate everywhere.
+RELAXED_ENTRIES_ENABLED = os.getenv("TRADING_RELAXED_ENTRIES", "true").lower() == "true"
+
 # Opening warmup. Entries wait this many minutes after the bell so the
 # opening auction's whipsaws don't get read as a trend; position management
 # is unaffected and runs from the first cycle.
@@ -493,26 +497,53 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         #     move keeps going. This is what a clean trending move (never
         #     touching the opposite band) looks like, which the fade-only
         #     trigger couldn't catch.
-        bullish_fade = (
-            macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "LOWER_BAND"
-            and rsi == "OVERSOLD" and sentiment == "GOOD"
+        # Two tiers of the same idea, run side by side so the data decides
+        # between them rather than an argument.
+        #
+        # STRICT is the original gate: MACD, trend, a Bollinger pierce AND an
+        # RSI extreme all agreeing. RELAXED drops the RSI requirement only.
+        #
+        # The reason to try dropping it: a Bollinger pierce and an RSI extreme
+        # both measure "price is stretched from its mean", so requiring both
+        # is close to asking the same question twice. Measured over a month of
+        # 5-minute bars in the entry window, RSI removed 31 of 63 band
+        # pierces -- half the setups -- taking the gate from 2.8 to 1.5
+        # opportunities a day against a market that only offers about 2.8.
+        #
+        # But the overlap was 51%, not 90%, so RSI is genuinely filtering
+        # rather than duplicating. Whether the half it removes were losers
+        # worth avoiding or winners never seen is exactly what is unknown, so
+        # both tiers trade and each is attributed separately.
+        strict_bull = (
+            macd == "BULLISH" and sma == "ABOVE_SMA"
+            and ((bb == "LOWER_BAND" and rsi == "OVERSOLD")        # fade
+                 or (bb == "UPPER_BAND" and rsi == "OVERBOUGHT"))  # continuation
+            and sentiment == "GOOD"
         )
-        bullish_continuation = (
-            macd == "BULLISH" and sma == "ABOVE_SMA" and bb == "UPPER_BAND"
-            and rsi == "OVERBOUGHT" and sentiment == "GOOD"
+        strict_bear = (
+            macd == "BEARISH" and sma == "BELOW_SMA"
+            and ((bb == "UPPER_BAND" and rsi == "OVERBOUGHT")      # fade
+                 or (bb == "LOWER_BAND" and rsi == "OVERSOLD"))    # continuation
+            and sentiment == "GOOD"
         )
-        bullish = bullish_fade or bullish_continuation
-        bearish_fade = (
-            macd == "BEARISH" and sma == "BELOW_SMA" and bb == "UPPER_BAND"
-            and rsi == "OVERBOUGHT" and sentiment == "GOOD"
+        relaxed_bull = (
+            macd == "BULLISH" and sma == "ABOVE_SMA"
+            and bb in ("UPPER_BAND", "LOWER_BAND") and sentiment == "GOOD"
         )
-        bearish_continuation = (
-            macd == "BEARISH" and sma == "BELOW_SMA" and bb == "LOWER_BAND"
-            and rsi == "OVERSOLD" and sentiment == "GOOD"
+        relaxed_bear = (
+            macd == "BEARISH" and sma == "BELOW_SMA"
+            and bb in ("UPPER_BAND", "LOWER_BAND") and sentiment == "GOOD"
         )
-        bearish = bearish_fade or bearish_continuation
 
-        if bullish or bearish:
+        if strict_bull or strict_bear:
+            tier, bullish = "STRICT", strict_bull
+        elif RELAXED_ENTRIES_ENABLED and (relaxed_bull or relaxed_bear):
+            tier, bullish = "RELAXED", relaxed_bull
+        else:
+            tier, bullish = None, False
+        bearish = tier is not None and not bullish
+
+        if tier is not None:
             # Strike placement comes from the time-of-day window, so the same
             # signal produces a leveraged ATM structure during the morning
             # momentum leg and a positive-theta ITM one through the midday
@@ -546,19 +577,19 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 quantity = broker.estimate_spread_quantity(eq.equity * ENTRY_FRACTION, net_debit)
 
                 if quantity > 0:
-                    playbook = window.name
+                    playbook = f"{window.name}:{tier}"
                     logger.info(
                         "Entering %s via %s: %s %d contracts, long %.1f / short %.1f at $%.2f "
                         "(equity $%.2f, target +%.0f%%)",
-                        "BULL" if bullish else "BEAR", window.name, window.placement,
+                        "BULL" if bullish else "BEAR", playbook, window.placement,
                         quantity, long_strike, short_strike, net_debit,
                         eq.equity, window.take_profit_pct,
                     )
                     if bullish:
-                        broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit, window.name)
+                        broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit, playbook)
                         action = "BUY_CALL_SPREAD"
                     else:
-                        broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike, net_debit, window.name)
+                        broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike, net_debit, playbook)
                         action = "BUY_PUT_SPREAD"
 
     return {

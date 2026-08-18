@@ -30,7 +30,7 @@ from .broker import (
     estimate_spread_value,
     round_to_strike,
 )
-from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_vix
+from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_tnx, fetch_vix
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,17 @@ RISK_OFF_STOP_LOSS_PCT = float(os.getenv("TRADING_RISK_OFF_STOP_LOSS_PCT", "-5.0
 # a spike of this magnitude is treated as risk-off even from a low base.
 VIX_LEVEL_MAX = float(os.getenv("TRADING_VIX_LEVEL_MAX", "22.0"))
 VIX_SPIKE_PCT = float(os.getenv("TRADING_VIX_SPIKE_PCT", "10.0"))
+
+# 10-year Treasury yield, judged purely on intraday velocity. The Nasdaq-100
+# is the longest-duration equity index, so its multiple moves inversely with
+# real rates — a sharp yield spike is a direct headwind that neither VIX nor
+# breadth necessarily shows. A typical session moves the 10Y 3-6bp; 8bp is a
+# real move against a long tech position.
+#
+# One-sided on purpose. Rising yields hurt QQQ; falling yields are broadly
+# supportive of it, and the flight-to-quality case where yields collapse in a
+# crash arrives with a VIX spike that the gate above already catches.
+TNX_SPIKE_BPS = float(os.getenv("TRADING_TNX_SPIKE_BPS", "8.0"))
 
 # Breadth is judged on level and trend alike. Expressed as a drop in net
 # breadth ratio (advancers-minus-decliners over basket size) from its peak
@@ -219,6 +230,7 @@ async def market_signals_agent(state: TradingState) -> dict:
     breadth = await fetch_market_breadth()
     breadth_trend = record_and_summarize(breadth)
     vix = fetch_vix()
+    tnx = fetch_tnx()
     headlines = _scrape_headlines()
 
     embeddings = VoyageEmbeddings()
@@ -284,10 +296,18 @@ async def market_signals_agent(state: TradingState) -> dict:
     # risk-off even when the absolute level is still under the ceiling,
     # which is exactly the mid-session regime change a level-only check
     # sleeps through.
+    yields_spiking = tnx.change_bps >= TNX_SPIKE_BPS
+    if yields_spiking:
+        logger.warning(
+            "Yields spiking: 10Y at %.3f%%, %+.1fbp from today's open of %.3f%% â€” forcing risk-off.",
+            tnx.level, tnx.change_bps, tnx.session_open,
+        )
+
     sentiment = "GOOD" if (
         breadth_is_bullish
         and vix.level < VIX_LEVEL_MAX
         and vix.change_pct < VIX_SPIKE_PCT
+        and not yields_spiking
         and llm_result.verdict == "GOOD"
     ) else "BAD"
 

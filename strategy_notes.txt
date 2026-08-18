@@ -101,6 +101,7 @@ Sentiment is GOOD only if ALL of these hold. Any one flips it to BAD.
   Breadth not collapsing >= -0.40 vs 30-min peak     (VELOCITY)
   VIX level              < 22.0                      (level)
   VIX session move       < +10% from 09:30 open      (VELOCITY)
+  10Y yield move         < +8bp from 09:30 open      (VELOCITY)
   Claude verdict         GOOD
 
 The two velocity terms exist because level checks alone cannot tell a market
@@ -112,7 +113,26 @@ session-peak anchor reads an ordinary all-day drift as an emergency and then
 stays latched for the rest of the day. Verified: a +48 -> +20 bleed over five
 hours never trips; the same drop compressed into 15 minutes trips five times.
 
-Config: TRADING_VIX_LEVEL_MAX, TRADING_VIX_SPIKE_PCT,
+The 10-year yield (^TNX) is the third velocity term and the only macro input
+that is NOT about fear. QQQ is the longest-duration equity index there is, so
+its multiple moves inversely with real rates — a yield spike is a direct
+headwind that neither VIX nor breadth necessarily shows. Judged purely on
+intraday change: 4.3% tells you nothing, +8bp inside a session does.
+
+One-sided on purpose. Rising yields hurt QQQ; falling yields are broadly
+supportive, and the flight-to-quality case where yields collapse in a crash
+arrives with a VIX spike the gate already catches.
+
+NOT from Tradier. Confirmed against the quotes endpoint that it carries none
+of TNX, $TNX, ^TNX, TNX.X or US10Y — only bond ETFs like IEF and TLT, which
+track price rather than yield. Sourced from yfinance instead, same as VIX.
+
+Both ^VIX and ^TNX return the EXTENDED session from yfinance (VIX from ~03:15
+ET, TNX from ~08:20 ET), so both anchor on the first regular-hours bar. Using
+bar zero would measure the move since the middle of the night: measured live,
++3.0bp naive versus +1.8bp correctly anchored.
+
+Config: TRADING_VIX_LEVEL_MAX, TRADING_VIX_SPIKE_PCT, TRADING_TNX_SPIKE_BPS,
         TRADING_BREADTH_COLLAPSE_RATIO, TRADING_BREADTH_WINDOW_MINUTES
 
 

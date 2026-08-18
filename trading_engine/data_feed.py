@@ -60,6 +60,22 @@ class VixReading:
 
 
 @dataclass
+class TnxReading:
+    """10-year Treasury yield as a level and an intraday move, in basis points.
+
+    The Nasdaq-100 is the longest-duration equity index there is — its
+    multiple is a direct function of the discount rate — so a sharp rise in
+    real rates is the most reliable macro headwind for QQQ that isn't already
+    visible in VIX or breadth. Read as a rate of change, not a level: 10Y at
+    4.3% says nothing on its own, while +8bp inside a session is a genuine
+    move against a long tech position.
+    """
+    level: float          # yield in percent, e.g. 4.694
+    session_open: float   # first regular-session print
+    change_bps: float     # basis points moved since the open (positive = yields rising)
+
+
+@dataclass
 class MarketBreadth:
     addq: float          # self-computed Advance-Decline Difference (advancers - decliners)
     advancers: int
@@ -74,6 +90,27 @@ def fetch_qqq_bars(period: str = "5d", interval: str = "1m") -> pd.DataFrame:
     if bars.empty:
         raise RuntimeError("yfinance returned no QQQ bars — market may be closed or the symbol is unavailable.")
     return bars
+
+
+def _regular_session_open(bars: pd.DataFrame) -> float:
+    """First regular-hours opening print in an intraday bar series.
+
+    yfinance returns the full extended session for both ^VIX and ^TNX — Cboe
+    publishes VIX from around 03:15 ET and ^TNX prints from about 08:20 ET —
+    so bar zero is an overnight or pre-market quote, not the cash open.
+    Anchoring a session move there measures the change since the middle of
+    the night and buries an opening-bell move under hours of drift.
+
+    Pre-market cycles have no regular-hours bar yet; fall back to the first
+    bar available rather than failing, since the engine doesn't trade then.
+    """
+    try:
+        ny_times = bars.index.tz_convert(NY).time
+        regular_hours = bars[ny_times >= MARKET_OPEN_ET]
+    except TypeError:  # tz-naive index — shouldn't happen for intraday data
+        regular_hours = bars
+    session_bars = regular_hours if not regular_hours.empty else bars
+    return float(session_bars["Open"].iloc[0])
 
 
 def fetch_vix() -> VixReading:
@@ -95,20 +132,36 @@ def fetch_vix() -> VixReading:
     if bars.empty:
         raise RuntimeError("yfinance returned no VIX data.")
 
-    # Pre-market cycles have no regular-hours bar yet; fall back to the full
-    # series rather than failing, since the engine doesn't trade then anyway.
-    try:
-        ny_times = bars.index.tz_convert(NY).time
-        regular_hours = bars[ny_times >= MARKET_OPEN_ET]
-    except TypeError:  # tz-naive index — shouldn't happen for intraday data
-        regular_hours = bars
-    session_bars = regular_hours if not regular_hours.empty else bars
-
     level = float(bars["Close"].iloc[-1])
-    session_open = float(session_bars["Open"].iloc[0])
+    session_open = _regular_session_open(bars)
     change_pct = ((level - session_open) / session_open) * 100.0 if session_open else 0.0
 
     return VixReading(level=level, session_open=session_open, change_pct=change_pct)
+
+
+def fetch_tnx() -> TnxReading:
+    """10-year Treasury yield (CBOE ^TNX) via yfinance, as a level plus its
+    move since the 09:30 cash open, in basis points.
+
+    Not sourced from Tradier: confirmed against the quotes endpoint that it
+    carries none of TNX, $TNX, ^TNX, TNX.X or US10Y — only ordinary bond ETFs
+    like IEF and TLT, which track price rather than yield and would need
+    inverting and rescaling to stand in for one. Same situation as $ADDQ and
+    $TICKQ.
+
+    yfinance quotes ^TNX directly in percent (4.694 = 4.694%), and returns
+    the extended session — the first bar of the day lands around 08:20 ET —
+    so the anchor is taken from regular hours for the same reason as VIX.
+    """
+    bars = yf.Ticker("^TNX").history(period="1d", interval="1m")
+    if bars.empty:
+        raise RuntimeError("yfinance returned no ^TNX data.")
+
+    level = float(bars["Close"].iloc[-1])
+    session_open = _regular_session_open(bars)
+    change_bps = (level - session_open) * 100.0
+
+    return TnxReading(level=level, session_open=session_open, change_bps=change_bps)
 
 
 async def fetch_market_breadth() -> MarketBreadth:

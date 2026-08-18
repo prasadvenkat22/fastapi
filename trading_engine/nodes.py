@@ -690,13 +690,27 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # tradeable moves -- it describes the last few bars rather than
         # identifying anything, and trading it would mostly be paying the
         # debit to enter noise.
+        # No MACD term. It was vetoing 77% of trend+cross setups over a month
+        # of history, cutting this tier from 2.7 opportunities a day to 0.6 --
+        # and 2.7 is about what the market actually supplies.
+        #
+        # A live example of the cost: on a session where QQQ fell $11, MACD
+        # read BULLISH on 150 of 219 cycles while price sat BELOW_SMA the
+        # whole time. That combination is short-term upticks inside a
+        # downtrend, and demanding MACD agree meant every one of the day's 15
+        # midline crosses was refused. The engine sat flat through a clean
+        # directional move.
+        #
+        # Trend plus a cross through the 20-period mean is the thesis on its
+        # own: price re-crossing its mean in the direction the trend already
+        # points. MACD is a second momentum read on the same price series, so
+        # requiring it was closer to demanding the same confirmation twice
+        # than to adding independent evidence.
         momentum_bull = (
-            macd == "BULLISH" and sma == "ABOVE_SMA"
-            and bb_cross == "CROSS_UP" and sentiment == "GOOD"
+            sma == "ABOVE_SMA" and bb_cross == "CROSS_UP" and sentiment == "GOOD"
         )
         momentum_bear = (
-            macd == "BEARISH" and sma == "BELOW_SMA"
-            and bb_cross == "CROSS_DOWN"
+            sma == "BELOW_SMA" and bb_cross == "CROSS_DOWN"
         )
 
         # A single guard rather than the same clause repeated on six

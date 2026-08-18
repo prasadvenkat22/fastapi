@@ -10,13 +10,18 @@ set -e
 
 APP_DIR="/opt/fastapi"
 LOG="/var/log/qqq-trading.log"
+# -w /app and PYTHONPATH are both required: `docker compose exec` does not
+# necessarily start in the image's WORKDIR, and without them run_cycle.py
+# dies on "ModuleNotFoundError: No module named 'config'" every single minute
+# while cron itself reports nothing wrong.
 COMPOSE="docker compose -f $APP_DIR/docker-compose.yml -f $APP_DIR/docker-compose.prod.yml --project-directory $APP_DIR"
+EXEC="$COMPOSE exec -T -w /app -e PYTHONPATH=/app app"
 
 # Every minute. run_cycle.py decides for itself whether to act — it owns the
 # market-hours and kill-switch checks, in Python, because market hours are
 # America/New_York and shift with daylight saving. A UTC cron window would be
 # wrong for half the year.
-LINE="* * * * * cd $APP_DIR && $COMPOSE exec -T app python scripts/run_cycle.py >> $LOG 2>&1"
+LINE="* * * * * cd $APP_DIR && $EXEC python scripts/run_cycle.py >> $LOG 2>&1"
 
 touch "$LOG"
 

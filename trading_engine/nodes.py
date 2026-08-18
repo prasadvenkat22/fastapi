@@ -134,8 +134,54 @@ RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
 # meaningfully change minute to minute.
 MACRO_REFRESH_MINUTES = float(os.getenv("TRADING_MACRO_REFRESH_MINUTES", "5"))
 
-# ((verdict, confidence, risk_factor), timestamp) of the last headline read.
-_macro_cache: tuple = (None, None)
+def _read_macro_cache():
+    """Last macro read, or None if absent or stale.
+
+    Stored in Postgres rather than a module global. The global only worked
+    because the in-app scheduler kept one process alive; under cron each run
+    is a fresh process, so it never hit and every cycle paid for three RSS
+    scrapes, two Voyage embeddings and a Claude call.
+    """
+    from datetime import timezone
+    from models_pgdb.trading_models import MacroCache
+    from config.db_pgrs import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            row = db.query(MacroCache).filter(MacroCache.id == 1).first()
+            if row is None or row.updated_at is None:
+                return None
+            age = (datetime.now(timezone.utc) - row.updated_at).total_seconds()
+            if age >= MACRO_REFRESH_MINUTES * 60:
+                return None
+            return row.verdict, row.confidence, row.risk_factor
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Macro cache unreadable — falling back to a fresh read.")
+        return None
+
+
+def _write_macro_cache(verdict: str, confidence: float, risk_factor: str) -> None:
+    from sqlalchemy.sql import func as sqlfunc
+    from models_pgdb.trading_models import MacroCache
+    from config.db_pgrs import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            row = db.query(MacroCache).filter(MacroCache.id == 1).first()
+            if row is None:
+                db.add(MacroCache(id=1, verdict=verdict, confidence=confidence,
+                                  risk_factor=risk_factor, updated_at=sqlfunc.now()))
+            else:
+                row.verdict, row.confidence = verdict, confidence
+                row.risk_factor, row.updated_at = risk_factor, sqlfunc.now()
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        # Non-fatal: a failed write just means the next cycle recomputes.
+        logger.exception("Macro cache write failed.")
 
 RSS_FEEDS = [
     "https://finance.yahoo.com/news/rssindex",
@@ -285,14 +331,9 @@ async def market_signals_agent(state: TradingState) -> dict:
     tnx = fetch_tnx()
     # The headline read is the expensive half of this agent and the half that
     # does not change minute to minute, so it is refreshed on its own clock.
-    global _macro_cache
-    cached_verdict, cached_at = _macro_cache
     now = datetime.now(ZoneInfo("America/New_York"))
-    cache_fresh = (
-        cached_verdict is not None
-        and cached_at is not None
-        and (now - cached_at).total_seconds() < MACRO_REFRESH_MINUTES * 60
-    )
+    cached = _read_macro_cache()
+    cache_fresh = cached is not None
 
     headlines: List[str] = []
     similar_past_headlines: List[str] = []
@@ -355,15 +396,14 @@ async def market_signals_agent(state: TradingState) -> dict:
         )
     )
     if cache_fresh:
-        llm_verdict, llm_confidence, llm_risk_factor = cached_verdict
+        llm_verdict, llm_confidence, llm_risk_factor = cached
     else:
         llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
         llm_verdict = llm_result.verdict
         llm_confidence = llm_result.confidence_score
         llm_risk_factor = llm_result.risk_factor
         logger.info("Macro verdict %s (confidence %.2f): %s", llm_verdict, llm_confidence, llm_risk_factor)
-        cached_verdict = (llm_verdict, llm_confidence, llm_risk_factor)
-        _macro_cache = (cached_verdict, now)
+        _write_macro_cache(llm_verdict, llm_confidence, llm_risk_factor)
 
     # VIX is gated on level *and* velocity — a sharp intraday spike is
     # risk-off even when the absolute level is still under the ceiling,

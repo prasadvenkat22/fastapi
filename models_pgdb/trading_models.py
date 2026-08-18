@@ -113,6 +113,26 @@ class BreadthReading(Base):
     recorded_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
+class MacroCache(Base):
+    """Last macro read, shared across processes.
+
+    This used to be a module-level global, which worked only because the
+    in-app scheduler kept one process alive between cycles. Under cron every
+    run is a fresh process, so the cache was always empty and each cycle
+    re-scraped three RSS feeds, re-embedded via Voyage and re-called Claude —
+    roughly 390 Claude and 780 Voyage calls a session, against a Voyage free
+    tier of 3 requests per minute.
+
+    One row, upserted. The verdict is cheap to store and expensive to derive."""
+
+    __tablename__ = "trading_macro_cache"
+    id = Column(Integer, primary_key=True, default=1)
+    verdict = Column(String, nullable=False)
+    confidence = Column(Float, nullable=True)
+    risk_factor = Column(String, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class TradeSetupVector(Base):
     """Embedded record of a closed trade's entry setup + outcome, written
     whenever a TradeHistory row is created. Pure logging for now -- there's

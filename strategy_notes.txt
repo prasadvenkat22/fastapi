@@ -185,7 +185,66 @@ fixed-size adds instead if that risk profile is not intended.
 
 
 ================================================================================
-7. WHY CREDIT SPREADS MIGHT MAKE SENSE (NOT IMPLEMENTED)
+7. NAMED STRATEGIES � WHAT TRADES WHEN, AND HOW TO RETIRE ONE
+================================================================================
+
+Defined in trading_engine/playbook.py. Strike placement is chosen by time of
+day, and every entry records WHICH strategy opened it so their results can be
+judged separately.
+
+  ATM_MOMENTUM    09:45-10:15  ATM   long ATM,   short ATM+3
+      Opening range resolved. Pay for leverage while a real directional leg
+      is most likely. THIS is the window that can capture a big day.
+
+  MORNING_DRIFT   10:15-11:30  ITM   long ATM-3, short ATM
+      No clear regime. Conservative. First candidate for removal if it does
+      not earn its place.
+
+  ITM_GRINDER     11:30-13:30  ITM   long ATM-3, short ATM
+      Midday lull. Positive theta pays while price sits still.
+
+  AFTERNOON_ITM   13:30-14:00  ITM   long ATM-3, short ATM
+      Stand-in until OTM credit spreads exist (see section 8).
+
+Outside every window there is NO ENTRY � that covers the warmup, everything
+after 14:00, and any gap left by retiring a strategy.
+
+WHY PLACEMENT MATTERS MORE THAN WIDTH
+A debit spread can never be worth more than its width, so where the strikes
+sit decides how much of a move you capture. Same $3 width, QQQ +9 by expiry:
+
+    deep ITM  +5%      ITM  +58%      ATM  +173%      OTM  +556%
+
+A $9 day and a $3 day pay an ITM spread the SAME 58%. And widening does not
+fix it � a $9-wide ITM spread costs proportionally more and returns 18%:
+
+    width 1 -> 83%    width 3 -> 58%    width 5 -> 40%    width 9 -> 18%
+
+Capturing a bigger move means moving the strikes TOWARD the money, not making
+them wider. The tradeoff is real, and it is not free: at the same contract
+count ITM risks ~$190 to make ~$110, ATM risks ~$113 to make ~$187. ITM wins
+often and small; ATM wins less often and large. Both lose 100% if wrong.
+
+Live comparison, same +$9 day:
+    ATM_MOMENTUM   debit 1.13 -> 3.00   +165%
+    ITM_GRINDER    debit 1.98 -> 3.00    +52%
+
+HOW TO SEE WHAT IS WORKING
+
+    GET /trading/playbook-performance
+
+Per strategy: trade count, win rate, total P&L, average/best/worst percent,
+and a breakdown of close reasons. Strategies with no closed trades still
+appear with zeroes, so an untested one reads as untested rather than missing.
+
+HOW TO RETIRE A STRATEGY
+Delete its entry from WINDOWS in trading_engine/playbook.py. That is all. The
+window becomes a no-entry period, historical trades keep their attribution,
+and the endpoint will still show its record with active=false.
+
+
+================================================================================
+8. WHY CREDIT SPREADS MIGHT MAKE SENSE (NOT IMPLEMENTED)
 ================================================================================
 
 The engine only sells premium indirectly, via the short ATM leg of a debit
@@ -240,7 +299,7 @@ right about direction and still lose 100%.
 
 
 ================================================================================
-8. KNOWN LIMITS — READ BEFORE TRUSTING ANY NUMBER
+9. KNOWN LIMITS — READ BEFORE TRUSTING ANY NUMBER
 ================================================================================
 
   - THE BROKER IS MOCKED. No orders are placed anywhere. Every fill is
@@ -259,12 +318,13 @@ right about direction and still lose 100%.
     basket, not the real index membership, which changes over time.
   - TRADE SETUP VECTORS ARE LOGGING ONLY. query_similar_setups() works but
     nothing consumes it — there are not enough closed trades to learn from.
-  - NO TIME-OF-DAY STRUCTURE SELECTION. The same long-ITM/short-ATM shape is
-    used at every hour. A momentum-window ATM structure is not implemented.
+  - THE PLAYBOOK IS UNTESTED. The windows in section 7 are reasoned, not
+    measured. Judge them on /trading/playbook-performance after real trades,
+    and delete the ones that do not earn their place.
 
 
 ================================================================================
-9. OPERATING IT
+10. OPERATING IT
 ================================================================================
 
   GET  /trading/status               everything at once
@@ -273,6 +333,7 @@ right about direction and still lose 100%.
   POST /trading/run-daily-cycle      run exactly one cycle by hand
   GET  /trading/position             open spread, repriced
   GET  /trading/history              closed trades and realized P&L
+  GET  /trading/playbook-performance per-strategy scoreboard
   POST /trading/kill-switch/toggle   ACTIVATE / DEACTIVATE
 
 The scheduler does NOT auto-start. After a deploy it sits idle until

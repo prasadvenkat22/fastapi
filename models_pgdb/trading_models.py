@@ -47,6 +47,10 @@ class OpenPosition(Base):
     short_strike = Column(Float, nullable=False)
     entry_net_debit = Column(Float, nullable=False)
     opened_at = Column(DateTime(timezone=True), default=func.now())
+    # Named time-window strategy that opened this position (see
+    # trading_engine/playbook.py). Carried through to TradeHistory on close so
+    # realized P&L can be attributed per strategy rather than pooled.
+    playbook = Column(String, nullable=True, index=True)
     # Signal readings at entry — carried through to TradeHistory on close so
     # the setup that triggered this trade isn't lost.
     entry_macd_signal = Column(String, nullable=True)
@@ -73,6 +77,7 @@ class TradeHistory(Base):
     realized_pnl_dollars = Column(Float, nullable=False)
     realized_pnl_pct = Column(Float, nullable=False)
     close_reason = Column(String, nullable=False)  # TAKE_PROFIT / STOP_LOSS / RISK_OFF / FORCE_CLOSE
+    playbook = Column(String, nullable=True, index=True)  # which named strategy opened it
     opened_at = Column(DateTime(timezone=True), nullable=True)
     closed_at = Column(DateTime(timezone=True), default=func.now())
     entry_macd_signal = Column(String, nullable=True)

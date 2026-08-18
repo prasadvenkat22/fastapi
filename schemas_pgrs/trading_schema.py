@@ -90,6 +90,30 @@ class TradeHistoryResponse(BaseModel):
     trades: list[TradeHistoryEntry]
 
 
+class PlaybookStat(BaseModel):
+    """Realized performance for one named entry strategy."""
+    playbook: str
+    trades: int
+    wins: int
+    losses: int
+    win_rate_pct: float
+    total_pnl_dollars: float
+    avg_pnl_pct: float
+    best_pct: float
+    worst_pct: float
+    close_reasons: dict[str, int]
+    active: bool          # still in playbook.WINDOWS, i.e. still being traded
+    window: Optional[str] = None
+    placement: Optional[str] = None
+
+
+class PlaybookPerformanceResponse(BaseModel):
+    """Per-strategy scoreboard. Strategies with no closed trades still appear
+    with zeroes so an untested one is visibly untested rather than absent."""
+    stats: list[PlaybookStat]
+    unattributed_trades: int   # closed before playbook tracking existed
+
+
 class TradingStatusResponse(BaseModel):
     """One-call dashboard combining kill switch, scheduler, open position,
     and realized P&L — everything /trading/position, /trading/history, and

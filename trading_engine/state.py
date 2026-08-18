@@ -12,5 +12,6 @@ class TradingState(TypedDict):
     rsi_zone: str              # 'OVERBOUGHT' (>=70), 'OVERSOLD' (<=30), or 'NEUTRAL'
     market_sentiment: str      # 'GOOD' or 'BAD'
     execution_status: str      # 'BUY_CALL', 'BUY_MORE', 'SELL_ALL', 'HOLD'
+    playbook: str              # Named time-window strategy that opened the position ('' if none opened)
     exit_reason: str           # Why a position closed: 'FORCE_CLOSE', 'TAKE_PROFIT', 'STOP_LOSS', 'RISK_OFF' ('' if nothing closed)
     buy_more_count: int        # Tracking safety scale-ins

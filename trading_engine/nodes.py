@@ -20,6 +20,7 @@ from GENAI.vector_stores import VoyageEmbeddings
 from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
+from .playbook import strikes_for, window_for
 from .broker import (
     BEAR_PUT_SPREAD,
     BULL_CALL_SPREAD,
@@ -353,6 +354,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
 
     action = "HOLD"
     exit_reason = ""
+    playbook = ""
 
     if position is not None:
         return_pct = position.return_pct
@@ -447,25 +449,39 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             spot = float(fetch_qqq_bars()["Close"].iloc[-1])
             atm_strike = round_to_strike(spot)
 
-            # Price the entry with the same model that reprices it next cycle.
-            # Sizing has to use that price too, or the position costs
-            # something other than the budget it was sized against.
-            strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
-            long_strike = atm_strike - ITM_OFFSET if bullish else atm_strike + ITM_OFFSET
-            short_strike = atm_strike
-            net_debit = estimate_spread_value(strategy, long_strike, short_strike, spot)
-            quantity = broker.estimate_spread_quantity(POSITION_BUDGET * ENTRY_FRACTION, net_debit)
+            # Strike placement comes from the time-of-day window, so the same
+            # signal produces a leveraged ATM structure during the morning
+            # momentum leg and a positive-theta ITM one through the midday
+            # lull. window is None outside every window — that is a no-entry
+            # period, including any gap left by retiring a strategy.
+            window = window_for()
+            if window is not None:
+                strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
+                long_strike, short_strike = strikes_for(window, atm_strike, bullish)
 
-            if quantity > 0:
-                if bullish:
-                    broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit)
-                    action = "BUY_CALL_SPREAD"
-                else:
-                    broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike, net_debit)
-                    action = "BUY_PUT_SPREAD"
+                # Price the entry with the same model that reprices it next
+                # cycle. Sizing uses that price too, or the position costs
+                # something other than the budget it was sized against.
+                net_debit = estimate_spread_value(strategy, long_strike, short_strike, spot)
+                quantity = broker.estimate_spread_quantity(POSITION_BUDGET * ENTRY_FRACTION, net_debit)
+
+                if quantity > 0:
+                    playbook = window.name
+                    logger.info(
+                        "Entering %s via %s: %s %d contracts, long %.1f / short %.1f at $%.2f",
+                        "BULL" if bullish else "BEAR", window.name, window.placement,
+                        quantity, long_strike, short_strike, net_debit,
+                    )
+                    if bullish:
+                        broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit)
+                        action = "BUY_CALL_SPREAD"
+                    else:
+                        broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike, net_debit)
+                        action = "BUY_PUT_SPREAD"
 
     return {
         "execution_status": action,
         "exit_reason": exit_reason,
+        "playbook": playbook,
         "buy_more_count": count + 1 if action == "BUY_MORE" else count,
     }

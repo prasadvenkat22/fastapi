@@ -9,6 +9,8 @@ from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 from schemas_pgrs.trading_schema import (
     KillSwitchResponse,
     OpenPositionResponse,
+    PlaybookPerformanceResponse,
+    PlaybookStat,
     SchedulerStatusResponse,
     TradeHistoryResponse,
     TradingCycleResponse,
@@ -16,6 +18,7 @@ from schemas_pgrs.trading_schema import (
 )
 from trading_engine import scheduler
 from trading_engine.broker import estimate_intrinsic_value
+from trading_engine.playbook import WINDOWS
 from trading_engine.data_feed import TradierDataError, fetch_qqq_bars
 from trading_engine.nodes import KILL_SWITCH_PATH
 from trading_engine.service import execute_and_persist_cycle
@@ -106,6 +109,62 @@ async def get_trade_history(db: db_dependency):
     rows = db.query(TradeHistory).order_by(TradeHistory.closed_at.asc()).all()
     total = round(sum(r.realized_pnl_dollars for r in rows), 2)
     return TradeHistoryResponse(total_realized_pnl_dollars=total, trade_count=len(rows), trades=rows)
+
+
+@router.get("/playbook-performance", response_model=PlaybookPerformanceResponse)
+async def playbook_performance(db: db_dependency):
+    """Realized results broken down by named entry strategy.
+
+    Strike placement is chosen by time of day, so a day can produce trades
+    from several strategies with genuinely different risk profiles � an ATM
+    momentum spread and a midday ITM grinder are not the same bet. Pooling
+    their P&L hides which one is actually working. This is the view that
+    tells you which windows to keep and which to delete from playbook.WINDOWS.
+
+    Strategies with no closed trades still appear, so an untested one reads
+    as untested rather than silently missing.
+    """
+    rows = db.query(TradeHistory).all()
+
+    by_name: dict[str, list] = {w.name: [] for w in WINDOWS}
+    unattributed = 0
+    for r in rows:
+        if not r.playbook:
+            unattributed += 1
+            continue
+        by_name.setdefault(r.playbook, []).append(r)
+
+    active = {w.name for w in WINDOWS}
+    meta = {w.name: w for w in WINDOWS}
+
+    stats = []
+    for name, trades in by_name.items():
+        w = meta.get(name)
+        wins = [t for t in trades if t.realized_pnl_dollars > 0]
+        losses = [t for t in trades if t.realized_pnl_dollars <= 0]
+        reasons: dict[str, int] = {}
+        for t in trades:
+            reasons[t.close_reason] = reasons.get(t.close_reason, 0) + 1
+        pcts = [t.realized_pnl_pct for t in trades]
+        stats.append(PlaybookStat(
+            playbook=name,
+            trades=len(trades),
+            wins=len(wins),
+            losses=len(losses),
+            win_rate_pct=round(len(wins) / len(trades) * 100, 1) if trades else 0.0,
+            total_pnl_dollars=round(sum(t.realized_pnl_dollars for t in trades), 2),
+            avg_pnl_pct=round(sum(pcts) / len(pcts), 2) if pcts else 0.0,
+            best_pct=round(max(pcts), 2) if pcts else 0.0,
+            worst_pct=round(min(pcts), 2) if pcts else 0.0,
+            close_reasons=reasons,
+            active=name in active,
+            window=f"{w.start.strftime('%H:%M')}-{w.end.strftime('%H:%M')} ET" if w else None,
+            placement=w.placement if w else None,
+        ))
+
+    # Most traded first; untested strategies sort to the bottom.
+    stats.sort(key=lambda s: (-s.trades, s.playbook))
+    return PlaybookPerformanceResponse(stats=stats, unattributed_trades=unattributed)
 
 
 @router.post("/scheduler/start", response_model=SchedulerStatusResponse)

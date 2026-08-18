@@ -51,6 +51,12 @@ ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.4"))
 
 # Cap on scale-ins per position, unchanged from the original hardcoded 3.
 MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "3"))
+
+# Opening warmup. Entries wait this many minutes after the bell so the
+# opening auction's whipsaws don't get read as a trend; position management
+# is unaffected and runs from the first cycle.
+MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE = 9, 30
+WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
 TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "20.0"))
 STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-10.0"))  # unchanged from the original spec — only take-profit moved to 20%
 
@@ -285,6 +291,23 @@ async def market_signals_agent(state: TradingState) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _is_within_opening_warmup() -> bool:
+    """No new entries in the first minutes after the bell.
+
+    The opening auction and the rebalancing that follows it produce whipsaws
+    that aren't a trend — the indicators will happily read a direction from
+    them, and the engine has no way to tell that reading apart from a real
+    one. Waiting for the range to establish costs a few minutes of a session
+    the engine mostly sits out anyway.
+
+    Only entries wait. An already-open position is still managed from the
+    first cycle, because a stop that ignores the first 15 minutes is worse
+    than no stop.
+    """
+    now_est = datetime.now(ZoneInfo("America/New_York"))
+    return (now_est.hour, now_est.minute) < (MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE + WARMUP_MINUTES)
+
+
 def _is_past_cutoff(cutoff_hour: int = 14) -> bool:
     """No new entries and no BUY_MORE past this hour (EST) — these are
     same-day (0DTE) QQQ spreads, so a fresh or added position needs enough
@@ -319,6 +342,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     available_cash = broker.get_available_cash()
     past_cutoff = _is_past_cutoff()
     force_close = is_past_force_close()
+    in_warmup = _is_within_opening_warmup()
 
     action = "HOLD"
     exit_reason = ""
@@ -372,7 +396,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             )
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "RISK_OFF"
-    elif not past_cutoff:
+    elif not past_cutoff and not in_warmup:
         # Bullish: bull call debit spread (long ITM call, short ATM call).
         # Bearish: bear put debit spread (long ITM put, short ATM put). Same
         # market_sentiment=GOOD gate either direction (a calm macro

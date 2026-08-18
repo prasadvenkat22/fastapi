@@ -67,6 +67,21 @@ RELAXED_ENTRIES_ENABLED = os.getenv("TRADING_RELAXED_ENTRIES", "true").lower() =
 # trend agreeing, catching moves that never stretch far enough to touch a band.
 MOMENTUM_ENTRIES_ENABLED = os.getenv("TRADING_MOMENTUM_ENTRIES", "true").lower() == "true"
 
+# Whether the TREND tier trades: MACD, trend and an RSI extreme agreeing, with
+# NO Bollinger requirement.
+#
+# It exists because every other debit tier needs a band pierce, and Bollinger
+# bands are computed from a rolling 100-minute mean -- so they drift down with
+# a falling market and a steady decline never gets 2 sigma outside its own
+# average. Bands catch dislocations, not trends.
+#
+# The cost was measured on a live session: QQQ fell $11 and from 10:03 the
+# engine read BEARISH + BELOW_SMA + OVERSOLD -- a complete bearish setup --
+# and refused it for twelve straight cycles because bollinger_zone was NORMAL.
+# It took no trade all day. Over a month this tier fires 4.6 times a day and
+# 77 of its 102 setups are ones no other tier catches.
+TREND_ENTRIES_ENABLED = os.getenv("TRADING_TREND_ENTRIES", "true").lower() == "true"
+
 # Opening warmup. Entries wait this many minutes after the bell so the
 # opening auction's whipsaws don't get read as a trend; position management
 # is unaffected and runs from the first cycle.
@@ -736,6 +751,17 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             sma == "BELOW_SMA" and bb_cross == "CROSS_DOWN"
         )
 
+        # TREND: momentum, direction and an RSI extreme agreeing, no band
+        # needed. This is the tier that can trade a sustained move, which is
+        # precisely what the band-based tiers cannot see.
+        trend_bull = (
+            macd == "BULLISH" and sma == "ABOVE_SMA"
+            and rsi == "OVERBOUGHT" and sentiment == "GOOD"
+        )
+        trend_bear = (
+            macd == "BEARISH" and sma == "BELOW_SMA" and rsi == "OVERSOLD"
+        )
+
         # A single guard rather than the same clause repeated on six
         # conditions: VIX at or above its ceiling is disorder, and disorder is
         # not directional — wide quotes and gap risk hurt a short spread as
@@ -748,6 +774,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             tier, bullish = "RELAXED", relaxed_bull
         elif MOMENTUM_ENTRIES_ENABLED and (momentum_bull or momentum_bear):
             tier, bullish = "MOMENTUM", momentum_bull
+        elif TREND_ENTRIES_ENABLED and (trend_bull or trend_bear):
+            tier, bullish = "TREND", trend_bull
         else:
             tier, bullish = None, False
 

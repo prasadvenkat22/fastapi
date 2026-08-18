@@ -77,7 +77,7 @@ WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
 TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "30.0"))
 STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-10.0"))  # unchanged from the original spec — only take-profit moved to 20%
 
-# Tightened stop that applies only while macro is risk-off (market_sentiment
+# Tightened stop for LONG positions while macro is risk-off (market_sentiment
 # == 'BAD'). Riding a losing 0DTE spread all the way to the full -10% stop
 # into a deteriorating tape gives up twice the capital for a position whose
 # thesis has already broken; cutting at -5% and re-entering later if
@@ -123,7 +123,7 @@ RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
 # meaningfully change minute to minute.
 MACRO_REFRESH_MINUTES = float(os.getenv("TRADING_MACRO_REFRESH_MINUTES", "5"))
 
-# (verdict, timestamp) of the last headline read.
+# ((verdict, confidence, risk_factor), timestamp) of the last headline read.
 _macro_cache: tuple = (None, None)
 
 RSS_FEEDS = [
@@ -338,11 +338,15 @@ async def market_signals_agent(state: TradingState) -> dict:
         )
     )
     if cache_fresh:
-        llm_verdict = cached_verdict
+        llm_verdict, llm_confidence, llm_risk_factor = cached_verdict
     else:
         llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
         llm_verdict = llm_result.verdict
-        _macro_cache = (llm_verdict, now)
+        llm_confidence = llm_result.confidence_score
+        llm_risk_factor = llm_result.risk_factor
+        logger.info("Macro verdict %s (confidence %.2f): %s", llm_verdict, llm_confidence, llm_risk_factor)
+        cached_verdict = (llm_verdict, llm_confidence, llm_risk_factor)
+        _macro_cache = (cached_verdict, now)
 
     # VIX is gated on level *and* velocity — a sharp intraday spike is
     # risk-off even when the absolute level is still under the ceiling,
@@ -363,7 +367,31 @@ async def market_signals_agent(state: TradingState) -> dict:
         and llm_verdict == "GOOD"
     ) else "BAD"
 
-    return {"market_sentiment": sentiment}
+    # BAD means "unsafe to be LONG" — collapsing breadth, spiking fear,
+    # rising yields. Every one of those is a reason a bear put spread should
+    # work, so gating short entries on GOOD refused the trade the conditions
+    # were actually calling for. Direction gating now lives on the entry side;
+    # this flag stays bullish-framed because that is what it measures.
+    #
+    # A separate halt covers conditions unsafe in EITHER direction. VIX above
+    # its ceiling is genuine disorder — wide quotes and gap risk hurt a short
+    # spread as much as a long one — as distinct from the velocity terms,
+    # which are directional.
+    halt = vix.level >= VIX_LEVEL_MAX
+    if halt:
+        logger.warning(
+            "Macro halt: VIX at %.2f is at or above the %.1f ceiling — no entries in either direction.",
+            vix.level, VIX_LEVEL_MAX,
+        )
+
+    return {
+        "market_sentiment": sentiment,
+        "macro_halt": halt,
+        # 3. Previously generated and discarded every cycle. Logged now so a
+        # sentiment flip can be explained after the fact instead of guessed at.
+        "macro_confidence": llm_confidence,
+        "macro_risk_factor": llm_risk_factor,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +440,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
 
     broker = broker or default_mock_broker()
     sentiment = state.get("market_sentiment")
+    halt = bool(state.get("macro_halt"))
     macd = state.get("macd_signal")
     sma = state.get("sma_trend")
     bb = state.get("bollinger_zone")
@@ -475,7 +504,15 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # that already breached the full stop is still recorded as STOP_LOSS
         # — this rule only owns the band between the two thresholds, which
         # keeps the close reasons feeding the setup vector store honest.
-        elif sentiment == "BAD" and return_pct <= RISK_OFF_STOP_LOSS_PCT:
+        # Only for LONG positions. market_sentiment BAD describes conditions
+        # hostile to being long, which are the same conditions a bear put
+        # spread profits from — cutting a short early because macro turned
+        # bearish would exit the position for the reason it was opened.
+        elif (
+            sentiment == "BAD"
+            and position.strategy == BULL_CALL_SPREAD
+            and return_pct <= RISK_OFF_STOP_LOSS_PCT
+        ):
             logger.warning(
                 "Risk-off exit: macro sentiment BAD with position at %.2f%% — closing early "
                 "rather than riding to the %.1f%% stop.", return_pct, STOP_LOSS_PCT,
@@ -537,11 +574,14 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                  or (bb == "UPPER_BAND" and rsi == "OVERBOUGHT"))  # continuation
             and sentiment == "GOOD"
         )
+        # Short setups gate on `not halt`, not on GOOD. GOOD means "safe to be
+        # long"; requiring it to go short refused every bear put spread in
+        # precisely the tape — collapsing breadth, spiking VIX, rising yields —
+        # that such a spread exists to profit from.
         strict_bear = (
             macd == "BEARISH" and sma == "BELOW_SMA"
             and ((bb == "UPPER_BAND" and rsi == "OVERBOUGHT")      # fade
                  or (bb == "LOWER_BAND" and rsi == "OVERSOLD"))    # continuation
-            and sentiment == "GOOD"
         )
         relaxed_bull = (
             macd == "BULLISH" and sma == "ABOVE_SMA"
@@ -549,7 +589,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         )
         relaxed_bear = (
             macd == "BEARISH" and sma == "BELOW_SMA"
-            and bb in ("UPPER_BAND", "LOWER_BAND") and sentiment == "GOOD"
+            and bb in ("UPPER_BAND", "LOWER_BAND")
         )
 
         # MOMENTUM: price closing back through its 20-period mean with MACD
@@ -567,10 +607,16 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         )
         momentum_bear = (
             macd == "BEARISH" and sma == "BELOW_SMA"
-            and bb_cross == "CROSS_DOWN" and sentiment == "GOOD"
+            and bb_cross == "CROSS_DOWN"
         )
 
-        if strict_bull or strict_bear:
+        # A single guard rather than the same clause repeated on six
+        # conditions: VIX at or above its ceiling is disorder, and disorder is
+        # not directional — wide quotes and gap risk hurt a short spread as
+        # much as a long one. Everything below assumes it has already passed.
+        if halt:
+            tier, bullish = None, False
+        elif strict_bull or strict_bear:
             tier, bullish = "STRICT", strict_bull
         elif RELAXED_ENTRIES_ENABLED and (relaxed_bull or relaxed_bear):
             tier, bullish = "RELAXED", relaxed_bull
@@ -578,7 +624,6 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             tier, bullish = "MOMENTUM", momentum_bull
         else:
             tier, bullish = None, False
-        bearish = tier is not None and not bullish
 
         if tier is not None:
             # Strike placement comes from the time-of-day window, so the same

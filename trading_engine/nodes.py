@@ -67,6 +67,16 @@ MOMENTUM_ENTRIES_ENABLED = os.getenv("TRADING_MOMENTUM_ENTRIES", "true").lower()
 # is unaffected and runs from the first cycle.
 MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE = 9, 30
 WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
+# Once a position reaches its window's target it stops being a sell signal and
+# becomes the point where a trailing exit ARMS. The trade then runs until the
+# 5-minute trend breaks, so a strong move is not capped at the target.
+#
+# This matters because the cap was real: an ATM spread entered near $1.14 tops
+# out around +163%, and booking it at +60% forfeits most of what the structure
+# was chosen for. The tradeoff is that an armed winner can give back, so a
+# floor is the 9 EMA itself.
+TRAILING_EXITS_ENABLED = os.getenv("TRADING_TRAILING_EXITS", "true").lower() == "true"
+
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
 # rises through the day as time value drains, which lowers that ceiling as
@@ -175,7 +185,13 @@ def sma_agent(state: TradingState) -> dict:
     last_close = close.iloc[-1]
 
     trend = "ABOVE_SMA" if (last_close > ema20 and last_close > ema50) else "BELOW_SMA"
-    return {"sma_trend": trend}
+
+    # 9 EMA is the trailing reference, not an entry filter. A winning trade is
+    # held while price keeps closing on the right side of it, which is what
+    # lets a run go past any fixed target.
+    ema9 = close.ewm(span=9, adjust=False).mean().iloc[-1]
+    ema9_side = "ABOVE_EMA9" if last_close > ema9 else "BELOW_EMA9"
+    return {"sma_trend": trend, "ema9_side": ema9_side}
 
 
 def bollinger_agent(state: TradingState) -> dict:
@@ -424,11 +440,17 @@ def _is_past_cutoff(cutoff_hour: int = 14) -> bool:
     return now_est.hour >= cutoff_hour
 
 
-def is_past_force_close(hour: int = 15, minute: int = 45) -> bool:
+def is_past_force_close(hour: int = 15, minute: int = 30) -> bool:
     """Hard close-out cutoff, independent of P&L — QQQ options expire at
     today's close, so any open spread must be flattened before then rather
     than allowed to ride into expiration (assignment/pin risk on the short
-    leg, and an OTM long leg simply expires worthless)."""
+    leg, and an OTM long leg simply expires worthless).
+
+    15:30 rather than 15:45. The final half hour is driven by market-on-close
+    imbalances, gamma risk peaks and quotes widen, so a 50-cent wiggle can
+    erase a large open gain in seconds. That matters much more now that
+    trailing exits let winners run instead of booking at a fixed target —
+    there is more open profit to protect."""
     now_est = datetime.now(ZoneInfo("America/New_York"))
     return (now_est.hour, now_est.minute) >= (hour, minute)
 
@@ -441,10 +463,12 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     broker = broker or default_mock_broker()
     sentiment = state.get("market_sentiment")
     halt = bool(state.get("macro_halt"))
+    ema9_side = state.get("ema9_side")
     macd = state.get("macd_signal")
     sma = state.get("sma_trend")
     bb = state.get("bollinger_zone")
     bb_cross = state.get("bollinger_cross")
+    ema9_side = state.get("ema9_side")
     rsi = state.get("rsi_zone")
     count = state.get("buy_more_count", 0)
 
@@ -471,8 +495,32 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # still an ATM spread at 13:00, and holding it to the ITM target would
         # book it early for no reason.
         elif return_pct >= take_profit_for(position.playbook, TAKE_PROFIT_PCT):
-            broker.sell_all(position.underlying)
-            action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
+            # Target reached. With trailing enabled this arms rather than
+            # sells: the position runs while the 5-minute trend holds, so a
+            # strong move is not truncated at a number chosen in advance.
+            #
+            # The 9 EMA IS the trail — there is no separate high-water mark.
+            # A giveback large enough to matter necessarily drags price
+            # through the 9 EMA, which fires the exit, so a ratchet would be
+            # mostly redundant machinery.
+            #
+            # What that does not cover: a violent reversal inside one cycle.
+            # Price can round-trip a long way in 60 seconds and the exit only
+            # sees it on the next tick. Trailing genuinely trades a capped,
+            # certain gain for an uncapped, less certain one.
+            trend_broken = (
+                (position.strategy == BULL_CALL_SPREAD and ema9_side == "BELOW_EMA9")
+                or (position.strategy == BEAR_PUT_SPREAD and ema9_side == "ABOVE_EMA9")
+            )
+            if not TRAILING_EXITS_ENABLED or trend_broken:
+                broker.sell_all(position.underlying)
+                action, exit_reason = "SELL_ALL", "TAKE_PROFIT" if not TRAILING_EXITS_ENABLED else "TRAIL_STOP"
+            else:
+                action = "TRAILING"
+                logger.info(
+                    "Trailing %s at %+.1f%% (target %+.0f%%) — trend intact, letting it run.",
+                    position.strategy, return_pct, take_profit_for(position.playbook, TAKE_PROFIT_PCT),
+                )
         # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
         elif return_pct <= STOP_LOSS_PCT:
             # place_buy_more adds `position.quantity` more contracts — it

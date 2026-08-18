@@ -7,7 +7,8 @@ from langchain_core.messages import BaseMessage
 class TradingState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
     macd_signal: str          # 'BULLISH', 'BEARISH', or 'NEUTRAL'
-    sma_trend: str             # 'ABOVE_SMA' or 'BELOW_SMA'
+    sma_trend: str
+    ema9_side: str             # 'ABOVE_EMA9' or 'BELOW_EMA9' — trailing-exit reference             # 'ABOVE_SMA' or 'BELOW_SMA'
     bollinger_zone: str
     bollinger_cross: str       # 'CROSS_UP', 'CROSS_DOWN', or 'NONE' — 20-period midline cross        # 'UPPER_BAND', 'LOWER_BAND', or 'NORMAL'
     rsi_zone: str              # 'OVERBOUGHT' (>=70), 'OVERSOLD' (<=30), or 'NEUTRAL'

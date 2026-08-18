@@ -113,6 +113,28 @@ class BreadthReading(Base):
     recorded_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
+class MacroReading(Base):
+    """VIX and 10-year yield as seen each cycle.
+
+    Breadth was already persisted; these were not, so the values three of the
+    five macro gates fire on left no trace. Answering "did yields spike the
+    day we lost money" meant re-fetching from yfinance and hoping the vendor
+    still had the history -- which is not a record.
+
+    Cheap to store, and it makes threshold questions answerable from our own
+    data instead of a guess."""
+
+    __tablename__ = "trading_macro_readings"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    vix_level = Column(Float, nullable=False)
+    vix_session_open = Column(Float, nullable=False)
+    vix_change_pct = Column(Float, nullable=False)
+    tnx_level = Column(Float, nullable=False)
+    tnx_session_open = Column(Float, nullable=False)
+    tnx_change_bps = Column(Float, nullable=False)
+    recorded_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class MacroCache(Base):
     """Last macro read, shared across processes.
 

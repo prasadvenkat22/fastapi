@@ -129,7 +129,18 @@ VIX_SPIKE_PCT = float(os.getenv("TRADING_VIX_SPIKE_PCT", "10.0"))
 # One-sided on purpose. Rising yields hurt QQQ; falling yields are broadly
 # supportive of it, and the flight-to-quality case where yields collapse in a
 # crash arrives with a VIX spike that the gate above already catches.
-TNX_SPIKE_BPS = float(os.getenv("TRADING_TNX_SPIKE_BPS", "8.0"))
+#
+# 4bp, not the 8bp this shipped with. Measured against a month of 5-minute
+# history, the 10Y's intraday peak never exceeded 4.3bp on any session -- an
+# 8bp gate could not fire and never did. The threshold was set from a guess
+# about what a "real move" looks like on a daily chart, not from what the
+# instrument actually does inside a session.
+#
+# 4bp is rare but real: 3 of 22 sessions reached it, and QQQ finished down on
+# all three (-0.89%, -0.59%, -0.30%). Three days is far too small to call an
+# edge -- it is enough to say the gate can now fire at all, which is the
+# precondition for ever learning whether it should.
+TNX_SPIKE_BPS = float(os.getenv("TRADING_TNX_SPIKE_BPS", "4.0"))
 
 # Breadth is judged on level and trend alike. Expressed as a drop in net
 # breadth ratio (advancers-minus-decliners over basket size) from its peak
@@ -152,6 +163,29 @@ RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
 # and 1,170 RSS fetches per session, for a qualitative read that does not
 # meaningfully change minute to minute.
 MACRO_REFRESH_MINUTES = float(os.getenv("TRADING_MACRO_REFRESH_MINUTES", "5"))
+
+def _record_macro_reading(vix, tnx) -> None:
+    """Persist the VIX and yield readings this cycle gated on.
+
+    Best-effort: losing a reading is not worth failing a trading cycle over.
+    """
+    from models_pgdb.trading_models import MacroReading
+    from config.db_pgrs import SessionLocal
+    try:
+        db = SessionLocal()
+        try:
+            db.add(MacroReading(
+                vix_level=vix.level, vix_session_open=vix.session_open,
+                vix_change_pct=vix.change_pct,
+                tnx_level=tnx.level, tnx_session_open=tnx.session_open,
+                tnx_change_bps=tnx.change_bps,
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Macro reading not recorded.")
+
 
 def _read_macro_cache():
     """Last macro read, or None if absent or stale.
@@ -348,6 +382,7 @@ async def market_signals_agent(state: TradingState) -> dict:
     breadth_trend = record_and_summarize(breadth)
     vix = fetch_vix()
     tnx = fetch_tnx()
+    _record_macro_reading(vix, tnx)
     # The headline read is the expensive half of this agent and the half that
     # does not change minute to minute, so it is refreshed on its own clock.
     now = datetime.now(ZoneInfo("America/New_York"))

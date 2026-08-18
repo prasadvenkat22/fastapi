@@ -21,7 +21,11 @@ LINE="* * * * * cd $APP_DIR && $COMPOSE exec -T app python scripts/run_cycle.py 
 touch "$LOG"
 
 # Idempotent: strip any previous version before adding this one.
-( crontab -l 2>/dev/null | grep -v "run_cycle.py" ; echo "$LINE" ) | crontab -
+#
+# The `|| true` matters. On an empty crontab `grep -v` gets no input and exits
+# 1, which under `set -e` aborts the subshell before the echo ever runs --
+# the result being a crontab installed with nothing in it, silently.
+( crontab -l 2>/dev/null | grep -v "run_cycle.py" || true ; echo "$LINE" ) | crontab -
 
 echo "installed:"
 crontab -l | grep run_cycle.py

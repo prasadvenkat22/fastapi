@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from GENAI.vector_stores import VoyageEmbeddings
 from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 
-from .broker import MockBrokerClient, MockSpreadPosition, estimate_spread_value, fill_price
+from .broker import (MockBrokerClient, MockSpreadPosition, estimate_credit_value,
+                      estimate_spread_value, fill_price, is_credit)
 from .data_feed import fetch_qqq_spot
 from .equity import current_equity
 from .graph import run_trading_cycle
@@ -54,10 +55,19 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         # spread at its full width immediately: every position showed a paper
         # gain on the next cycle and took profit regardless of the market.
         spot = fetch_qqq_spot()
-        # Marked where it could actually be sold — the bid.
-        current_value = fill_price(
-            estimate_spread_value(open_row.strategy, open_row.long_strike, open_row.short_strike, spot), "sell"
-        )
+        # Marked where the position could actually be closed. A debit spread
+        # is sold, so it marks at the bid; a credit spread is bought back, so
+        # it marks at the ask — the cost side is opposite because the trade is.
+        if is_credit(open_row.strategy):
+            current_value = fill_price(
+                estimate_credit_value(open_row.strategy, open_row.short_strike, open_row.long_strike, spot),
+                "buy",
+            )
+        else:
+            current_value = fill_price(
+                estimate_spread_value(open_row.strategy, open_row.long_strike, open_row.short_strike, spot),
+                "sell",
+            )
         position = MockSpreadPosition(
             strategy=open_row.strategy,
             underlying=open_row.underlying,
@@ -96,7 +106,15 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
     closed_this_cycle = bool(final_state.get("exit_reason"))
 
     if open_row is not None and closed_this_cycle:
-        realized_dollars = (pre_close_current_value - open_row.entry_net_debit) * open_row.quantity * 100
+        # Credit positions profit as the spread gets CHEAPER, so the sign
+        # flips: entry_net_debit holds the credit received, and the gain is
+        # what is left after buying it back.
+        per_spread = (
+            (open_row.entry_net_debit - pre_close_current_value)
+            if is_credit(open_row.strategy)
+            else (pre_close_current_value - open_row.entry_net_debit)
+        )
+        realized_dollars = per_spread * open_row.quantity * 100
         close_reason = _classify_close_reason(final_state.get("exit_reason", ""), pre_close_return_pct)
         db.add(TradeHistory(
             strategy=open_row.strategy,

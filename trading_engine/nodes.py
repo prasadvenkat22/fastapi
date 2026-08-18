@@ -21,13 +21,17 @@ from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import current_equity
-from .playbook import strikes_for, take_profit_for, window_for
+from .playbook import CREDIT, credit_strikes_for, strikes_for, thresholds_for, window_for
 from .broker import (
     BEAR_PUT_SPREAD,
     BULL_CALL_SPREAD,
     ITM_OFFSET,
     MockBrokerClient,
     default_mock_broker,
+    is_credit,
+    CALL_CREDIT_SPREAD,
+    PUT_CREDIT_SPREAD,
+    estimate_credit_value,
     estimate_spread_value,
     fill_price,
     round_to_strike,
@@ -525,6 +529,13 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
 
     if position is not None:
         return_pct = position.return_pct
+        # Thresholds belong to the strategy that OPENED the position. A credit
+        # spread judged on debit thresholds would read as catastrophically
+        # losing the instant it moved at all.
+        tp_pct, stop_pct, risk_off_pct = thresholds_for(
+            position.playbook, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, RISK_OFF_STOP_LOSS_PCT)
+        )
+        is_credit_pos = is_credit(position.strategy)
 
         # Rule Z: same-day expiration hard close — overrides P&L entirely.
         if force_close:
@@ -535,7 +546,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # position, not whatever window the clock is in now: an ATM spread is
         # still an ATM spread at 13:00, and holding it to the ITM target would
         # book it early for no reason.
-        elif return_pct >= take_profit_for(position.playbook, TAKE_PROFIT_PCT):
+        elif return_pct >= tp_pct:
             # Target reached. With trailing enabled this arms rather than
             # sells: the position runs while the 5-minute trend holds, so a
             # strong move is not truncated at a number chosen in advance.
@@ -549,13 +560,18 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # Price can round-trip a long way in 60 seconds and the exit only
             # sees it on the next tick. Trailing genuinely trades a capped,
             # certain gain for an uncapped, less certain one.
+            # Trailing applies to debit positions only. A credit spread's
+            # gain is bounded by the credit collected, so there is no tail to
+            # let run -- holding past the target only risks giving it back.
             trend_broken = (
                 (position.strategy == BULL_CALL_SPREAD and ema9_side == "BELOW_EMA9")
                 or (position.strategy == BEAR_PUT_SPREAD and ema9_side == "ABOVE_EMA9")
             )
-            if not TRAILING_EXITS_ENABLED or trend_broken:
+            if is_credit_pos or not TRAILING_EXITS_ENABLED or trend_broken:
                 broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "TAKE_PROFIT" if not TRAILING_EXITS_ENABLED else "TRAIL_STOP"
+                action, exit_reason = "SELL_ALL", (
+                    "TAKE_PROFIT" if (is_credit_pos or not TRAILING_EXITS_ENABLED) else "TRAIL_STOP"
+                )
             else:
                 action = "TRAILING"
                 logger.info(
@@ -563,16 +579,23 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     position.strategy, return_pct, take_profit_for(position.playbook, TAKE_PROFIT_PCT),
                 )
         # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
-        elif return_pct <= STOP_LOSS_PCT:
+        elif return_pct <= stop_pct:
             # place_buy_more adds `position.quantity` more contracts — it
             # doubles the position — so the affordability check has to price
             # that whole lot. Checking a single contract's cost (as this once
             # did) authorised roughly a 5x larger purchase than it verified,
             # and repeated doubling would have compounded the gap: 5 -> 10 ->
             # 20 -> 40 contracts, each step approved by a one-contract test.
+            # Never on a credit position. Scaling in doubles the position,
+            # and a credit spread's loss is bounded by width-minus-credit
+            # rather than by the premium paid -- doubling at the stop roughly
+            # doubles an already-maximal loss, on a thesis the market has
+            # already disproved. Averaging down into short premium is how
+            # accounts die.
             scale_in_cost = position.current_net_value * 100 * position.quantity
             if (
-                not past_cutoff
+                not is_credit_pos
+                and not past_cutoff
                 and sentiment == "GOOD"
                 and count < MAX_SCALE_INS
                 and available_cash >= scale_in_cost
@@ -600,7 +623,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         elif (
             sentiment == "BAD"
             and position.strategy == BULL_CALL_SPREAD
-            and return_pct <= RISK_OFF_STOP_LOSS_PCT
+            and return_pct <= risk_off_pct
         ):
             logger.warning(
                 "Risk-off exit: macro sentiment BAD with position at %.2f%% — closing early "
@@ -752,15 +775,34 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             if window is not None:
                 spot = fetch_qqq_spot()
                 atm_strike = round_to_strike(spot)
-                strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
-                long_strike, short_strike = strikes_for(window, atm_strike, bullish)
+                is_credit_window = window.placement == CREDIT
+                if is_credit_window:
+                    # Bullish sells puts below spot, bearish sells calls above.
+                    strategy = PUT_CREDIT_SPREAD if bullish else CALL_CREDIT_SPREAD
+                    short_strike, long_strike = credit_strikes_for(window, atm_strike, bullish)
+                else:
+                    strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
+                    long_strike, short_strike = strikes_for(window, atm_strike, bullish)
 
                 # Price the entry with the same model that reprices it next
                 # cycle. Sizing uses that price too, or the position costs
                 # something other than the budget it was sized against.
-                # Entry crosses the spread: you pay the ask.
-                net_debit = fill_price(estimate_spread_value(strategy, long_strike, short_strike, spot), "buy")
-                quantity = broker.estimate_spread_quantity(eq.equity * ENTRY_FRACTION, net_debit)
+                if is_credit_window:
+                    # Selling: you receive the BID, and size against capital
+                    # at risk (width - credit) rather than the credit itself.
+                    # A $3-wide sold for $0.40 collects $40 a contract and can
+                    # lose $260 -- sizing on the credit understates exposure
+                    # more than sixfold.
+                    net_debit = fill_price(
+                        estimate_credit_value(strategy, short_strike, long_strike, spot), "sell"
+                    )
+                    quantity = broker.estimate_credit_quantity(
+                        eq.equity * ENTRY_FRACTION, net_debit, window.width
+                    )
+                else:
+                    # Buying: you pay the ask.
+                    net_debit = fill_price(estimate_spread_value(strategy, long_strike, short_strike, spot), "buy")
+                    quantity = broker.estimate_spread_quantity(eq.equity * ENTRY_FRACTION, net_debit)
 
                 if quantity > 0:
                     playbook = f"{window.name}:{tier}"
@@ -771,7 +813,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         quantity, long_strike, short_strike, net_debit,
                         eq.equity, window.take_profit_pct,
                     )
-                    if bullish:
+                    if is_credit_window:
+                        broker.place_credit_spread(strategy, "QQQ", quantity,
+                                                   short_strike, long_strike, net_debit, playbook)
+                        action = "SELL_PUT_CREDIT" if bullish else "SELL_CALL_CREDIT"
+                    elif bullish:
                         broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit, playbook)
                         action = "BUY_CALL_SPREAD"
                     else:

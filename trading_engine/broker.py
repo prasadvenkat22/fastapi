@@ -15,6 +15,16 @@ from zoneinfo import ZoneInfo
 
 BULL_CALL_SPREAD = "BULL_CALL_SPREAD"
 BEAR_PUT_SPREAD = "BEAR_PUT_SPREAD"
+# Credit verticals: sell the near leg, buy the far one for protection. You are
+# paid to open and profit as the spread decays toward zero.
+CALL_CREDIT_SPREAD = "CALL_CREDIT_SPREAD"   # bearish/neutral — short call above spot
+PUT_CREDIT_SPREAD = "PUT_CREDIT_SPREAD"     # bullish/neutral — short put below spot
+
+CREDIT_STRATEGIES = (CALL_CREDIT_SPREAD, PUT_CREDIT_SPREAD)
+
+
+def is_credit(strategy: str) -> bool:
+    return strategy in CREDIT_STRATEGIES
 
 ITM_OFFSET = 3.0  # long leg is this far ITM relative to the ATM short leg
 STRIKE_INCREMENT = 1.0  # QQQ options strike spacing used for ATM rounding
@@ -93,6 +103,27 @@ def estimate_spread_value(
     return round(width * _normal_cdf(edge / sigma), 4)
 
 
+def estimate_credit_value(
+    strategy: str,
+    short_strike: float,
+    long_strike: float,
+    spot: float,
+    minutes_left: Optional[float] = None,
+) -> float:
+    """What it would cost to buy back a credit vertical right now.
+
+    A call credit spread is exactly a short bull call spread on the same two
+    strikes, and a put credit spread is a short bear put spread — so the cost
+    to close is the debit spread's value, and estimate_spread_value does the
+    work. Selling it means profiting as that number falls toward zero.
+    """
+    if strategy == CALL_CREDIT_SPREAD:
+        # short the nearer call, long the further one: equivalent to a bull
+        # call spread running from the short strike up to the long strike.
+        return estimate_spread_value(BULL_CALL_SPREAD, short_strike, long_strike, spot, minutes_left)
+    return estimate_spread_value(BEAR_PUT_SPREAD, short_strike, long_strike, spot, minutes_left)
+
+
 def estimate_intrinsic_value(strategy: str, long_strike: float, short_strike: float, spot: float) -> float:
     """Expiry payoff only — kept for the force-close path, where the position
     is being valued at expiration and time value is genuinely zero."""
@@ -119,8 +150,31 @@ class MockSpreadPosition:
     @property
     def return_pct(self) -> float:
         # Rounded to avoid float artifacts (e.g. 19.999999999999996 instead of
-        # 20.0) missing the take-profit/stop-loss threshold comparisons below.
+        # 20.0) missing the take-profit/stop-loss threshold comparisons.
+        if self.entry_net_debit == 0:
+            return 0.0
+        if is_credit(self.strategy):
+            # Credit positions are opened for a credit and profit as the
+            # spread decays, so the sign flips: entry_net_debit holds the
+            # credit received, and the denominator is that credit rather than
+            # capital at risk. Expressed this way +100% means the spread went
+            # to zero and you kept everything, and -100% is exactly the "buy
+            # it back at twice the premium" stop that credit traders use.
+            return round(((self.entry_net_debit - self.current_net_value) / self.entry_net_debit) * 100, 4)
         return round(((self.current_net_value - self.entry_net_debit) / self.entry_net_debit) * 100, 4)
+
+    @property
+    def capital_at_risk(self) -> float:
+        """Dollars that can actually be lost, per spread.
+
+        For a debit position that is the premium paid. For a credit position
+        it is width minus credit — larger than the credit collected, which is
+        the whole asymmetry of selling premium and the reason sizing cannot
+        use the credit as its denominator.
+        """
+        if is_credit(self.strategy):
+            return max(abs(self.short_strike - self.long_strike) - self.entry_net_debit, 0.0)
+        return self.entry_net_debit
 
 
 class MockBrokerClient:
@@ -201,6 +255,35 @@ class MockBrokerClient:
                 entry_net_debit=round(weighted_debit, 4), current_net_value=pos.current_net_value,
             )
         return {"status": "mock_filled", "action": "BUY_MORE", "underlying": underlying, "quantity": quantity}
+
+    def estimate_credit_quantity(self, budget: float, credit: float, width: float) -> int:
+        """Contracts a budget supports for a credit vertical.
+
+        Sized against capital at risk (width - credit), not the credit
+        received. A $3-wide spread sold for $0.40 collects $40 a contract but
+        can lose $260, so sizing on the credit would understate the exposure
+        by more than 6x.
+        """
+        risk = (width - credit) * 100
+        if risk <= 0:
+            return 0
+        return max(int(budget // risk), 0)
+
+    def place_credit_spread(self, strategy: str, underlying: str, quantity: int,
+                            short_strike: float, long_strike: float,
+                            credit: float, playbook: str = "") -> dict:
+        """Mock credit vertical. entry_net_debit carries the CREDIT received —
+        the field name is kept so persistence and repricing stay uniform, and
+        return_pct reads it correctly based on the strategy."""
+        self._position = MockSpreadPosition(
+            strategy=strategy, underlying=underlying, quantity=quantity,
+            long_strike=long_strike, short_strike=short_strike,
+            entry_net_debit=credit, current_net_value=credit, playbook=playbook,
+        )
+        return {
+            "status": "mock_filled", "action": strategy, "underlying": underlying,
+            "quantity": quantity, "short_strike": short_strike, "long_strike": long_strike,
+        }
 
     def sell_all(self, underlying: str) -> dict:
         self._position = None

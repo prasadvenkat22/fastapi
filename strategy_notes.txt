@@ -104,9 +104,10 @@ Sentiment is GOOD only if ALL of these hold. Any one flips it to BAD.
   10Y yield move         < +8bp from 09:30 open      (VELOCITY)
   Claude verdict         GOOD
 
-The two velocity terms exist because level checks alone cannot tell a market
-that IS bad from one that is BECOMING bad. VIX at 18 but +30% on the day,
-with breadth bled from +45 to +3, reads as perfectly calm on levels alone.
+THREE of the five terms measure velocity rather than level, because a level
+check alone cannot tell a market that IS bad from one that is BECOMING bad.
+VIX at 18 but +30% on the day, with breadth bled from +45 to +3 and the 10Y
+up 10bp, reads as perfectly calm on levels alone.
 
 Breadth velocity uses a ROLLING 30-minute peak, not the session peak. A
 session-peak anchor reads an ordinary all-day drift as an emergency and then
@@ -115,7 +116,7 @@ hours never trips; the same drop compressed into 15 minutes trips five times.
 
 The 10-year yield (^TNX) is the third velocity term and the only macro input
 that is NOT about fear. QQQ is the longest-duration equity index there is, so
-its multiple moves inversely with real rates — a yield spike is a direct
+its multiple moves inversely with real rates â€” a yield spike is a direct
 headwind that neither VIX nor breadth necessarily shows. Judged purely on
 intraday change: 4.3% tells you nothing, +8bp inside a session does.
 
@@ -124,7 +125,7 @@ supportive, and the flight-to-quality case where yields collapse in a crash
 arrives with a VIX spike the gate already catches.
 
 NOT from Tradier. Confirmed against the quotes endpoint that it carries none
-of TNX, $TNX, ^TNX, TNX.X or US10Y — only bond ETFs like IEF and TLT, which
+of TNX, $TNX, ^TNX, TNX.X or US10Y â€” only bond ETFs like IEF and TLT, which
 track price rather than yield. Sourced from yfinance instead, same as VIX.
 
 Both ^VIX and ^TNX return the EXTENDED session from yfinance (VIX from ~03:15

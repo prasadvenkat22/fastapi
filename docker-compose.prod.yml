@@ -46,7 +46,17 @@ services:
           # headroom before a trading cycle allocated anything.
           memory: 1G
     # Remove --reload flag for production
-    command: bash -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2"
+    # ONE worker, not two. The trading scheduler is per-process module state
+    # (trading_engine/scheduler.py holds _task in a module global), so with two
+    # workers it starts in whichever one served the request and the other knows
+    # nothing about it. Status then reports from whichever worker answers, and
+    # more dangerously so does /scheduler/stop -- you could believe you had
+    # halted trading when you had not. Calling start twice could also run two
+    # schedulers racing on the single open-position row.
+    #
+    # This app is low-traffic and scheduler correctness matters more than
+    # request concurrency. Also halves the container's memory.
+    command: bash -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1"
     # Don't mount local volumes in production
     volumes: []
     restart: always

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from GENAI.vector_stores import VoyageEmbeddings
 from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 
-from .broker import MockBrokerClient, MockSpreadPosition, estimate_spread_value
+from .broker import MockBrokerClient, MockSpreadPosition, estimate_spread_value, fill_price
 from .data_feed import fetch_qqq_spot
 from .equity import current_equity
 from .graph import run_trading_cycle
@@ -54,7 +54,10 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         # spread at its full width immediately: every position showed a paper
         # gain on the next cycle and took profit regardless of the market.
         spot = fetch_qqq_spot()
-        current_value = estimate_spread_value(open_row.strategy, open_row.long_strike, open_row.short_strike, spot)
+        # Marked where it could actually be sold — the bid.
+        current_value = fill_price(
+            estimate_spread_value(open_row.strategy, open_row.long_strike, open_row.short_strike, spot), "sell"
+        )
         position = MockSpreadPosition(
             strategy=open_row.strategy,
             underlying=open_row.underlying,

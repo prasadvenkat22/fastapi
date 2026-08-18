@@ -29,6 +29,7 @@ from .broker import (
     MockBrokerClient,
     default_mock_broker,
     estimate_spread_value,
+    fill_price,
     round_to_strike,
 )
 from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_qqq_spot, fetch_tnx, fetch_vix
@@ -703,7 +704,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 # Price the entry with the same model that reprices it next
                 # cycle. Sizing uses that price too, or the position costs
                 # something other than the budget it was sized against.
-                net_debit = estimate_spread_value(strategy, long_strike, short_strike, spot)
+                # Entry crosses the spread: you pay the ask.
+                net_debit = fill_price(estimate_spread_value(strategy, long_strike, short_strike, spot), "buy")
                 quantity = broker.estimate_spread_quantity(eq.equity * ENTRY_FRACTION, net_debit)
 
                 if quantity > 0:

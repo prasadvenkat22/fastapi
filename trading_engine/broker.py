@@ -37,6 +37,26 @@ SESSION_MINUTES = 6.5 * 60           # 09:30–16:00
 # term below. ~1% is a normal day; raise it to model a jumpier tape.
 DAILY_VOL_PCT = float(os.getenv("TRADING_DAILY_VOL_PCT", "1.0"))
 
+# Full bid-ask width of the vertical, in dollars per spread. You buy at the
+# ask and sell at the bid, so half is paid entering and half leaving.
+#
+# This was missing entirely, and it is not a rounding error: a $3-wide QQQ
+# vertical quotes roughly $0.05-0.10 wide, which on a $1.19 ATM spread is
+# 4-8% of the position's whole value. Ignoring it made every recorded P&L
+# optimistic by more than the entire risk-off stop.
+SLIPPAGE_PER_SPREAD = float(os.getenv("TRADING_SLIPPAGE_PER_SPREAD", "0.05"))
+
+
+def fill_price(model_value: float, side: str) -> float:
+    """Model value adjusted to a realistic fill.
+
+    side='buy' pays the ask, side='sell' receives the bid. A position is
+    therefore underwater by the full width the instant it opens, which is
+    what actually happens and what the old frictionless model hid.
+    """
+    half = SLIPPAGE_PER_SPREAD / 2.0
+    return round(max(model_value + half, 0.0), 4) if side == "buy" else round(max(model_value - half, 0.0), 4)
+
 
 def round_to_strike(price: float, increment: float = STRIKE_INCREMENT) -> float:
     return round(price / increment) * increment

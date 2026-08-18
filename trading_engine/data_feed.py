@@ -101,12 +101,35 @@ class MarketBreadth:
     basket_size: int
 
 
-def fetch_qqq_bars(period: str = "5d", interval: str = "1m") -> pd.DataFrame:
-    """1-minute intraday QQQ bars via yfinance. Columns: Open, High, Low, Close, Volume."""
-    bars = yf.Ticker("QQQ").history(period=period, interval=interval)
+# Bar size the indicators are computed on. 5-minute, not 1-minute: on 1-minute
+# bars a "20-period" Bollinger band spans 20 MINUTES and a 14-period RSI spans
+# 14, which are scalping horizons, while this engine holds positions for tens
+# of minutes and targets 30-60% moves. Measured against a month of history,
+# running the same gates on 1-minute bars fired 18 signals a day where 5-minute
+# bars fired 2.8 — against a market that offers roughly 2.8 tradeable moves.
+# The indicators were simply on a faster clock than the strategy.
+BAR_INTERVAL = os.getenv("TRADING_BAR_INTERVAL", "5m")
+
+
+def fetch_qqq_bars(period: str = "5d", interval: str = None) -> pd.DataFrame:
+    """Intraday QQQ bars via yfinance at BAR_INTERVAL. Columns: Open, High, Low, Close, Volume."""
+    bars = yf.Ticker("QQQ").history(period=period, interval=interval or BAR_INTERVAL)
     if bars.empty:
         raise RuntimeError("yfinance returned no QQQ bars — market may be closed or the symbol is unavailable.")
     return bars
+
+
+def fetch_qqq_spot() -> float:
+    """Freshest QQQ price, from 1-minute bars.
+
+    Separate from the indicator series on purpose: a 5-minute bar's close can
+    be five minutes stale, which is fine for a moving average and not fine for
+    pricing a spread or choosing a strike.
+    """
+    bars = yf.Ticker("QQQ").history(period="1d", interval="1m")
+    if bars.empty:
+        return float(fetch_qqq_bars()["Close"].iloc[-1])
+    return float(bars["Close"].iloc[-1])
 
 
 def _regular_session_open(bars: pd.DataFrame) -> float:

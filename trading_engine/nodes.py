@@ -31,7 +31,7 @@ from .broker import (
     estimate_spread_value,
     round_to_strike,
 )
-from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_tnx, fetch_vix
+from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_qqq_spot, fetch_tnx, fetch_vix
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,10 @@ MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "3"))
 # Whether the RELAXED entry tier trades at all. Set false to fall back to the
 # original strict gate everywhere.
 RELAXED_ENTRIES_ENABLED = os.getenv("TRADING_RELAXED_ENTRIES", "true").lower() == "true"
+
+# Whether the MOMENTUM tier trades: a 20-period midline cross with MACD and
+# trend agreeing, catching moves that never stretch far enough to touch a band.
+MOMENTUM_ENTRIES_ENABLED = os.getenv("TRADING_MOMENTUM_ENTRIES", "true").lower() == "true"
 
 # Opening warmup. Entries wait this many minutes after the bell so the
 # opening auction's whipsaws don't get read as a trend; position management
@@ -194,7 +198,19 @@ def bollinger_agent(state: TradingState) -> dict:
     else:
         zone = "NORMAL"
 
-    return {"bollinger_zone": zone}
+    # Midline cross: price closing through its 20-period mean. A different
+    # thesis from a band pierce -- the band says "stretched", the midline says
+    # "trend just turned" -- which is why the momentum tier uses it.
+    prev_close = close.iloc[-2] if len(close) >= 2 else last_close
+    prev_mid = window.mean().iloc[-2] if len(close) >= 2 else mid
+    if last_close > mid and prev_close <= prev_mid:
+        cross = "CROSS_UP"
+    elif last_close < mid and prev_close >= prev_mid:
+        cross = "CROSS_DOWN"
+    else:
+        cross = "NONE"
+
+    return {"bollinger_zone": zone, "bollinger_cross": cross}
 
 
 def rsi_agent(state: TradingState) -> dict:
@@ -399,6 +415,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     macd = state.get("macd_signal")
     sma = state.get("sma_trend")
     bb = state.get("bollinger_zone")
+    bb_cross = state.get("bollinger_cross")
     rsi = state.get("rsi_zone")
     count = state.get("buy_more_count", 0)
 
@@ -535,10 +552,30 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             and bb in ("UPPER_BAND", "LOWER_BAND") and sentiment == "GOOD"
         )
 
+        # MOMENTUM: price closing back through its 20-period mean with MACD
+        # and trend agreeing. A trend-turning thesis rather than a
+        # mean-reversion one, so it catches moves that never reach a band.
+        #
+        # Deliberately NOT "rising RSI", which was the other candidate. RSI
+        # merely ticking up fired on 21 bars a day against a market with ~2.8
+        # tradeable moves -- it describes the last few bars rather than
+        # identifying anything, and trading it would mostly be paying the
+        # debit to enter noise.
+        momentum_bull = (
+            macd == "BULLISH" and sma == "ABOVE_SMA"
+            and bb_cross == "CROSS_UP" and sentiment == "GOOD"
+        )
+        momentum_bear = (
+            macd == "BEARISH" and sma == "BELOW_SMA"
+            and bb_cross == "CROSS_DOWN" and sentiment == "GOOD"
+        )
+
         if strict_bull or strict_bear:
             tier, bullish = "STRICT", strict_bull
         elif RELAXED_ENTRIES_ENABLED and (relaxed_bull or relaxed_bear):
             tier, bullish = "RELAXED", relaxed_bull
+        elif MOMENTUM_ENTRIES_ENABLED and (momentum_bull or momentum_bear):
+            tier, bullish = "MOMENTUM", momentum_bull
         else:
             tier, bullish = None, False
         bearish = tier is not None and not bullish
@@ -565,7 +602,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 action = "HALTED_DAILY_LOSS"
 
             if window is not None:
-                spot = float(fetch_qqq_bars()["Close"].iloc[-1])
+                spot = fetch_qqq_spot()
                 atm_strike = round_to_strike(spot)
                 strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
                 long_strike, short_strike = strikes_for(window, atm_strike, bullish)

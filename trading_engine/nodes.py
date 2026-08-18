@@ -104,6 +104,20 @@ BREADTH_COLLAPSE_RATIO = float(os.getenv("TRADING_BREADTH_COLLAPSE_RATIO", "0.40
 RSI_OVERBOUGHT = float(os.getenv("TRADING_RSI_OVERBOUGHT", "70.0"))
 RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
 
+# How long the headline read (RSS scrape + Voyage embedding + Claude verdict)
+# is reused before being refreshed. The deterministic gates -- breadth, VIX,
+# TNX -- always recompute, because those are the velocity signals that exist
+# precisely to catch sudden change.
+#
+# This exists so the cycle interval and the macro cost can move independently.
+# At a 1-minute cadence an uncached macro pass would mean ~390 Claude calls
+# and 1,170 RSS fetches per session, for a qualitative read that does not
+# meaningfully change minute to minute.
+MACRO_REFRESH_MINUTES = float(os.getenv("TRADING_MACRO_REFRESH_MINUTES", "5"))
+
+# (verdict, timestamp) of the last headline read.
+_macro_cache: tuple = (None, None)
+
 RSS_FEEDS = [
     "https://finance.yahoo.com/news/rssindex",
     "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
@@ -232,13 +246,25 @@ async def market_signals_agent(state: TradingState) -> dict:
     breadth_trend = record_and_summarize(breadth)
     vix = fetch_vix()
     tnx = fetch_tnx()
-    headlines = _scrape_headlines()
+    # The headline read is the expensive half of this agent and the half that
+    # does not change minute to minute, so it is refreshed on its own clock.
+    global _macro_cache
+    cached_verdict, cached_at = _macro_cache
+    now = datetime.now(ZoneInfo("America/New_York"))
+    cache_fresh = (
+        cached_verdict is not None
+        and cached_at is not None
+        and (now - cached_at).total_seconds() < MACRO_REFRESH_MINUTES * 60
+    )
 
-    embeddings = VoyageEmbeddings()
-    if headlines:
-        await store_headlines(headlines, embeddings)
-
-    similar_past_headlines = await query_similar_headlines(headlines, embeddings, top_k=3) if headlines else []
+    headlines: List[str] = []
+    similar_past_headlines: List[str] = []
+    if not cache_fresh:
+        headlines = _scrape_headlines()
+        embeddings = VoyageEmbeddings()
+        if headlines:
+            await store_headlines(headlines, embeddings)
+        similar_past_headlines = await query_similar_headlines(headlines, embeddings, top_k=3) if headlines else []
 
     # $TICKQ is intentionally not used — confirmed live against both Tradier
     # sandbox and production that this symbol doesn't exist in their catalog,
@@ -264,7 +290,7 @@ async def market_signals_agent(state: TradingState) -> dict:
             breadth_trend.recent_peak_ratio, breadth_trend.reading_count,
         )
 
-    llm = ChatAnthropic(model="claude-opus-5", max_tokens=1024).with_structured_output(MarketSentimentOutput)
+    llm = None if cache_fresh else ChatAnthropic(model="claude-opus-5", max_tokens=1024).with_structured_output(MarketSentimentOutput)
     prompt = (
         "You are a macro risk classifier for a same-day QQQ options trading system. "
         "Classify today's market risk as GOOD (safe to hold/enter a bullish position) or BAD (risk-off).\n\n"
@@ -291,7 +317,12 @@ async def market_signals_agent(state: TradingState) -> dict:
             if similar_past_headlines else ""
         )
     )
-    llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
+    if cache_fresh:
+        llm_verdict = cached_verdict
+    else:
+        llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
+        llm_verdict = llm_result.verdict
+        _macro_cache = (llm_verdict, now)
 
     # VIX is gated on level *and* velocity — a sharp intraday spike is
     # risk-off even when the absolute level is still under the ceiling,
@@ -309,7 +340,7 @@ async def market_signals_agent(state: TradingState) -> dict:
         and vix.level < VIX_LEVEL_MAX
         and vix.change_pct < VIX_SPIKE_PCT
         and not yields_spiking
-        and llm_result.verdict == "GOOD"
+        and llm_verdict == "GOOD"
     ) else "BAD"
 
     return {"market_sentiment": sentiment}
@@ -430,7 +461,18 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             )
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "RISK_OFF"
-    elif not past_cutoff and not in_warmup:
+    # Entry is checked after management rather than as an `elif`, so a cycle
+    # that takes profit can immediately look for the next setup instead of
+    # sitting flat for a full tick. On a 5-minute cadence that dead cycle was
+    # costing a whole bar of a session that only offers ~3 tradeable moves.
+    #
+    # Only after a TAKE_PROFIT. Re-entering straight after a stop or a
+    # risk-off cut would just re-open the setup that had already failed --
+    # the signals will still be saying the same thing, so it would churn
+    # through the stop repeatedly.
+    may_reenter = position is None or exit_reason == "TAKE_PROFIT"
+
+    if broker.get_open_position() is None and may_reenter and not past_cutoff and not in_warmup:
         # Bullish: bull call debit spread (long ITM call, short ATM call).
         # Bearish: bear put debit spread (long ITM put, short ATM put). Same
         # market_sentiment=GOOD gate either direction (a calm macro

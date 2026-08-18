@@ -24,7 +24,12 @@ MARKET_OPEN = (9, 30)   # EST
 MARKET_CLOSE = (16, 0)  # EST
 
 _task: Optional[asyncio.Task] = None
-_interval_seconds: int = 300
+# 60s, not 300s. QQQ offers roughly three tradeable five-minute moves in a
+# session, and at a 5-minute cadence a move that begins and ends inside one
+# bar is invisible. The expensive half of the macro read is cached on its own
+# clock (nodes.MACRO_REFRESH_MINUTES) so the faster cadence does not multiply
+# the Claude and RSS cost.
+_interval_seconds: int = 60
 
 
 def is_running() -> bool:
@@ -64,7 +69,7 @@ async def _loop():
         await asyncio.sleep(_interval_seconds)
 
 
-def start(interval_seconds: int = 300) -> bool:
+def start(interval_seconds: int = 60) -> bool:
     """Returns False if already running (no-op), True if it just started."""
     global _task, _interval_seconds
     if is_running():

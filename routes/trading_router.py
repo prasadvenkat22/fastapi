@@ -168,7 +168,7 @@ async def playbook_performance(db: db_dependency):
 
 
 @router.post("/scheduler/start", response_model=SchedulerStatusResponse)
-async def start_scheduler(interval_minutes: int = Query(5, ge=1, le=60)):
+async def start_scheduler(interval_minutes: int = Query(1, ge=1, le=60)):
     """Starts the background loop that re-runs the trading cycle on an
     interval during market hours (9:30AM-4:00PM EST, weekdays) — never
     starts on its own, only via this endpoint. Calling it again while

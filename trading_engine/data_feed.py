@@ -29,10 +29,18 @@ MARKET_OPEN_ET = time(9, 30)
 TRADIER_SANDBOX_URL = "https://sandbox.tradier.com/v1/markets/quotes"
 TRADIER_PRODUCTION_URL = "https://api.tradier.com/v1/markets/quotes"
 
-# Representative basket of large, liquid Nasdaq-100 constituents used to
-# approximate market breadth. Not the literal current index membership —
-# index composition changes over time and would need its own maintained data
-# source to track exactly; this static list is a reasonable, honest proxy.
+# Nasdaq-100 constituents used to compute market breadth.
+#
+# Deliberately the Nasdaq-100 rather than the whole exchange. The real $ADDQ
+# counts advancers and decliners across all ~3,000 Nasdaq-listed issues and is
+# dominated by small caps — but QQQ tracks the Nasdaq-100, so on a day when
+# small caps and mega caps diverge, full-market breadth describes stocks the
+# traded instrument does not hold. Index breadth is the better-matched signal
+# here, not a degraded substitute for it.
+#
+# Still a static list: index composition changes and tracking it exactly would
+# need its own maintained data source. Expect slow drift, and revalidate
+# against Tradier when refreshing it.
 NASDAQ_BREADTH_BASKET = [
     "AAPL", "MSFT", "NVDA", "GOOGL", "GOOG", "AMZN", "META", "AVGO", "TSLA", "COST",
     "NFLX", "AMD", "PEP", "ADBE", "CSCO", "TMUS", "LIN", "INTC", "INTU", "QCOM",
@@ -41,6 +49,15 @@ NASDAQ_BREADTH_BASKET = [
     "MELI", "CRWD", "MAR", "ORLY", "CSX", "ABNB", "FTNT", "ADP", "PCAR", "NXPI",
     "MNST", "PAYX", "ROP", "DXCM", "AEP", "ODFL", "KDP", "EXC", "CTAS", "CHTR",
     "MRVL", "WDAY", "KHC",
+    # Expanded to full Nasdaq-100 coverage. The basket was 63 names, so more
+    # than a third of the index QQQ actually tracks was invisible to the
+    # breadth signal. Every symbol below was validated against Tradier's
+    # quotes endpoint first; ANSS, WBA and EA were dropped from the candidate
+    # list because they no longer trade as independent symbols.
+    "CEG", "TTD", "DDOG", "TEAM", "CPRT", "FAST", "ROST", "VRSK", "CTSH", "IDXX",
+    "FANG", "XEL", "GEHC", "CCEP", "TTWO", "ON", "CDW", "BIIB", "GFS", "MDB",
+    "ZS", "ILMN", "WBD", "DLTR", "LULU", "MRNA", "ARM", "SMCI", "APP", "PLTR",
+    "MSTR", "AXON", "BKR", "CSGP", "TSCO", "ALGN", "ENPH",
 ]
 
 

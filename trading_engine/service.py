@@ -85,7 +85,14 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
 
     closed_trade = None  # set below if a position fully closed this cycle
 
-    if open_row is not None and new_position is None:
+    # A cycle can now close one position and open another (same-cycle
+    # re-entry after a take-profit), so "was open, is open" no longer implies
+    # nothing closed. exit_reason is what actually says a position closed —
+    # keying off new_position alone would take the update-in-place branch and
+    # silently lose the closed trade's realized P&L.
+    closed_this_cycle = bool(final_state.get("exit_reason"))
+
+    if open_row is not None and closed_this_cycle:
         realized_dollars = (pre_close_current_value - open_row.entry_net_debit) * open_row.quantity * 100
         close_reason = _classify_close_reason(final_state.get("exit_reason", ""), pre_close_return_pct)
         db.add(TradeHistory(
@@ -116,29 +123,34 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             "close_reason": close_reason,
         }
         db.delete(open_row)
-    elif open_row is not None and new_position is not None:
-        # Still open — unchanged (HOLD) or updated (BUY_MORE). Update in
-        # place, preserving the original opened_at and entry signals.
-        open_row.strategy = new_position.strategy
-        open_row.underlying = new_position.underlying
-        open_row.quantity = new_position.quantity
-        open_row.long_strike = new_position.long_strike
-        open_row.short_strike = new_position.short_strike
-        open_row.entry_net_debit = new_position.entry_net_debit
-    elif open_row is None and new_position is not None:
-        db.add(OpenPosition(
-            strategy=new_position.strategy,
-            underlying=new_position.underlying,
-            quantity=new_position.quantity,
-            long_strike=new_position.long_strike,
-            short_strike=new_position.short_strike,
-            entry_net_debit=new_position.entry_net_debit,
-            playbook=final_state.get("playbook"),
-            entry_macd_signal=final_state.get("macd_signal"),
-            entry_sma_trend=final_state.get("sma_trend"),
-            entry_bollinger_zone=final_state.get("bollinger_zone"),
-            entry_rsi_zone=final_state.get("rsi_zone"),
-        ))
+        db.flush()      # release the row before any replacement is inserted
+        open_row = None  # anything opened below is a fresh position
+
+    if new_position is not None:
+        if open_row is None:
+            db.add(OpenPosition(
+                strategy=new_position.strategy,
+                underlying=new_position.underlying,
+                quantity=new_position.quantity,
+                long_strike=new_position.long_strike,
+                short_strike=new_position.short_strike,
+                entry_net_debit=new_position.entry_net_debit,
+                playbook=final_state.get("playbook"),
+                entry_macd_signal=final_state.get("macd_signal"),
+                entry_sma_trend=final_state.get("sma_trend"),
+                entry_bollinger_zone=final_state.get("bollinger_zone"),
+                entry_rsi_zone=final_state.get("rsi_zone"),
+            ))
+        else:
+            # Still the same position — unchanged (HOLD) or added to
+            # (BUY_MORE). Updated in place so opened_at and the entry signals
+            # aren't reset on every cycle.
+            open_row.strategy = new_position.strategy
+            open_row.underlying = new_position.underlying
+            open_row.quantity = new_position.quantity
+            open_row.long_strike = new_position.long_strike
+            open_row.short_strike = new_position.short_strike
+            open_row.entry_net_debit = new_position.entry_net_debit
 
     db.add(TradingLog(
         execution_status=final_state.get("execution_status", ""),

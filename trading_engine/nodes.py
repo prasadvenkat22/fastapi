@@ -20,7 +20,15 @@ from GENAI.vector_stores import VoyageEmbeddings
 from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
-from .broker import ITM_OFFSET, MockBrokerClient, default_mock_broker, round_to_strike
+from .broker import (
+    BEAR_PUT_SPREAD,
+    BULL_CALL_SPREAD,
+    ITM_OFFSET,
+    MockBrokerClient,
+    default_mock_broker,
+    estimate_spread_value,
+    round_to_strike,
+)
 from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_vix
 from .state import TradingState
 
@@ -407,16 +415,22 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         if bullish or bearish:
             spot = float(fetch_qqq_bars()["Close"].iloc[-1])
             atm_strike = round_to_strike(spot)
-            quantity = broker.estimate_spread_quantity(POSITION_BUDGET * ENTRY_FRACTION)
+
+            # Price the entry with the same model that reprices it next cycle.
+            # Sizing has to use that price too, or the position costs
+            # something other than the budget it was sized against.
+            strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
+            long_strike = atm_strike - ITM_OFFSET if bullish else atm_strike + ITM_OFFSET
+            short_strike = atm_strike
+            net_debit = estimate_spread_value(strategy, long_strike, short_strike, spot)
+            quantity = broker.estimate_spread_quantity(POSITION_BUDGET * ENTRY_FRACTION, net_debit)
 
             if quantity > 0:
                 if bullish:
-                    long_strike, short_strike = atm_strike - ITM_OFFSET, atm_strike
-                    broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike)
+                    broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit)
                     action = "BUY_CALL_SPREAD"
                 else:
-                    long_strike, short_strike = atm_strike + ITM_OFFSET, atm_strike
-                    broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike)
+                    broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike, net_debit)
                     action = "BUY_PUT_SPREAD"
 
     return {

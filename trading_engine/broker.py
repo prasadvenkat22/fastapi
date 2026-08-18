@@ -6,9 +6,12 @@ Models defined-risk debit vertical spreads (bull call spread / bear put
 spread) rather than a naked long option: buy one ITM leg, sell one ATM leg
 against it. Max loss is capped at the net debit paid, unlike a naked long."""
 
+import math
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 BULL_CALL_SPREAD = "BULL_CALL_SPREAD"
 BEAR_PUT_SPREAD = "BEAR_PUT_SPREAD"
@@ -16,17 +19,83 @@ BEAR_PUT_SPREAD = "BEAR_PUT_SPREAD"
 ITM_OFFSET = 3.0  # long leg is this far ITM relative to the ATM short leg
 STRIKE_INCREMENT = 1.0  # QQQ options strike spacing used for ATM rounding
 
+NY = ZoneInfo("America/New_York")
+EXPIRY_HOUR, EXPIRY_MINUTE = 16, 0   # QQQ options expire at today's close
+SESSION_MINUTES = 6.5 * 60           # 09:30–16:00
+
+# Rough daily move for QQQ as a fraction of spot, used to size the time-value
+# term below. ~1% is a normal day; raise it to model a jumpier tape.
+DAILY_VOL_PCT = float(os.getenv("TRADING_DAILY_VOL_PCT", "1.0"))
+
 
 def round_to_strike(price: float, increment: float = STRIKE_INCREMENT) -> float:
     return round(price / increment) * increment
 
 
+def minutes_to_expiry(now: Optional[datetime] = None) -> float:
+    """Minutes left until today's 16:00 ET expiration, clamped at zero."""
+    now = now or datetime.now(NY)
+    expiry = now.replace(hour=EXPIRY_HOUR, minute=EXPIRY_MINUTE, second=0, microsecond=0)
+    return max((expiry - now).total_seconds() / 60.0, 0.0)
+
+
+def _normal_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def estimate_spread_value(
+    strategy: str,
+    long_strike: float,
+    short_strike: float,
+    spot: float,
+    minutes_left: Optional[float] = None,
+) -> float:
+    """Per-spread value of a debit vertical, including time value.
+
+    Intrinsic alone is not usable here, and the reason is specific to this
+    strategy's shape. The long leg sits ITM and the short leg sits ATM, so at
+    the moment of entry the spread's intrinsic value already equals its full
+    width — price it on intrinsic and a position is worth its maximum the
+    instant it opens, showing an immediate paper gain and taking profit on
+    the very next cycle no matter what the market did.
+
+    A vertical's value is better read as the width scaled by how likely it is
+    to finish in the money. Modelled here as a normal CDF centred on the
+    midpoint between the strikes, with the spread of that distribution
+    shrinking as expiry approaches:
+
+        value = width * N( (distance past the midpoint) / (sigma * sqrt(t)) )
+
+    That converges to the true expiry payoff — as t goes to zero the CDF
+    becomes the hard clamp intrinsic gives — while behaving sensibly
+    intraday. It also reproduces the positive theta this structure actually
+    has: hold above the short strike and the value drifts up toward the
+    width as time runs out, which is the whole reason for buying ITM.
+    """
+    width = abs(short_strike - long_strike)
+    if width == 0:
+        return 0.0
+
+    minutes_left = minutes_to_expiry() if minutes_left is None else minutes_left
+
+    # Signed distance from the midpoint, in the direction that profits.
+    midpoint = (long_strike + short_strike) / 2.0
+    edge = (spot - midpoint) if strategy == BULL_CALL_SPREAD else (midpoint - spot)
+
+    if minutes_left <= 0:
+        # At expiry the payoff is the plain clamp.
+        return round(max(0.0, min(edge + width / 2.0, width)), 4)
+
+    sigma = spot * (DAILY_VOL_PCT / 100.0) * math.sqrt(minutes_left / SESSION_MINUTES)
+    if sigma <= 0:
+        return round(max(0.0, min(edge + width / 2.0, width)), 4)
+
+    return round(width * _normal_cdf(edge / sigma), 4)
+
+
 def estimate_intrinsic_value(strategy: str, long_strike: float, short_strike: float, spot: float) -> float:
-    """Approximate a debit vertical spread's current per-spread value from
-    intrinsic value only (spot vs. strikes), ignoring time value/greeks —
-    there's no live option-chain quote feed wired up, so this is the honest
-    mocked stand-in: what the spread would be worth if it expired right now,
-    clamped to the spread's width."""
+    """Expiry payoff only — kept for the force-close path, where the position
+    is being valued at expiration and time value is genuinely zero."""
     width = abs(short_strike - long_strike)
     if strategy == BULL_CALL_SPREAD:
         value = spot - long_strike
@@ -74,32 +143,44 @@ class MockBrokerClient:
     def get_available_cash(self) -> float:
         return self._available_cash
 
-    def estimate_spread_quantity(self, budget: float) -> int:
+    def estimate_spread_quantity(self, budget: float, net_debit: Optional[float] = None) -> int:
         """How many spread contracts (100 shares/contract) the given dollar
-        budget buys at the mocked net-debit estimate. Real order sizing would
-        query the actual option chain instead of this mocked estimate."""
-        cost_per_contract = self._mock_net_debit_estimate * 100
-        return max(int(budget // cost_per_contract), 0)
+        budget buys at `net_debit`. Real order sizing would query the actual
+        option chain; pass the modelled entry price so sizing and fill agree.
+        """
+        debit = self._mock_net_debit_estimate if net_debit is None else net_debit
+        if debit <= 0:
+            return 0
+        return max(int(budget // (debit * 100)), 0)
 
-    def place_bull_call_spread(self, underlying: str, quantity: int, long_strike: float, short_strike: float) -> dict:
+    def place_bull_call_spread(self, underlying: str, quantity: int, long_strike: float, short_strike: float,
+                               net_debit: Optional[float] = None) -> dict:
         """Mock order placement — no network call, no real order. Updates the
         in-memory position so callers (e.g. the router, to persist state
-        across cycles) can read back what's now open via get_open_position()."""
+        across cycles) can read back what's now open via get_open_position().
+
+        net_debit should come from estimate_spread_value() so the fill price
+        matches what the next cycle reprices the position at; a fill that
+        disagrees with the pricing model shows a phantom gain or loss the
+        moment the position opens."""
+        debit = self._mock_net_debit_estimate if net_debit is None else net_debit
         self._position = MockSpreadPosition(
             strategy=BULL_CALL_SPREAD, underlying=underlying, quantity=quantity,
             long_strike=long_strike, short_strike=short_strike,
-            entry_net_debit=self._mock_net_debit_estimate, current_net_value=self._mock_net_debit_estimate,
+            entry_net_debit=debit, current_net_value=debit,
         )
         return {
             "status": "mock_filled", "action": BULL_CALL_SPREAD, "underlying": underlying,
             "quantity": quantity, "long_strike": long_strike, "short_strike": short_strike,
         }
 
-    def place_bear_put_spread(self, underlying: str, quantity: int, long_strike: float, short_strike: float) -> dict:
+    def place_bear_put_spread(self, underlying: str, quantity: int, long_strike: float, short_strike: float,
+                              net_debit: Optional[float] = None) -> dict:
+        debit = self._mock_net_debit_estimate if net_debit is None else net_debit
         self._position = MockSpreadPosition(
             strategy=BEAR_PUT_SPREAD, underlying=underlying, quantity=quantity,
             long_strike=long_strike, short_strike=short_strike,
-            entry_net_debit=self._mock_net_debit_estimate, current_net_value=self._mock_net_debit_estimate,
+            entry_net_debit=debit, current_net_value=debit,
         )
         return {
             "status": "mock_filled", "action": BEAR_PUT_SPREAD, "underlying": underlying,

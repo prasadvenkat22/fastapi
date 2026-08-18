@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from GENAI.vector_stores import VoyageEmbeddings
 from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 
-from .broker import MockBrokerClient, MockSpreadPosition, estimate_intrinsic_value
+from .broker import MockBrokerClient, MockSpreadPosition, estimate_spread_value
 from .data_feed import fetch_qqq_bars
 from .graph import run_trading_cycle
 from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
@@ -47,10 +47,13 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
 
     if open_row is not None:
         # No live option-chain feed is wired up — reprice the open spread
-        # from intrinsic value against today's live QQQ spot as an honest
-        # mocked approximation (ignores time value/greeks).
+        # against today's live QQQ spot with the same model that priced the
+        # entry (see broker.estimate_spread_value). Repricing on intrinsic
+        # alone, as this once did, valued a freshly opened long-ITM/short-ATM
+        # spread at its full width immediately: every position showed a paper
+        # gain on the next cycle and took profit regardless of the market.
         spot = float(fetch_qqq_bars()["Close"].iloc[-1])
-        current_value = estimate_intrinsic_value(open_row.strategy, open_row.long_strike, open_row.short_strike, spot)
+        current_value = estimate_spread_value(open_row.strategy, open_row.long_strike, open_row.short_strike, spot)
         position = MockSpreadPosition(
             strategy=open_row.strategy,
             underlying=open_row.underlying,

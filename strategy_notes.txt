@@ -1,0 +1,287 @@
+================================================================================
+QQQ 0DTE TRADING ENGINE — STRATEGY NOTES
+================================================================================
+Last updated: 2026-08-17
+Code: trading_engine/   Config: .env.production.example (all TRADING_* vars)
+
+Everything here is MOCKED. The broker places no real orders. Read the
+"Known limits" section before treating any P&L number as meaningful.
+
+
+================================================================================
+1. WHAT THE ENGINE TRADES
+================================================================================
+
+Defined-risk debit vertical spreads on QQQ, expiring same day (0DTE).
+Long the in-the-money leg, short the at-the-money leg, $3 wide.
+
+  Bullish -> BULL_CALL_SPREAD   long (ATM-3) call, short ATM call
+  Bearish -> BEAR_PUT_SPREAD    long (ATM+3) put,  short ATM put
+
+Both directions exist. It is not a call-only strategy.
+
+Why a spread and not a naked long option: max loss is capped at the net debit
+paid. A naked long can lose everything with no floor and needs a larger move
+to overcome its premium.
+
+Why long ITM / short ATM specifically:
+  - The long ITM leg carries little extrinsic value, so there is little time
+    premium to lose.
+  - The short ATM leg carries the MOST extrinsic value of any strike, and you
+    are short it, so its decay works in your favour.
+  - Net result is positive theta while price holds above the short strike:
+    the position gains value simply by time passing. That is the entire
+    reason to buy ITM rather than ATM or OTM.
+
+Max value of the spread is its width ($3.00). Max loss is the debit paid.
+
+
+================================================================================
+2. THE TRADING DAY
+================================================================================
+
+  09:30           Bell. Scheduler starts ticking (5 min cycles).
+  09:30 - 09:45   WARMUP. No new entries.
+                  Opening-auction whipsaws are not a trend, but MACD/EMA/
+                  Bollinger/RSI will all read a direction from them and
+                  nothing downstream can tell that apart from a real signal.
+                  Position MANAGEMENT still runs — stops and take-profits
+                  fire from the first cycle. A stop that ignores the first
+                  15 minutes is worse than no stop.
+  09:45 - 14:00   ENTRY WINDOW. New positions may open here.
+  14:00           Entry cutoff. No new positions, no scale-ins.
+                  A 0DTE spread opened later has too little day left to work.
+  15:45           FORCE CLOSE. Everything flattened regardless of P&L.
+                  These expire at today's close: the short leg carries
+                  assignment/pin risk and an OTM long leg expires worthless.
+  16:00           Expiration.
+
+Config: TRADING_WARMUP_MINUTES (15)
+
+
+================================================================================
+3. HOW AN ENTRY IS DECIDED
+================================================================================
+
+Five agents run in parallel each cycle, then a deterministic rule engine
+decides. Four are technical, one is macro.
+
+  MACD        12/26/9 histogram   BULLISH >0.01 / BEARISH <-0.01 / NEUTRAL
+  Trend       EMA 20 and EMA 50   ABOVE_SMA if price clears both
+                                  (field name is legacy — it IS an EMA)
+  Bollinger   20-period, 2 sigma  UPPER_BAND / LOWER_BAND / NORMAL
+  RSI         Wilder 14           OVERBOUGHT >=70 / OVERSOLD <=30 / NEUTRAL
+  Macro       breadth + VIX + Claude on headlines -> GOOD or BAD
+
+An entry needs ALL FOUR technicals in one specific arrangement, PLUS macro
+GOOD. Four such arrangements exist:
+
+  BULL FADE          MACD BULLISH, ABOVE, LOWER_BAND, OVERSOLD
+                     Stretched down but momentum turning up — drop exhausted.
+  BULL CONTINUATION  MACD BULLISH, ABOVE, UPPER_BAND, OVERBOUGHT
+                     Everything agrees up — breakout in progress.
+  BEAR FADE          MACD BEARISH, BELOW, UPPER_BAND, OVERBOUGHT
+                     Stretched up but momentum turning down — rally exhausted.
+  BEAR CONTINUATION  MACD BEARISH, BELOW, LOWER_BAND, OVERSOLD
+                     Everything agrees down — breakdown in progress.
+
+CONSEQUENCE: entries are RARE. Five conditions must align. Most sessions
+produce no entry at all. This is by design, but it means a morning of
+watching usually shows nothing but HOLD, and testing changes to the exit
+logic requires seeding a position manually.
+
+
+================================================================================
+4. THE MACRO GATE
+================================================================================
+
+Sentiment is GOOD only if ALL of these hold. Any one flips it to BAD.
+
+  Breadth positive       addq > 0                    (level)
+  Breadth not collapsing >= -0.40 vs 30-min peak     (VELOCITY)
+  VIX level              < 22.0                      (level)
+  VIX session move       < +10% from 09:30 open      (VELOCITY)
+  Claude verdict         GOOD
+
+The two velocity terms exist because level checks alone cannot tell a market
+that IS bad from one that is BECOMING bad. VIX at 18 but +30% on the day,
+with breadth bled from +45 to +3, reads as perfectly calm on levels alone.
+
+Breadth velocity uses a ROLLING 30-minute peak, not the session peak. A
+session-peak anchor reads an ordinary all-day drift as an emergency and then
+stays latched for the rest of the day. Verified: a +48 -> +20 bleed over five
+hours never trips; the same drop compressed into 15 minutes trips five times.
+
+Config: TRADING_VIX_LEVEL_MAX, TRADING_VIX_SPIKE_PCT,
+        TRADING_BREADTH_COLLAPSE_RATIO, TRADING_BREADTH_WINDOW_MINUTES
+
+
+================================================================================
+5. HOW A POSITION EXITS
+================================================================================
+
+Five rules, strict priority order. First match wins. The ORDER is the design.
+
+  1. FORCE CLOSE   after 15:45          Overrides P&L entirely.
+  2. TAKE PROFIT   >= +30%              Close.
+  3. SCALE IN      <= -10%, macro GOOD  Double the position, if affordable,
+                                        before 14:00, max 3 times.
+  4. STOP LOSS     <= -10%              Scale-in conditions not met — take it.
+  5. RISK-OFF CUT  <= -5% AND macro BAD Cut at half the normal stop.
+
+Rule 5 sits LAST despite having the widest threshold. Checking it first would
+swallow every losing exit and label them all RISK_OFF. Below rule 4 it owns
+only the band between -5% and -10%, so a position that genuinely breached the
+full stop is still recorded as STOP_LOSS. Those labels feed the trade-setup
+vector store, so keeping them distinct is what makes the record worth
+learning from later.
+
+WHY 30% AND NOT 50%:
+A debit spread can never be worth more than its width. Max possible gain is
+(width - entry debit) / entry debit, and the entry debit RISES through the
+day as time value drains — which lowers the ceiling as the session runs on.
+Measured on a $3-wide spread:
+
+    entered 09:30   debit 1.85   max gain 61.8%
+    entered 11:00   debit 1.90   max gain 57.8%
+    entered 13:00   debit 2.01   max gain 49.1%
+    entered 14:00   debit 2.12   max gain 41.7%
+
+A 50% target is structurally impossible for anything entered after midday;
+40% is impossible after ~13:00. Those positions would simply ride to the
+force-close. 30% is reachable at any entry time.
+
+Config: TRADING_TAKE_PROFIT_PCT (30), TRADING_STOP_LOSS_PCT (-10),
+        TRADING_RISK_OFF_STOP_LOSS_PCT (-5)
+
+
+================================================================================
+6. CAPITAL AND SIZING
+================================================================================
+
+TRADING_POSITION_BUDGET is TOTAL CAPITAL, not per-trade. Only one position is
+open at a time, and the worst case on a force-closed loser is the entire
+amount deployed.
+
+TRADING_ENTRY_FRACTION (0.4) is the share the opening trade may use. The rest
+is held back to fund scale-ins. This MUST stay below 1.0 — with the full
+budget deployed there is no cash left, and the scale-in rule can never fire
+at any budget.
+
+Because each scale-in DOUBLES the position, how many actually fit is
+capital-bound, not governed by TRADING_MAX_SCALE_INS:
+
+    fraction 0.40  ->  1 scale-in
+    fraction 0.25  ->  2 scale-ins
+    fraction 0.125 ->  3 scale-ins
+
+FLOOR: a spread costs roughly $200. If budget x fraction is below that, the
+engine buys zero contracts and silently never trades. No error is raised.
+
+NOTE: doubling is a martingale. Three scale-ins would take 5 contracts to 40,
+on a 0DTE position already down 10% with hours to expiry. Exposure is now
+capped by capital, but the shape of the strategy is unchanged — consider
+fixed-size adds instead if that risk profile is not intended.
+
+
+================================================================================
+7. WHY CREDIT SPREADS MIGHT MAKE SENSE (NOT IMPLEMENTED)
+================================================================================
+
+The engine only sells premium indirectly, via the short ATM leg of a debit
+spread. It has no credit spread capability at all. Whether to add one:
+
+THE CASE FOR
+  - Three ways to win instead of one. A debit spread needs the market to
+    move your way. An OTM credit spread profits if the market moves your way,
+    stays completely flat, OR moves moderately against you — anything that
+    finishes below the short strike.
+  - Theta works unconditionally. A debit spread only has positive theta when
+    it is ITM. An OTM credit spread decays in your favour always, and on 0DTE
+    that decay is enormous.
+  - IT FILLS A REAL GAP. The engine currently has NO expression for a flat
+    market. Its entry conditions require MACD/Bollinger/RSI alignment, which
+    consolidation does not produce, so a quiet tape simply produces HOLD all
+    day. Credit spreads are how a flat market becomes tradeable.
+  - Selling inflated premium. A brief afternoon short-covering spike inflates
+    OTM call premium; selling it right before afternoon decay is a genuinely
+    good entry.
+
+THE CASE AGAINST
+  - The payoff ratio is poor. A $1-wide spread sold for $0.25 risks $0.75 to
+    make $0.25. You need better than a 75% win rate just to break even, and a
+    single max loss erases three wins.
+  - Gamma risk near expiry is severe. A small adverse move late in the day
+    can flip a comfortable winner into a maximum loser very quickly. This is
+    the same hyper-gamma risk that justifies the existing 14:00 cutoff, but
+    it hurts a short position far more than a long one.
+  - It is NOT a small code change. Credit received rather than debit paid,
+    P&L inverted (you profit as the spread's value FALLS), max loss larger
+    than the credit collected, sizing against margin/buying power rather than
+    premium, and every exit rule reversed. MockSpreadPosition.return_pct as
+    written produces nonsense for a credit spread.
+
+WHEN THEY MAKE MOST SENSE
+  - Flat or slowly bleeding tape, midday (11:00-13:30), when theta
+    accelerates and direction is genuinely unclear.
+  - Elevated IV — you are selling something expensive.
+  - A clear technical level (VWAP, 20 SMA, prior day high) sitting above the
+    short strike to insulate it.
+
+VERDICT
+Worth adding, but as its own piece of work with its own testing, not bolted
+onto the debit path. The honest sequencing is: get the debit strategy
+producing real trades and real recorded outcomes first, so there is something
+to compare a credit strategy against.
+
+Also note: OTM DEBIT spreads should never be used. They need a large
+directional move just to reach breakeven, and on 0DTE you can be completely
+right about direction and still lose 100%.
+
+
+================================================================================
+8. KNOWN LIMITS — READ BEFORE TRUSTING ANY NUMBER
+================================================================================
+
+  - THE BROKER IS MOCKED. No orders are placed anywhere. Every fill is
+    simulated.
+  - NO OPTION CHAIN FEED. Spread values come from a model
+    (broker.estimate_spread_value): width scaled by a normal CDF centred on
+    the midpoint between the strikes, with its spread shrinking as expiry
+    nears. It converges to the true expiry payoff and reproduces the right
+    theta behaviour, but it is a model, not a quote. TRADING_DAILY_VOL_PCT
+    (1.0) is its one free parameter and the main knob on how fast P&L moves.
+  - NO SLIPPAGE, NO COMMISSIONS, NO BID/ASK SPREAD. Real fills are worse.
+  - $TICKQ IS NOT USED. Tradier does not carry it and there is no honest free
+    approximation. The Institutional Divergence Filter that depended on it is
+    dropped.
+  - BREADTH IS A PROXY. Self-computed from a static 63-stock Nasdaq-100
+    basket, not the real index membership, which changes over time.
+  - TRADE SETUP VECTORS ARE LOGGING ONLY. query_similar_setups() works but
+    nothing consumes it — there are not enough closed trades to learn from.
+  - NO TIME-OF-DAY STRUCTURE SELECTION. The same long-ITM/short-ATM shape is
+    used at every hour. A momentum-window ATM structure is not implemented.
+
+
+================================================================================
+9. OPERATING IT
+================================================================================
+
+  GET  /trading/status               everything at once
+  POST /trading/scheduler/start      begin the loop (interval_minutes 1-60)
+  POST /trading/scheduler/stop       halt it
+  POST /trading/run-daily-cycle      run exactly one cycle by hand
+  GET  /trading/position             open spread, repriced
+  GET  /trading/history              closed trades and realized P&L
+  POST /trading/kill-switch/toggle   ACTIVATE / DEACTIVATE
+
+The scheduler does NOT auto-start. After a deploy it sits idle until
+scheduler/start is called — a restart must never silently resume trading.
+
+The kill switch is a KILL_SWITCH.txt file, checked by both the rule engine
+and the scheduler before every tick.
+
+TESTING TIP: because entries are rare, the fastest way to exercise the exit
+logic is to insert an OpenPosition row priced at roughly -6% and run one
+cycle. If macro is GOOD and you need it BAD, set TRADING_VIX_SPIKE_PCT=0
+temporarily to force risk-off.

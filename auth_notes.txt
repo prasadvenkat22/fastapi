@@ -1,0 +1,212 @@
+================================================================================
+AUTHENTICATION — LOGIN, PASSWORDS, AND ROLES
+================================================================================
+Last updated: 2026-08-17
+Code: routes/auth_router.py, helpers/jwt_tokens.py, helpers/auth_deps.py
+Script: scripts/set_password.py
+
+
+================================================================================
+READ FIRST — WHAT IS AND ISN'T TURNED ON
+================================================================================
+
+Logging in WORKS. Enforcement DOES NOT.
+
+The /auth/* endpoints issue real tokens, and /auth/me validates them. But the
+role dependencies (get_current_user, require_role) are applied to ZERO routes.
+Every other endpoint still answers unauthenticated, exactly as before.
+
+That was deliberate — turning enforcement on is the change that can lock you
+out of your own API, so it belongs in its own reviewable step rather than
+arriving as a side effect of adding a login.
+
+Until that step happens, treat the whole API as public. There is also no TLS;
+traffic is plain HTTP.
+
+
+================================================================================
+1. SETTING A PASSWORD (DO THIS FIRST)
+================================================================================
+
+The admin accounts are seeded WITHOUT passwords, on purpose. A password
+invented by a migration would either be known to nobody or become a shared
+secret sitting in git history.
+
+Local:
+
+    docker compose exec app python scripts/set_password.py venkatangirala@gmail.com
+
+Production (on the droplet, in /opt/fastapi):
+
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+        exec app python scripts/set_password.py venkatangirala@gmail.com
+
+It prompts twice, hidden. Minimum 12 characters. The password is never
+echoed, never passed as a command argument (where `ps` would expose it), and
+never logged — only the bcrypt hash is written to the database.
+
+The same command CHANGES a password. There is no separate reset flow; run it
+again with the same email.
+
+Seeded admin accounts:
+    venkatangirala@gmail.com
+    prasadvenkat@hotmail.com
+
+
+================================================================================
+2. LOGGING IN
+================================================================================
+
+Easiest — the interactive docs:
+
+    http://localhost:8000/docs
+
+Find the "Auth" section, POST /auth/login, "Try it out", fill in email and
+password, Execute.
+
+By curl:
+
+    curl -X POST http://localhost:8000/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{"email":"venkatangirala@gmail.com","password":"<yours>"}'
+
+Response:
+
+    {
+      "access_token": "eyJ...",
+      "refresh_token": "eyJ...",
+      "token_type": "bearer",
+      "expires_in_minutes": 15
+    }
+
+Use the access token:
+
+    curl http://localhost:8000/auth/me \
+      -H "Authorization: Bearer <access_token>"
+
+    -> {"id":5,"name":"venkatangirala","email":"...","role":"admin"}
+
+When the access token expires (15 min), trade the refresh token for a new
+pair:
+
+    curl -X POST http://localhost:8000/auth/refresh \
+      -H "Content-Type: application/json" \
+      -d '{"refresh_token":"<refresh_token>"}'
+
+
+================================================================================
+3. ROLES
+================================================================================
+
+    admin    Full access: business records, users, GenAI, AND the trading
+             engine. This is the role both seeded accounts hold.
+    trader   Trading routes only — scheduler, manual cycles, kill switch.
+             Cannot delete customers, users or invoices.
+    user     Read access to business records.
+
+A user with role_id = NULL has NO role, which must be read as NO PERMISSIONS,
+not as a default grant. Every account created before roles existed has NULL,
+so the opposite reading would silently promote all of them.
+
+To assign a role:
+
+    UPDATE users SET role_id = (SELECT id FROM roles WHERE role = 'trader')
+    WHERE email = 'someone@example.com';
+
+
+================================================================================
+4. HOW THE TOKENS WORK
+================================================================================
+
+RS256 (asymmetric). The service signs with JWT_PRIVATE_KEY and verifies with
+JWT_PUBLIC_KEY. Only this service can mint a token; anything that only needs
+to VERIFY one needs the public key alone — which matters if verification ever
+moves to a gateway.
+
+Keys are 4096-bit, stored base64-encoded (a raw PEM's newlines do not survive
+a .env file), and are DIFFERENT between local and production. They were
+previously 512-bit and identical across environments; 512-bit RSA has been
+factorable since 1999, so the public key alone was enough to forge tokens.
+
+A JWT IS SIGNED, NOT ENCRYPTED. Anyone holding a token can base64-decode the
+payload and read it — the signature proves it was not tampered with, it does
+not keep anything secret. The payload therefore carries only:
+
+    sub   user id
+    role  role name (or null)
+    type  "access" or "refresh"
+    iat   issued at
+    exp   expires at
+
+Never put a password, API key, or anything sensitive in there.
+
+Tokens are NOT stored server-side. That is the point of JWT — the token
+carries its own claims and the signature is checked on arrival. Storing
+access tokens would add a database read to every request and discard the only
+reason to use JWT.
+
+Two safety details worth keeping:
+
+  - decode_token checks the token TYPE. Access and refresh tokens are both
+    validly signed by this service, so a signature check alone cannot tell
+    them apart — and a refresh token lives four times longer. Presenting a
+    refresh token as a bearer credential is rejected.
+
+  - get_current_user RE-READS the user from the database rather than trusting
+    the token's claims. A token stays validly signed until it expires, so an
+    account disabled a minute ago would still present a perfectly good one.
+    Role is read the same way, so a demotion applies immediately instead of
+    lingering for the life of an issued token.
+
+Login failures return ONE message for every cause — unknown email, wrong
+password, no password set, disabled account. Distinguishing them would let
+anyone enumerate which emails are registered.
+
+Config: JWT_ALGORITHM (RS256), ACCESS_TOKEN_EXPIRES_IN (15 minutes),
+        REFRESH_TOKEN_EXPIRES_IN (60 minutes)
+
+
+================================================================================
+5. REMAINING WORK BEFORE AUTH ACTUALLY PROTECTS ANYTHING
+================================================================================
+
+  1. Apply the dependencies to routes. Suggested order, safest first:
+       a. /trading/*     most dangerous, smallest blast radius
+       b. CRUD writes and deletes
+       c. CRUD reads
+       d. /docs and /openapi.json — currently advertise all 65 endpoints
+          to anyone who can reach the host
+
+  2. Decide what POST /CRUD/register/ should do. It is open to anyone today.
+     Either keep it open but hard-limit it to the lowest role, or put it
+     behind admin. If you put it behind admin, an admin must already exist
+     with a password — which is why setting one (section 1) comes first.
+
+  3. Consider a refresh_tokens table if you want revocation. Access tokens
+     are stateless and should never be stored. Refresh tokens are the ones
+     worth storing (HASHED, like a password) if you need "log out
+     everywhere" or the ability to kill a stolen token before it expires.
+     Without it, a stolen refresh token stays valid for its full 60 minutes
+     and nothing can be done.
+
+  4. Add TLS. Tokens and passwords currently cross the wire in plain HTTP.
+
+
+================================================================================
+6. TROUBLESHOOTING
+================================================================================
+
+401 "Incorrect email or password"
+    Most likely no password is set on the account. Run section 1.
+    (The message is intentionally identical for every failure cause.)
+
+401 "Not authenticated" on /auth/me
+    Missing or malformed Authorization header, an expired access token, or a
+    REFRESH token being used where an access token belongs.
+
+404 on /auth/login
+    That deployment predates the auth work. Check `git log --oneline -1`.
+
+RuntimeError about JWT_PRIVATE_KEY at startup
+    The env var is missing or is not valid base64-encoded PEM. Both local
+    .env and the droplet's .env.production must have their own distinct pair.

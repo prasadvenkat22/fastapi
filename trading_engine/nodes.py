@@ -57,7 +57,14 @@ MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "3"))
 # is unaffected and runs from the first cycle.
 MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE = 9, 30
 WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
-TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "20.0"))
+# A debit spread cannot be worth more than its width, so the most a position
+# can ever gain is (width - entry debit) / entry debit — and the entry debit
+# rises through the day as time value drains, which lowers that ceiling as
+# the session runs on. Measured on a $3-wide spread: ~62% at the open, ~49%
+# by 13:00, ~42% by the 14:00 cutoff. 30% stays reachable at any entry time;
+# 50% is structurally impossible after midday, and a target that can't be hit
+# isn't a target — the position just rides to the force-close instead.
+TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "30.0"))
 STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-10.0"))  # unchanged from the original spec — only take-profit moved to 20%
 
 # Tightened stop that applies only while macro is risk-off (market_sentiment

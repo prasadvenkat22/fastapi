@@ -56,7 +56,7 @@ Last updated: 2026-08-17 | Server: 159.223.127.31 | Domain: dataiqsystems.com
 
   ./deploy.sh health
 
-  All 3 checks (FastAPI, PostgreSQL, MongoDB) should show OK.
+  Both checks (FastAPI, PostgreSQL) should show OK.
 
   7. Access Your App
 

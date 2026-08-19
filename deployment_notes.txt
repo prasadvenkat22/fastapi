@@ -1,6 +1,6 @@
 =======================================
  Digital Ocean Deployment Guide
- FastAPI + PostgreSQL + MongoDB
+ FastAPI + PostgreSQL
 =======================================
 
 PREREQUISITES
@@ -55,7 +55,6 @@ STEP 5: Verify Deployment
 All 3 checks should show OK:
   - FastAPI: OK
   - PostgreSQL: OK
-  - MongoDB: OK
 
 =======================================
 STEP 6: Access Your App
@@ -128,7 +127,6 @@ SERVICES & PORTS
   Nginx         80      Reverse proxy (main entry)
   FastAPI       8000    REST API backend
   PostgreSQL    5432    Relational database
-  MongoDB       27017   Document database
   pgAdmin       5050    DB admin (debug mode only)
 
 =======================================

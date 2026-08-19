@@ -160,8 +160,27 @@ def strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool) -> tup
 # single knob trading win rate against payout.
 OTM_OFFSET = float(os.getenv("TRADING_OTM_OFFSET", "3.0"))
 
+# Volatility-adaptive alternative to the fixed offset above. The short strike
+# sits SD_MULTIPLE standard deviations from spot, floored at OTM_OFFSET.
+#
+# A fixed distance is wrong on both tails: too close when volatility spikes
+# (the strike gets breached) and needlessly far when it is quiet (the credit
+# is not worth collecting). Anchored to SPOT rather than the moving average,
+# because an SMA lagging below price drags a call strike toward the money --
+# measured live, a nominal "4 standard deviation" placement off the SMA came
+# out $1 CLOSER to spot than the plain fixed offset.
+OTM_SD_MULTIPLE = float(os.getenv("TRADING_OTM_SD_MULTIPLE", "3.0"))
 
-def credit_strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool) -> tuple[float, float]:
+
+def otm_offset_for(sigma: float) -> float:
+    """Distance from spot to the short strike, in dollars."""
+    if sigma is None or sigma <= 0:
+        return OTM_OFFSET
+    return max(OTM_SD_MULTIPLE * sigma, OTM_OFFSET)
+
+
+def credit_strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool,
+                       sigma: "float | None" = None) -> tuple[float, float]:
     """(short_strike, long_strike) for an OTM credit vertical.
 
     Bullish sells puts BELOW spot; bearish sells calls ABOVE. The long leg
@@ -169,10 +188,11 @@ def credit_strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool)
     would be a naked short option with unbounded risk.
     """
     w = window.width
+    off = otm_offset_for(sigma)
     if bullish:
-        short = atm_strike - OTM_OFFSET
+        short = atm_strike - off
         return short, short - w
-    short = atm_strike + OTM_OFFSET
+    short = atm_strike + off
     return short, short + w
 
 

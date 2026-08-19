@@ -417,7 +417,8 @@ def bollinger_agent(state: TradingState) -> dict:
     else:
         cross = "NONE"
 
-    return {"bollinger_zone": zone, "bollinger_cross": cross}
+    return {"bollinger_zone": zone, "bollinger_cross": cross,
+            "bollinger_sd": round(float(std), 4) if std == std else 0.0}
 
 
 def rsi_agent(state: TradingState) -> dict:
@@ -671,6 +672,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     sma = state.get("sma_trend")
     bb = state.get("bollinger_zone")
     bb_cross = state.get("bollinger_cross")
+    bb_sd = state.get("bollinger_sd")
     ema9_side = state.get("ema9_side")
     ema_cross = state.get("ema_cross")
     vwap_side = state.get("vwap_side")
@@ -1014,7 +1016,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 if is_credit_window:
                     # Bullish sells puts below spot, bearish sells calls above.
                     strategy = PUT_CREDIT_SPREAD if bullish else CALL_CREDIT_SPREAD
-                    short_strike, long_strike = credit_strikes_for(window, atm_strike, bullish)
+                    short_strike, long_strike = credit_strikes_for(window, atm_strike, bullish, bb_sd)
                 else:
                     strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
                     long_strike, short_strike = strikes_for(window, atm_strike, bullish)

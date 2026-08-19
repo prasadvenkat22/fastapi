@@ -77,8 +77,8 @@ class PlaybookWindow:
 WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
-        start=_env_time("TRADING_MOMENTUM_START", "09:45"), end=time(10, 15), placement=ATM, width=2.0,
-        take_profit_pct=40.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        start=_env_time("TRADING_MOMENTUM_START", "09:45"), end=time(10, 15), placement=ITM, width=3.0,
+        take_profit_pct=35.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
         note="Opening range resolved. Pay for leverage while a real directional "
              "leg is most likely; this is the window that can capture a big day. "
              "40% ARMS the trailing exit rather than selling. A 90-100% target "
@@ -91,8 +91,8 @@ WINDOWS = (
     ),
     PlaybookWindow(
         name="MORNING_DRIFT",
-        start=time(10, 15), end=time(11, 30), placement=ATM, width=2.0,
-        take_profit_pct=40.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        start=time(10, 15), end=time(11, 30), placement=ITM, width=3.0,
+        take_profit_pct=35.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "

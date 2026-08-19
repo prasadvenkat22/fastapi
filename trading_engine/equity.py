@@ -34,7 +34,7 @@ NY = ZoneInfo("America/New_York")
 # Halt new entries once the day's realized losses reach this share of the
 # equity the session started with. 0.25 gives roughly two full stop-outs at
 # the default entry fraction before the engine stands down.
-MAX_DAILY_LOSS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_PCT", "0.25"))
+MAX_DAILY_LOSS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_PCT", "0.02"))
 
 # After a losing exit, refuse the SAME direction for this many minutes.
 #

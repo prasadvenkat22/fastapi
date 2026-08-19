@@ -31,14 +31,30 @@ STRIKE_INCREMENT = 1.0  # QQQ options strike spacing used for ATM rounding
 
 NY = ZoneInfo("America/New_York")
 # When the contract actually stops trading, which drives every time-value
-# calculation. Configurable because it is an instrument fact I should not be
-# hardcoding from memory: QQQ options are widely understood to trade past the
-# 16:00 equity close, and Tradier's clock only reports the underlying's
-# session. If the real close is 16:15, a hardcoded 16:00 understates time to
-# expiry by 15 minutes and misprices every spread near the bell.
-EXPIRY_HOUR = int(os.getenv("TRADING_EXPIRY_TIME", "16:00").split(":")[0])
-EXPIRY_MINUTE = int(os.getenv("TRADING_EXPIRY_TIME", "16:00").split(":")[1])
-SESSION_MINUTES = 6.5 * 60           # 09:30–16:00
+# calculation. Tradier's clock only reports the underlying's session, so this
+# cannot be read from the feed. 16:15 rather than 16:00: options on QQQ (and
+# SPY/IWM) keep trading for fifteen minutes past the equity close. On a 0DTE
+# book that window is not a rounding error -- it is the last 4% of the
+# contract's life, during which time value collapses fastest.
+#
+# The engine never holds that late anyway (TRADING_FORCE_CLOSE_TIME), but the
+# figure still matters every cycle: it is what tells the pricing model how
+# much time value a position has left. Understating it by fifteen minutes
+# marks every spread too close to intrinsic, all day.
+MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE = 9, 30
+_expiry_raw = os.getenv("TRADING_EXPIRY_TIME", "16:15")
+try:
+    EXPIRY_HOUR, EXPIRY_MINUTE = (int(p) for p in _expiry_raw.split(":"))
+except ValueError:
+    EXPIRY_HOUR, EXPIRY_MINUTE = 16, 15
+
+# Derived, not hardcoded. This is the denominator that scales sigma down as
+# the day burns off, so it has to span open -> expiry: pinning it at 6.5h
+# while expiry moved to 16:15 would leave sqrt(405/390) = 1.019 at the open,
+# quietly inflating every morning spread's time value by ~2%.
+SESSION_MINUTES = (
+    (EXPIRY_HOUR * 60 + EXPIRY_MINUTE) - (MARKET_OPEN_HOUR * 60 + MARKET_OPEN_MINUTE)
+)
 
 # Rough daily move for QQQ as a fraction of spot, used to size the time-value
 # term below. ~1% is a normal day; raise it to model a jumpier tape.
@@ -70,7 +86,7 @@ def round_to_strike(price: float, increment: float = STRIKE_INCREMENT) -> float:
 
 
 def minutes_to_expiry(now: Optional[datetime] = None) -> float:
-    """Minutes left until today's 16:00 ET expiration, clamped at zero."""
+    """Minutes left until today's contract expiration, clamped at zero."""
     now = now or datetime.now(NY)
     expiry = now.replace(hour=EXPIRY_HOUR, minute=EXPIRY_MINUTE, second=0, microsecond=0)
     return max((expiry - now).total_seconds() / 60.0, 0.0)

@@ -57,10 +57,16 @@ POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
 # passing the whole budget left available_cash at exactly $0 on every entry
 # — and the buy-more gate, which requires cash on hand, could therefore
 # never pass at any budget. Rule 3 of the exit ladder was unreachable.
-ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.4"))
+# 0.04, sized against the daily loss cap rather than picked: at ~$183 a
+# contract this buys 2 spreads on a $10k book, so three losing trades (where
+# MAX_CONSECUTIVE_LOSSES halts anyway) still fit inside the 2% cap. 0.4 put
+# 40% of the account into a single 0DTE spread.
+ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.04"))
 
 # Cap on scale-ins per position, unchanged from the original hardcoded 3.
-MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "3"))
+# 0: scaling into a loser doubles the position on a thesis the market has
+# already disproved. Left configurable, but off by default.
+MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "0"))
 
 # Whether the RELAXED entry tier trades at all. Set false to fall back to the
 # original strict gate everywhere.
@@ -68,7 +74,7 @@ RELAXED_ENTRIES_ENABLED = os.getenv("TRADING_RELAXED_ENTRIES", "true").lower() =
 
 # Whether the MOMENTUM tier trades: a 20-period midline cross with MACD and
 # trend agreeing, catching moves that never stretch far enough to touch a band.
-MOMENTUM_ENTRIES_ENABLED = os.getenv("TRADING_MOMENTUM_ENTRIES", "true").lower() == "true"
+MOMENTUM_ENTRIES_ENABLED = os.getenv("TRADING_MOMENTUM_ENTRIES", "false").lower() == "true"
 
 # Whether the TREND tier trades: MACD, trend and an RSI extreme agreeing, with
 # NO Bollinger requirement.
@@ -83,7 +89,7 @@ MOMENTUM_ENTRIES_ENABLED = os.getenv("TRADING_MOMENTUM_ENTRIES", "true").lower()
 # and refused it for twelve straight cycles because bollinger_zone was NORMAL.
 # It took no trade all day. Over a month this tier fires 4.6 times a day and
 # 77 of its 102 setups are ones no other tier catches.
-TREND_ENTRIES_ENABLED = os.getenv("TRADING_TREND_ENTRIES", "true").lower() == "true"
+TREND_ENTRIES_ENABLED = os.getenv("TRADING_TREND_ENTRIES", "false").lower() == "true"
 
 # CLEAN: all four structural rules aligned -- price above/below the 20 SMA,
 # the 9 EMA on the same side of it, price on the right side of VWAP, and RSI
@@ -109,8 +115,14 @@ WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
 # of the day's theta convergence for distance from peak gamma and the widening
 # quotes around the close. Set later to capture more of an ITM spread's
 # convergence, earlier to sit further from the bell.
-FORCE_CLOSE_HOUR = int(os.getenv("TRADING_FORCE_CLOSE_TIME", "15:50").split(":")[0])
-FORCE_CLOSE_MINUTE = int(os.getenv("TRADING_FORCE_CLOSE_TIME", "15:50").split(":")[1])
+# 15:45 leaves half an hour of contract life (expiry is 16:15, see
+# broker.EXPIRY_HOUR) -- enough that the model still prices real time value
+# into the exit rather than marking to intrinsic on the way out.
+_force_close_raw = os.getenv("TRADING_FORCE_CLOSE_TIME", "15:45")
+try:
+    FORCE_CLOSE_HOUR, FORCE_CLOSE_MINUTE = (int(p) for p in _force_close_raw.split(":"))
+except ValueError:
+    FORCE_CLOSE_HOUR, FORCE_CLOSE_MINUTE = 15, 45
 
 # Bearish entries wait longer than bullish ones, and deliberately so. An
 # opening reversal is not symmetric in cost: a long opened into a fading bounce
@@ -137,14 +149,14 @@ def _is_before_bearish_start() -> bool:
 TRAILING_EXITS_ENABLED = os.getenv("TRADING_TRAILING_EXITS", "true").lower() == "true"
 
 # Once armed, give back at most this share of the best gain before closing.
-# 0.15 means a position that peaked at +70% exits near +59% rather than
+# 0.20 means a position that peaked at +70% exits near +56% rather than
 # riding back to the stop.
 #
 # The 9 EMA alone was not enough. It is a PRICE trail and knows nothing about
 # P&L: spread value moves nonlinearly with price and time decay drains it
 # independently, so a position can hand back most of its gain while price is
 # still on the right side of the 9 EMA. Whichever triggers first wins.
-TRAIL_GIVEBACK = float(os.getenv("TRADING_TRAIL_GIVEBACK", "0.15"))
+TRAIL_GIVEBACK = float(os.getenv("TRADING_TRAIL_GIVEBACK", "0.20"))
 
 # Profit level at which the ratchet starts protecting, INDEPENDENT of the
 # take-profit target that arms the trailing exit.
@@ -154,7 +166,11 @@ TRAIL_GIVEBACK = float(os.getenv("TRADING_TRAIL_GIVEBACK", "0.15"))
 # +16.9% to +2.2% in three minutes with the ratchet dormant, free to continue
 # to the -10% stop having been up 17%. Protecting a gain and deciding when to
 # let a winner run are different questions and need different thresholds.
-RATCHET_ARM_PCT = float(os.getenv("TRADING_RATCHET_ARM_PCT", "12.0"))
+# 32, not 12: the floor this creates (arm minus giveback) has to clear the
+# stop, or the ratchet books losers the stop would have caught anyway. At 32
+# the floor is 22% against a -20% stop. At 12 it was +2%, which is inside the
+# bid-ask and would have exited on quote noise.
+RATCHET_ARM_PCT = float(os.getenv("TRADING_RATCHET_ARM_PCT", "32.0"))
 
 # Smallest giveback that can trigger the ratchet, in points of return.
 #
@@ -164,7 +180,7 @@ RATCHET_ARM_PCT = float(os.getenv("TRADING_RATCHET_ARM_PCT", "12.0"))
 # on the position actually turning, booking out of trades that never reversed.
 # Whichever giveback is LARGER applies, so big winners still ratchet
 # proportionally while small ones get room to breathe.
-MIN_GIVEBACK_PCT = float(os.getenv("TRADING_MIN_GIVEBACK_PCT", "4.0"))
+MIN_GIVEBACK_PCT = float(os.getenv("TRADING_MIN_GIVEBACK_PCT", "10.0"))
 
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
@@ -174,15 +190,19 @@ MIN_GIVEBACK_PCT = float(os.getenv("TRADING_MIN_GIVEBACK_PCT", "4.0"))
 # 50% is structurally impossible after midday, and a target that can't be hit
 # isn't a target — the position just rides to the force-close instead.
 TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "30.0"))
-STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-10.0"))  # unchanged from the original spec — only take-profit moved to 20%
+# -20, measured rather than chosen: the bid-ask round trip alone is 5.2-5.8%
+# of these positions and one median 5-minute bar moves an ITM 3-wide about
+# 10%, so a -10% stop fires on ordinary noise. Per-window overrides in
+# playbook.py widen this further where the volatility regime demands it.
+STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-20.0"))
 
 # Tightened stop for LONG positions while macro is risk-off (market_sentiment
-# == 'BAD'). Riding a losing 0DTE spread all the way to the full -10% stop
+# == 'BAD'). Riding a losing 0DTE spread all the way to the full stop
 # into a deteriorating tape gives up twice the capital for a position whose
-# thesis has already broken; cutting at -5% and re-entering later if
+# thesis has already broken; cutting earlier and re-entering later if
 # conditions improve is the cheaper path — entries are re-evaluated every
 # scheduler cycle anyway, so nothing is permanently forfeited by leaving.
-RISK_OFF_STOP_LOSS_PCT = float(os.getenv("TRADING_RISK_OFF_STOP_LOSS_PCT", "-5.0"))
+RISK_OFF_STOP_LOSS_PCT = float(os.getenv("TRADING_RISK_OFF_STOP_LOSS_PCT", "-13.0"))
 
 # Macro risk-off thresholds. VIX is judged on both level and session move:
 # a spike of this magnitude is treated as risk-off even from a low base.
@@ -719,14 +739,20 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         )
         is_credit_pos = is_credit(position.strategy)
 
-        # Profit ratchet. `armed` means this position HAS reached its target
-        # at some point, whether or not it still has -- which is the case that
-        # matters. A position that peaked at +45% and slid to +37% is below
-        # the arm point, so the take-profit branch never sees it, and without
-        # this it would ride all the way to the -10% stop having been up 45%.
+        # Profit ratchet. What matters is whether this position HAS been up,
+        # not whether it still is: `gave_back` is only ever evaluated inside
+        # the take-profit branch or this one, so a peak that no branch owns is
+        # a peak with no protection under it.
+        #
+        # Armed at the LOWER of the two thresholds, which closes exactly that
+        # hole. RATCHET_ARM_PCT is 32 and ITM_GRINDER's target is 30, so a
+        # position peaking at +31% used to fall between them: too low to arm
+        # the ratchet, and once it slipped back under 30 the take-profit
+        # branch stopped running too. It then rode to the -20% stop having
+        # been up 31%. Anything that reached its own target is a win worth
+        # protecting, whatever the engine-wide arm point says.
         peak_return = max(position.peak_return_pct, return_pct)
-        armed = peak_return >= tp_pct                     # trailing exit
-        ratchet_armed = peak_return >= RATCHET_ARM_PCT     # profit protection
+        ratchet_armed = peak_return >= min(RATCHET_ARM_PCT, tp_pct)
         giveback = max(peak_return * TRAIL_GIVEBACK, MIN_GIVEBACK_PCT)
         gave_back = peak_return > 0 and return_pct <= peak_return - giveback
 
@@ -734,7 +760,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         if force_close:
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "FORCE_CLOSE"
-        # Rule A: Take Profit (+20%)
+        # Rule A: Take Profit
         # Judged against the target of the strategy that OPENED this
         # position, not whatever window the clock is in now: an ATM spread is
         # still an ATM spread at 13:00, and holding it to the ITM target would
@@ -782,7 +808,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             )
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "RATCHET"
-        # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
+        # Rule B / C: Stop Loss vs. Buy More
         elif return_pct <= stop_pct:
             # place_buy_more adds `position.quantity` more contracts — it
             # doubles the position — so the affordability check has to price
@@ -812,11 +838,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 action, exit_reason = "SELL_ALL", "STOP_LOSS"
         # Rule D: risk-off exit — macro has turned BAD (deteriorating breadth,
         # a VIX spike, or a risk-off headline read) while the position is
-        # already losing. Cut at -5% rather than waiting for the full -10%
-        # stop: the setup that justified the entry no longer holds, and a
-        # re-entry is available on any later cycle if conditions recover.
+        # already losing. Cut at the risk-off level rather than waiting for
+        # the full stop: the setup that justified the entry no longer holds,
+        # and re-entry is available on any later cycle if conditions recover.
         #
-        # Deliberately evaluated *after* the -10% stop above so a position
+        # Deliberately evaluated *after* the full stop above so a position
         # that already breached the full stop is still recorded as STOP_LOSS
         # — this rule only owns the band between the two thresholds, which
         # keeps the close reasons feeding the setup vector store honest.
@@ -831,7 +857,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         ):
             logger.warning(
                 "Risk-off exit: macro sentiment BAD with position at %.2f%% — closing early "
-                "rather than riding to the %.1f%% stop.", return_pct, STOP_LOSS_PCT,
+                # stop_pct, not the module-level STOP_LOSS_PCT: the window's
+                # override is what this position is actually judged against,
+                # and a log naming the global one sent an entire debugging
+                # session chasing a threshold no trade was using.
+                "rather than riding to the %.1f%% stop.", return_pct, stop_pct,
             )
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "RISK_OFF"

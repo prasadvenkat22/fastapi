@@ -105,6 +105,13 @@ REJECT_ENTRIES_ENABLED = os.getenv("TRADING_REJECT_ENTRIES", "true").lower() == 
 MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE = 9, 30
 WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
 
+# Hard flatten time. A policy choice, not an expiry fact -- it trades the last
+# of the day's theta convergence for distance from peak gamma and the widening
+# quotes around the close. Set later to capture more of an ITM spread's
+# convergence, earlier to sit further from the bell.
+FORCE_CLOSE_HOUR = int(os.getenv("TRADING_FORCE_CLOSE_TIME", "15:50").split(":")[0])
+FORCE_CLOSE_MINUTE = int(os.getenv("TRADING_FORCE_CLOSE_TIME", "15:50").split(":")[1])
+
 # Bearish entries wait longer than bullish ones, and deliberately so. An
 # opening reversal is not symmetric in cost: a long opened into a fading bounce
 # bleeds, while a short opened into a V-shaped recovery is run over by the
@@ -649,7 +656,7 @@ def _is_past_cutoff(cutoff_hour: int = 14) -> bool:
     return now_est.hour >= cutoff_hour
 
 
-def is_past_force_close(hour: int = 15, minute: int = 30) -> bool:
+def is_past_force_close(hour: int = None, minute: int = None) -> bool:
     """Hard close-out cutoff, independent of P&L — QQQ options expire at
     today's close, so any open spread must be flattened before then rather
     than allowed to ride into expiration (assignment/pin risk on the short
@@ -660,6 +667,8 @@ def is_past_force_close(hour: int = 15, minute: int = 30) -> bool:
     erase a large open gain in seconds. That matters much more now that
     trailing exits let winners run instead of booking at a fixed target —
     there is more open profit to protect."""
+    hour = FORCE_CLOSE_HOUR if hour is None else hour
+    minute = FORCE_CLOSE_MINUTE if minute is None else minute
     now_est = datetime.now(ZoneInfo("America/New_York"))
     return (now_est.hour, now_est.minute) >= (hour, minute)
 

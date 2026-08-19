@@ -30,7 +30,14 @@ ITM_OFFSET = 3.0  # long leg is this far ITM relative to the ATM short leg
 STRIKE_INCREMENT = 1.0  # QQQ options strike spacing used for ATM rounding
 
 NY = ZoneInfo("America/New_York")
-EXPIRY_HOUR, EXPIRY_MINUTE = 16, 0   # QQQ options expire at today's close
+# When the contract actually stops trading, which drives every time-value
+# calculation. Configurable because it is an instrument fact I should not be
+# hardcoding from memory: QQQ options are widely understood to trade past the
+# 16:00 equity close, and Tradier's clock only reports the underlying's
+# session. If the real close is 16:15, a hardcoded 16:00 understates time to
+# expiry by 15 minutes and misprices every spread near the bell.
+EXPIRY_HOUR = int(os.getenv("TRADING_EXPIRY_TIME", "16:00").split(":")[0])
+EXPIRY_MINUTE = int(os.getenv("TRADING_EXPIRY_TIME", "16:00").split(":")[1])
 SESSION_MINUTES = 6.5 * 60           # 09:30–16:00
 
 # Rough daily move for QQQ as a fraction of spot, used to size the time-value

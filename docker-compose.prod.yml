@@ -10,15 +10,6 @@
 #   - Total: ~1.2GB (leaves ~800MB for OS)
 
 services:
-  mongo:
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-    # Limit WiredTiger cache to 256MB
-    command: mongod --wiredTigerCacheSizeGB 0.25
-    restart: always
-
   pgdb:
     # Override env_file to use production config
     env_file:

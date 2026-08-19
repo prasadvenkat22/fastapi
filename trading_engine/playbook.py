@@ -33,6 +33,18 @@ from zoneinfo import ZoneInfo
 
 NY = ZoneInfo("America/New_York")
 
+
+def _env_time(var: str, default: str) -> time:
+    """HH:MM from the environment, so a session's start can be overridden
+    without a code change and reverts by removing the variable."""
+    raw = os.getenv(var, default)
+    try:
+        h, m = raw.split(":")
+        return time(int(h), int(m))
+    except Exception:
+        h, m = default.split(":")
+        return time(int(h), int(m))
+
 # How the long leg sits relative to the ATM short strike.
 ITM = "ITM"       # debit, long leg in the money  — high win rate, capped upside
 ATM = "ATM"       # debit, long leg at the money  — lower win rate, larger upside
@@ -65,7 +77,7 @@ class PlaybookWindow:
 WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
-        start=time(9, 45), end=time(10, 15), placement=ATM, width=2.0,
+        start=_env_time("TRADING_MOMENTUM_START", "09:45"), end=time(10, 15), placement=ATM, width=2.0,
         take_profit_pct=40.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
         note="Opening range resolved. Pay for leverage while a real directional "
              "leg is most likely; this is the window that can capture a big day. "

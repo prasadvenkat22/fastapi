@@ -71,7 +71,26 @@ class PlaybookWindow:
     # no trade, because thresholds_for preferred the literal in this table.
     stop_loss_pct: "float | None" = None
     risk_off_pct: "float | None" = None
+    # Which entry tiers may open this window. None means any tier.
+    #
+    # The tier ladder is global but the measured edge is not: morning ITM call
+    # debit spreads made +18.74 a trade when the full bullish stack held at
+    # entry and -4.49 when it did not, so letting a looser tier open this
+    # window trades exactly the days that lose.
+    entry_tiers: "frozenset[str] | None" = None
+    # Per-window override of TRADING_ENTRY_FRACTION. None means the global.
+    #
+    # Needed because one fraction cannot serve both structures. A credit
+    # vertical is sized on width-minus-credit and a debit one on premium, so
+    # the same 0.10 buys 3 credit spreads (risking ~$780 against a -100% stop
+    # of ~$123) but 5 debit spreads whose -30% stop is $274 -- more than the
+    # whole daily loss cap. One morning stop-out would then halt the session
+    # and forfeit the afternoon credit trade, which is the larger edge.
+    entry_fraction: "float | None" = None
     note: str = ""
+
+    def allows_tier(self, tier: str) -> bool:
+        return self.entry_tiers is None or tier in self.entry_tiers
 
 
 # Ordered, non-overlapping. Times are ET.
@@ -103,6 +122,20 @@ WINDOWS = (
         start=time(10, 15), end=time(11, 30), placement=ITM, width=3.0,
         # $1.30 average bar — between the opening and the lull.
         take_profit_pct=35.0, stop_loss_pct=-30.0, risk_off_pct=-18.0,
+        # CLEAN only. Measured at a 10:15 entry over 60 sessions, ITM call
+        # debit spreads returned +18.74 a trade on the 16 days the full
+        # bullish stack held (price above VWAP and the 20 SMA, 9 EMA above
+        # the 20 SMA) and -4.49 on the other 44. CLEAN is that stack plus an
+        # RSI band, so it is the tier that selects those days. Split in half
+        # the good bucket held: +17.99 then +20.00, 50% win rate in both.
+        # ATM and OTM flipped sign between halves and stay off entirely.
+        entry_tiers=frozenset({"CLEAN"}),
+        # One contract. At the global 0.10 this window would take 5, and a
+        # single -30% stop would cost $274 against a $200 daily cap -- the
+        # session would halt before 13:30 and forfeit the credit trade that
+        # earns most of the money. At 0.03 the worst case is about $55, so
+        # even three morning stop-outs leave the afternoon intact.
+        entry_fraction=0.03,
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "
@@ -155,9 +188,14 @@ WINDOWS = (
 # (+3428 against +8198), because that entry wins 67% of the time against 86%
 # at 13:30 and it occupies the slot early.
 #
+# MORNING_DRIFT is back alongside it, but only on CLEAN and only at one
+# contract -- see its entry_tiers and entry_fraction above. Pooling every
+# morning day hid that ITM works when the trend actually confirms; the
+# restriction is what makes it tradeable rather than the window itself.
+#
 # Set TRADING_ENABLED_WINDOWS to a comma-separated list to change this;
 # "ALL" restores every window.
-_enabled_raw = os.getenv("TRADING_ENABLED_WINDOWS", "AFTERNOON_CREDIT").strip()
+_enabled_raw = os.getenv("TRADING_ENABLED_WINDOWS", "MORNING_DRIFT,AFTERNOON_CREDIT").strip()
 ENABLED_WINDOWS = (
     frozenset(w.name for w in WINDOWS)
     if _enabled_raw.upper() == "ALL"

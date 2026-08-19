@@ -1054,6 +1054,24 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # period, including any gap left by retiring a strategy.
             window = window_for()
 
+            # A window may restrict which tiers can open it. MORNING_DRIFT
+            # takes CLEAN only: the same ITM structure measured +18.74 a
+            # trade when the full bullish stack held and -4.49 when it did
+            # not, and the looser tiers are precisely what would open it on
+            # the days that lose.
+            if window is not None and not window.allows_tier(tier):
+                logger.info(
+                    "%s does not accept the %s tier — no entry.", window.name, tier,
+                )
+                window = None
+                action = "TIER_NOT_ALLOWED"
+
+            # A window may also size itself, because one fraction cannot serve
+            # both structures — see PlaybookWindow.entry_fraction.
+            entry_fraction = ENTRY_FRACTION
+            if window is not None and window.entry_fraction is not None:
+                entry_fraction = window.entry_fraction
+
             # Size against realized equity rather than the static budget:
             # after a run of losses the account is smaller and the position
             # should be too. And stop opening anything once the day's losses
@@ -1102,12 +1120,12 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         estimate_credit_value(strategy, short_strike, long_strike, spot), "sell"
                     )
                     quantity = broker.estimate_credit_quantity(
-                        eq.equity * ENTRY_FRACTION, net_debit, window.width
+                        eq.equity * entry_fraction, net_debit, window.width
                     )
                 else:
                     # Buying: you pay the ask.
                     net_debit = fill_price(estimate_spread_value(strategy, long_strike, short_strike, spot), "buy")
-                    quantity = broker.estimate_spread_quantity(eq.equity * ENTRY_FRACTION, net_debit)
+                    quantity = broker.estimate_spread_quantity(eq.equity * entry_fraction, net_debit)
 
                 if quantity > 0:
                     playbook = f"{window.name}:{tier}"

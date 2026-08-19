@@ -66,20 +66,22 @@ WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
         start=time(9, 45), end=time(10, 15), placement=ATM, width=3.0,
-        take_profit_pct=60.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        take_profit_pct=90.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
         note="Opening range resolved. Pay for leverage while a real directional "
              "leg is most likely; this is the window that can capture a big day. "
-             "Takes profit at 60%, not 30%: an ATM spread entered near $1.14 "
-             "maxes out around +163%, so a 30% target would book the small win "
-             "and throw away the entire reason for choosing this structure.",
+             "Takes profit at 90%: an ATM spread entered near $1.14 maxes out "
+             "around +163%, so 90% captures most of a real move while staying "
+             "reachable. The same target on ITM would be impossible -- that "
+             "structure caps near +58%.",
     ),
     PlaybookWindow(
         name="MORNING_DRIFT",
-        start=time(10, 15), end=time(11, 30), placement=ITM, width=3.0,
-        take_profit_pct=30.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
-        note="No clear regime — the momentum leg is spent and the midday range "
-             "has not formed. Conservative structure; a candidate for removal "
-             "if it does not earn its place.",
+        start=time(10, 15), end=time(11, 30), placement=ATM, width=3.0,
+        take_profit_pct=90.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        note="The opening leg is spent and the midday range has not formed. ATM "
+             "rather than ITM so a second morning move is still worth catching, "
+             "on the same 90% target. The least justified window of the four -- "
+             "first candidate for removal if the scoreboard does not defend it.",
     ),
     PlaybookWindow(
         name="ITM_GRINDER",

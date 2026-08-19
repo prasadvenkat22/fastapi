@@ -8,7 +8,10 @@ class TradingState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
     macd_signal: str          # 'BULLISH', 'BEARISH', or 'NEUTRAL'
     sma_trend: str
-    ema9_side: str             # 'ABOVE_EMA9' or 'BELOW_EMA9' — trailing-exit reference             # 'ABOVE_SMA' or 'BELOW_SMA'
+    ema9_side: str             # 'ABOVE_EMA9'/'BELOW_EMA9' — trailing-exit reference
+    ema_cross: str             # 'EMA9_ABOVE_SMA20'/'EMA9_BELOW_SMA20' — velocity
+    vwap_side: str             # 'ABOVE_VWAP'/'BELOW_VWAP'/'UNKNOWN'
+    rsi_band: str              # 'BULL_BAND'/'BEAR_BAND'/'NONE' — trend strength             # 'ABOVE_EMA9' or 'BELOW_EMA9' — trailing-exit reference             # 'ABOVE_SMA' or 'BELOW_SMA'
     bollinger_zone: str
     bollinger_cross: str       # 'CROSS_UP', 'CROSS_DOWN', or 'NONE' — 20-period midline cross        # 'UPPER_BAND', 'LOWER_BAND', or 'NORMAL'
     rsi_zone: str              # 'OVERBOUGHT' (>=70), 'OVERSOLD' (<=30), or 'NEUTRAL'

@@ -82,7 +82,12 @@ WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
         start=_env_time("TRADING_MOMENTUM_START", "09:45"), end=time(10, 15), placement=ITM, width=3.0,
-        take_profit_pct=35.0,
+        # Widest stop of the day. Measured over a month the average 5-minute
+        # bar here spans $1.78 -- more than double the midday $0.83 -- and a
+        # -20% stop on an ITM 3-wide is only a $0.65 move. The opening window
+        # is a different volatility regime and a stop sized for the lull is
+        # inside a single ordinary bar here.
+        take_profit_pct=35.0, stop_loss_pct=-40.0, risk_off_pct=-25.0,
         note="Opening range resolved. Pay for leverage while a real directional "
              "leg is most likely; this is the window that can capture a big day. "
              "40% ARMS the trailing exit rather than selling. A 90-100% target "
@@ -96,7 +101,8 @@ WINDOWS = (
     PlaybookWindow(
         name="MORNING_DRIFT",
         start=time(10, 15), end=time(11, 30), placement=ITM, width=3.0,
-        take_profit_pct=35.0,
+        # $1.30 average bar — between the opening and the lull.
+        take_profit_pct=35.0, stop_loss_pct=-30.0, risk_off_pct=-18.0,
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "
@@ -105,6 +111,9 @@ WINDOWS = (
     PlaybookWindow(
         name="ITM_GRINDER",
         start=time(11, 30), end=time(13, 30), placement=ITM, width=3.0,
+        # Quietest window of the session at $0.83 a bar, which is exactly what
+        # a positive-theta ITM structure wants: the engine-wide -20% stop is
+        # comfortably outside one bar here.
         take_profit_pct=30.0,
         note="Midday lull. Volume dries up and QQQ tends to consolidate, so a "
              "positive-theta structure that also pays when price sits still.",

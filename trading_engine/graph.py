@@ -42,6 +42,7 @@ async def run_trading_cycle(broker: MockBrokerClient = None) -> TradingState:
         "sma_trend": "",
         "ema9_side": "",
         "ema_cross": "",
+        "ema50_reject": False,
         "vwap_side": "",
         "rsi_band": "",
         "bollinger_zone": "",

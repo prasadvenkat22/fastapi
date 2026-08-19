@@ -95,6 +95,10 @@ TREND_ENTRIES_ENABLED = os.getenv("TRADING_TREND_ENTRIES", "true").lower() == "t
 # the market supplies. The RSI band does 75% of the filtering; VWAP only 16%.
 CLEAN_ENTRIES_ENABLED = os.getenv("TRADING_CLEAN_ENTRIES", "true").lower() == "true"
 
+# REJECT: a failed test of the 50 EMA from below. Bearish only -- the measured
+# edge is one-directional and there is no evidence for a mirrored bullish case.
+REJECT_ENTRIES_ENABLED = os.getenv("TRADING_REJECT_ENTRIES", "true").lower() == "true"
+
 # Opening warmup. Entries wait this many minutes after the bell so the
 # opening auction's whipsaws don't get read as a trend; position management
 # is unaffected and runs from the first cycle.
@@ -358,6 +362,18 @@ def sma_agent(state: TradingState) -> dict:
     # 9 EMA is the trailing reference, not an entry filter. A winning trade is
     # held while price keeps closing on the right side of it, which is what
     # lets a run go past any fixed target.
+    # 50 EMA rejection: this bar's HIGH pokes above the 50 EMA but the CLOSE
+    # finishes below it — buyers tried the ceiling and failed.
+    #
+    # Measured over a month of 5-minute bars: 96 occurrences, QQQ lower 66% of
+    # the time afterwards, averaging -$0.31 over the next 3 bars and -$0.66
+    # over 6. Baseline for all bars is 50% and roughly zero drift, and merely
+    # being below the 50 EMA is only 53%. The rejection itself carries the
+    # signal, not the position.
+    ema50_series = close.ewm(span=50, adjust=False).mean()
+    ema50_last = ema50_series.iloc[-1]
+    ema50_reject = bool(bars["High"].iloc[-1] > ema50_last and last_close < ema50_last)
+
     ema9_series = close.ewm(span=9, adjust=False).mean()
     ema9 = ema9_series.iloc[-1]
     ema9_side = "ABOVE_EMA9" if last_close > ema9 else "BELOW_EMA9"
@@ -373,8 +389,8 @@ def sma_agent(state: TradingState) -> dict:
     vwap = fetch_qqq_session_vwap()
     vwap_side = "UNKNOWN" if vwap is None else ("ABOVE_VWAP" if last_close > vwap else "BELOW_VWAP")
 
-    return {"sma_trend": trend, "ema9_side": ema9_side,
-            "ema_cross": ema_cross, "vwap_side": vwap_side}
+    return {"sma_trend": trend, "ema9_side": ema9_side, "ema_cross": ema_cross,
+            "vwap_side": vwap_side, "ema50_reject": ema50_reject}
 
 
 def bollinger_agent(state: TradingState) -> dict:
@@ -658,6 +674,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     halt = bool(state.get("macro_halt"))
     ema9_side = state.get("ema9_side")
     ema_cross = state.get("ema_cross")
+    ema50_reject = bool(state.get("ema50_reject"))
     vwap_side = state.get("vwap_side")
     rsi_band = state.get("rsi_band")
     macd = state.get("macd_signal")
@@ -667,6 +684,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     bb_sd = state.get("bollinger_sd")
     ema9_side = state.get("ema9_side")
     ema_cross = state.get("ema_cross")
+    ema50_reject = bool(state.get("ema50_reject"))
     vwap_side = state.get("vwap_side")
     rsi_band = state.get("rsi_band")
     rsi = state.get("rsi_zone")
@@ -926,6 +944,13 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             and vwap_side == "BELOW_VWAP" and rsi_band == "BEAR_BAND"
         )
 
+        # REJECT: price tried the 50 EMA and failed. Requires the broader
+        # trend to already be down, so this is a continuation read rather than
+        # a lone candle pattern.
+        reject_bear = (
+            ema50_reject and sma == "BELOW_SMA" and vwap_side == "BELOW_VWAP"
+        )
+
         # TREND: momentum, direction and an RSI extreme agreeing, no band
         # needed. This is the tier that can trade a sustained move, which is
         # precisely what the band-based tiers cannot see.
@@ -965,6 +990,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             tier, bullish = "RELAXED", relaxed_bull
         elif MOMENTUM_ENTRIES_ENABLED and (momentum_bull or momentum_bear):
             tier, bullish = "MOMENTUM", momentum_bull
+        elif REJECT_ENTRIES_ENABLED and reject_bear:
+            tier, bullish = "REJECT", False
         elif TREND_ENTRIES_ENABLED and (trend_bull or trend_bear):
             tier, bullish = "TREND", trend_bull
         else:

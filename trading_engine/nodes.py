@@ -99,6 +99,21 @@ CLEAN_ENTRIES_ENABLED = os.getenv("TRADING_CLEAN_ENTRIES", "true").lower() == "t
 # is unaffected and runs from the first cycle.
 MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE = 9, 30
 WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
+
+# Bearish entries wait longer than bullish ones, and deliberately so. An
+# opening reversal is not symmetric in cost: a long opened into a fading bounce
+# bleeds, while a short opened into a V-shaped recovery is run over by the
+# whole move. The opening auction produces exactly that shape often enough
+# that the two directions do not deserve the same start time.
+BEARISH_START_HOUR, BEARISH_START_MINUTE = (
+    int(os.getenv("TRADING_BEARISH_START", "09:45").split(":")[0]),
+    int(os.getenv("TRADING_BEARISH_START", "09:45").split(":")[1]),
+)
+
+
+def _is_before_bearish_start() -> bool:
+    now_est = datetime.now(ZoneInfo("America/New_York"))
+    return (now_est.hour, now_est.minute) < (BEARISH_START_HOUR, BEARISH_START_MINUTE)
 # Once a position reaches its window's target it stops being a sell signal and
 # becomes the point where a trailing exit ARMS. The trade then runs until the
 # 5-minute trend breaks, so a strong move is not capped at the target.
@@ -910,6 +925,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # conditions: VIX at or above its ceiling is disorder, and disorder is
         # not directional — wide quotes and gap risk hurt a short spread as
         # much as a long one. Everything below assumes it has already passed.
+        # Short setups are suppressed until the bearish start time, whatever
+        # the signals say. Long setups are unaffected.
+        if _is_before_bearish_start():
+            strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
+
         if halt:
             tier, bullish = None, False
         elif CLEAN_ENTRIES_ENABLED and (clean_bull or clean_bear):

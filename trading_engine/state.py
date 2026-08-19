@@ -6,6 +6,7 @@ from langchain_core.messages import BaseMessage
 
 class TradingState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
+    qqq_close: float           # QQQ close on the indicator bar — recorded every cycle
     macd_signal: str          # 'BULLISH', 'BEARISH', or 'NEUTRAL'
     sma_trend: str
     ema9_side: str             # 'ABOVE_EMA9'/'BELOW_EMA9' — trailing-exit reference

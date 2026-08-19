@@ -296,7 +296,10 @@ def macd_agent(state: TradingState) -> dict:
     else:
         signal = "NEUTRAL"
 
-    return {"macd_signal": signal}
+    # Recorded on every cycle, not just entries: without it a HOLD cycle
+    # leaves no trace of where price was, and "what did we miss" cannot be
+    # answered from our own data afterwards.
+    return {"macd_signal": signal, "qqq_close": round(float(close.iloc[-1]), 2)}
 
 
 def sma_agent(state: TradingState) -> dict:

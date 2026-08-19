@@ -37,6 +37,7 @@ async def run_trading_cycle(broker: MockBrokerClient = None) -> TradingState:
     app = build_trading_graph(broker=broker)
     initial_state: TradingState = {
         "messages": [],
+        "qqq_close": 0.0,
         "macd_signal": "",
         "sma_trend": "",
         "ema9_side": "",

@@ -57,11 +57,21 @@ POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
 # passing the whole budget left available_cash at exactly $0 on every entry
 # — and the buy-more gate, which requires cash on hand, could therefore
 # never pass at any budget. Rule 3 of the exit ladder was unreachable.
-# 0.04, sized against the daily loss cap rather than picked: at ~$183 a
-# contract this buys 2 spreads on a $10k book, so three losing trades (where
-# MAX_CONSECUTIVE_LOSSES halts anyway) still fit inside the 2% cap. 0.4 put
-# 40% of the account into a single 0DTE spread.
-ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.04"))
+# 0.10, calibrated for the credit structure this playbook now trades.
+#
+# A credit vertical is sized on capital at RISK (width - credit, ~$260 a
+# contract) rather than the premium collected, so 0.10 of a $10k book buys 3
+# spreads and puts ~$780 -- 7.8% -- at risk in one position. Measured over 60
+# sessions that is +57.04 a day against a 639 maximum drawdown, versus +14.13
+# and 165 at 0.04. Doubling again to 0.20 roughly doubles the return and puts
+# 18% of the account into a single 0DTE position, which is the wrong side of
+# the trade for a structure whose losses are rare and large.
+#
+# Note if TRADING_ENABLED_WINDOWS is set back to ALL: at ~$183 a debit
+# contract this same fraction buys 5, and one -30% stop is $274 against a
+# $200 daily cap, so the cap halts the day on a single loss. Lower the
+# fraction alongside re-enabling the debit windows.
+ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.10"))
 
 # Cap on scale-ins per position, unchanged from the original hardcoded 3.
 # 0: scaling into a loser doubles the position on a thesis the market has

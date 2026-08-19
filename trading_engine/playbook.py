@@ -136,17 +136,47 @@ WINDOWS = (
 )
 
 
+# Which windows may OPEN a position, by name. Everything stays defined above
+# so thresholds_for() can still price and exit a position opened under a
+# window that is now switched off -- disabling a window must never orphan a
+# live position's exit rules.
+#
+# Default is AFTERNOON_CREDIT alone, and that is a measured choice rather
+# than a preference. Simulated over 60 sessions with the engine's own
+# pricing and exit ladder, per day:
+#
+#     all four windows, 2 contracts     -18.91      max drawdown  2342
+#     all four windows, 10 contracts    -35.17      max drawdown  9677
+#     credit window only, 1 contract    +14.13      max drawdown   165
+#     credit window only, 3 contracts   +57.04      max drawdown   639
+#
+# Every debit placement lost money: ITM -517, ATM -1358, OTM -1129 over 240
+# morning trades each. Extending credit earlier to 11:30 also measured worse
+# (+3428 against +8198), because that entry wins 67% of the time against 86%
+# at 13:30 and it occupies the slot early.
+#
+# Set TRADING_ENABLED_WINDOWS to a comma-separated list to change this;
+# "ALL" restores every window.
+_enabled_raw = os.getenv("TRADING_ENABLED_WINDOWS", "AFTERNOON_CREDIT").strip()
+ENABLED_WINDOWS = (
+    frozenset(w.name for w in WINDOWS)
+    if _enabled_raw.upper() == "ALL"
+    else frozenset(n.strip() for n in _enabled_raw.split(",") if n.strip())
+)
+
+
 def window_for(now: Optional[datetime] = None) -> Optional[PlaybookWindow]:
     """The window covering `now`, or None outside all of them.
 
     None means no entry — it covers the opening warmup, anything past the
-    final window's end, and any gap left by removing a window.
+    final window's end, any gap left by removing a window, and any window
+    switched off via TRADING_ENABLED_WINDOWS.
     """
     now = now or datetime.now(NY)
     t = now.time()
     for w in WINDOWS:
         if w.start <= t < w.end:
-            return w
+            return w if w.name in ENABLED_WINDOWS else None
     return None
 
 

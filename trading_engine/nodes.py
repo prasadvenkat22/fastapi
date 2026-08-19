@@ -144,6 +144,16 @@ TRAIL_GIVEBACK = float(os.getenv("TRADING_TRAIL_GIVEBACK", "0.15"))
 # let a winner run are different questions and need different thresholds.
 RATCHET_ARM_PCT = float(os.getenv("TRADING_RATCHET_ARM_PCT", "12.0"))
 
+# Smallest giveback that can trigger the ratchet, in points of return.
+#
+# The proportional giveback alone is too tight near the arm point: 15% of a
+# 12% peak is 1.8 points, and the bid-ask round trip is already 2.8-4.2% of
+# position value. The ratchet would fire on the quote oscillating rather than
+# on the position actually turning, booking out of trades that never reversed.
+# Whichever giveback is LARGER applies, so big winners still ratchet
+# proportionally while small ones get room to breathe.
+MIN_GIVEBACK_PCT = float(os.getenv("TRADING_MIN_GIVEBACK_PCT", "4.0"))
+
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
 # rises through the day as time value drains, which lowers that ceiling as
@@ -696,7 +706,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         peak_return = max(position.peak_return_pct, return_pct)
         armed = peak_return >= tp_pct                     # trailing exit
         ratchet_armed = peak_return >= RATCHET_ARM_PCT     # profit protection
-        gave_back = peak_return > 0 and return_pct <= peak_return * (1.0 - TRAIL_GIVEBACK)
+        giveback = max(peak_return * TRAIL_GIVEBACK, MIN_GIVEBACK_PCT)
+        gave_back = peak_return > 0 and return_pct <= peak_return - giveback
 
         # Rule Z: same-day expiration hard close — overrides P&L entirely.
         if force_close:

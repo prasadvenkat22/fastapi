@@ -166,6 +166,7 @@ class MockSpreadPosition:
     entry_net_debit: float    # per-spread cost paid to enter (long premium - short premium)
     current_net_value: float  # per-spread current value (long mark - short mark)
     playbook: str = ""        # named strategy that opened it; drives its take-profit target
+    peak_return_pct: float = 0.0  # best return this position has ever shown
 
     @property
     def return_pct(self) -> float:
@@ -271,6 +272,7 @@ class MockBrokerClient:
             weighted_debit = ((pos.entry_net_debit * pos.quantity) + (pos.current_net_value * quantity)) / total_qty
             self._position = MockSpreadPosition(
                 strategy=pos.strategy, underlying=pos.underlying, quantity=total_qty, playbook=pos.playbook,
+                peak_return_pct=pos.peak_return_pct,
                 long_strike=pos.long_strike, short_strike=pos.short_strike,
                 entry_net_debit=round(weighted_debit, 4), current_net_value=pos.current_net_value,
             )

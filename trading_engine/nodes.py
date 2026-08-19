@@ -109,6 +109,16 @@ WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
 # floor is the 9 EMA itself.
 TRAILING_EXITS_ENABLED = os.getenv("TRADING_TRAILING_EXITS", "true").lower() == "true"
 
+# Once armed, give back at most this share of the best gain before closing.
+# 0.15 means a position that peaked at +70% exits near +59% rather than
+# riding back to the stop.
+#
+# The 9 EMA alone was not enough. It is a PRICE trail and knows nothing about
+# P&L: spread value moves nonlinearly with price and time decay drains it
+# independently, so a position can hand back most of its gain while price is
+# still on the right side of the 9 EMA. Whichever triggers first wins.
+TRAIL_GIVEBACK = float(os.getenv("TRADING_TRAIL_GIVEBACK", "0.15"))
+
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
 # rises through the day as time value drains, which lowers that ceiling as
@@ -650,6 +660,15 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         )
         is_credit_pos = is_credit(position.strategy)
 
+        # Profit ratchet. `armed` means this position HAS reached its target
+        # at some point, whether or not it still has -- which is the case that
+        # matters. A position that peaked at +45% and slid to +37% is below
+        # the arm point, so the take-profit branch never sees it, and without
+        # this it would ride all the way to the -10% stop having been up 45%.
+        peak_return = max(position.peak_return_pct, return_pct)
+        armed = peak_return >= tp_pct
+        gave_back = peak_return > 0 and return_pct <= peak_return * (1.0 - TRAIL_GIVEBACK)
+
         # Rule Z: same-day expiration hard close — overrides P&L entirely.
         if force_close:
             broker.sell_all(position.underlying)
@@ -680,17 +699,28 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 (position.strategy == BULL_CALL_SPREAD and ema9_side == "BELOW_EMA9")
                 or (position.strategy == BEAR_PUT_SPREAD and ema9_side == "ABOVE_EMA9")
             )
-            if is_credit_pos or not TRAILING_EXITS_ENABLED or trend_broken:
+            if is_credit_pos or not TRAILING_EXITS_ENABLED or trend_broken or gave_back:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", (
-                    "TAKE_PROFIT" if (is_credit_pos or not TRAILING_EXITS_ENABLED) else "TRAIL_STOP"
+                    "TAKE_PROFIT" if (is_credit_pos or not TRAILING_EXITS_ENABLED)
+                    else ("RATCHET" if gave_back else "TRAIL_STOP")
                 )
             else:
                 action = "TRAILING"
                 logger.info(
                     "Trailing %s at %+.1f%% (target %+.0f%%) — trend intact, letting it run.",
-                    position.strategy, return_pct, take_profit_for(position.playbook, TAKE_PROFIT_PCT),
+                    position.strategy, return_pct, tp_pct,
                 )
+        # Ratchet rung: armed earlier, has since given back too much. Sits
+        # above the stop so a position that was up 45% exits near 38% instead
+        # of riding to -10%.
+        elif TRAILING_EXITS_ENABLED and armed and gave_back:
+            logger.info(
+                "Profit ratchet: peaked at %+.1f%%, now %+.1f%% (gave back more than %.0f%% of the gain) — closing.",
+                peak_return, return_pct, TRAIL_GIVEBACK * 100,
+            )
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "RATCHET"
         # Rule B / C: Stop Loss (-10%, unchanged) vs. Buy More
         elif return_pct <= stop_pct:
             # place_buy_more adds `position.quantity` more contracts — it

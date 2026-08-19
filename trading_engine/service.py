@@ -77,9 +77,15 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             entry_net_debit=open_row.entry_net_debit,
             current_net_value=current_value,
             playbook=open_row.playbook or "",
+            peak_return_pct=open_row.peak_return_pct or 0.0,
         )
         pre_close_current_value = current_value
         pre_close_return_pct = position.return_pct
+        # Ratchet before the rules run, so a peak set this cycle is visible to
+        # the retracement check in the same cycle rather than one late.
+        if pre_close_return_pct > position.peak_return_pct:
+            position.peak_return_pct = pre_close_return_pct
+            open_row.peak_return_pct = pre_close_return_pct
         spent = open_row.quantity * open_row.entry_net_debit * 100
         broker = MockBrokerClient(position=position, available_cash=max(POSITION_BUDGET - spent, 0))
     else:
@@ -172,6 +178,9 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             open_row.long_strike = new_position.long_strike
             open_row.short_strike = new_position.short_strike
             open_row.entry_net_debit = new_position.entry_net_debit
+            open_row.peak_return_pct = max(
+                new_position.peak_return_pct, open_row.peak_return_pct or 0.0
+            )
 
     db.add(TradingLog(
         execution_status=final_state.get("execution_status", ""),

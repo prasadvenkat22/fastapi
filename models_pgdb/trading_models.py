@@ -51,6 +51,9 @@ class OpenPosition(Base):
     # trading_engine/playbook.py). Carried through to TradeHistory on close so
     # realized P&L can be attributed per strategy rather than pooled.
     playbook = Column(String, nullable=True, index=True)
+    # Best return this position has shown, so a profit ratchet can measure
+    # retracement from the peak rather than only from entry.
+    peak_return_pct = Column(Float, nullable=True, default=0.0)
     # Signal readings at entry — carried through to TradeHistory on close so
     # the setup that triggered this trade isn't lost.
     entry_macd_signal = Column(String, nullable=True)

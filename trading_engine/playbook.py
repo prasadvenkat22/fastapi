@@ -65,9 +65,13 @@ class PlaybookWindow:
     # means total loss for one and the standard buy-it-back-at-twice-the-
     # premium stop for the other.
     take_profit_pct: float
-    stop_loss_pct: float
-    risk_off_pct: float
-    note: str
+    # None means "use the engine-wide value", which is what the environment
+    # sets. Hardcoding a number here silently overrode every env override --
+    # TRADING_STOP_LOSS_PCT was tuned three times in one session and reached
+    # no trade, because thresholds_for preferred the literal in this table.
+    stop_loss_pct: "float | None" = None
+    risk_off_pct: "float | None" = None
+    note: str = ""
 
 
 # Ordered, non-overlapping. Times are ET.
@@ -78,7 +82,7 @@ WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
         start=_env_time("TRADING_MOMENTUM_START", "09:45"), end=time(10, 15), placement=ITM, width=3.0,
-        take_profit_pct=35.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        take_profit_pct=35.0,
         note="Opening range resolved. Pay for leverage while a real directional "
              "leg is most likely; this is the window that can capture a big day. "
              "40% ARMS the trailing exit rather than selling. A 90-100% target "
@@ -92,7 +96,7 @@ WINDOWS = (
     PlaybookWindow(
         name="MORNING_DRIFT",
         start=time(10, 15), end=time(11, 30), placement=ITM, width=3.0,
-        take_profit_pct=35.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        take_profit_pct=35.0,
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "
@@ -101,7 +105,7 @@ WINDOWS = (
     PlaybookWindow(
         name="ITM_GRINDER",
         start=time(11, 30), end=time(13, 30), placement=ITM, width=3.0,
-        take_profit_pct=30.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        take_profit_pct=30.0,
         note="Midday lull. Volume dries up and QQQ tends to consolidate, so a "
              "positive-theta structure that also pays when price sits still.",
     ),
@@ -183,7 +187,13 @@ def thresholds_for(playbook_name: str, defaults: tuple) -> tuple:
     base = (playbook_name or "").split(":", 1)[0]
     for w in WINDOWS:
         if w.name == base:
-            return w.take_profit_pct, w.stop_loss_pct, w.risk_off_pct
+            # Fall back per-field: a window only overrides what it actually
+            # sets, so the environment governs everything else.
+            return (
+                w.take_profit_pct if w.take_profit_pct is not None else defaults[0],
+                w.stop_loss_pct if w.stop_loss_pct is not None else defaults[1],
+                w.risk_off_pct if w.risk_off_pct is not None else defaults[2],
+            )
     return defaults
 
 

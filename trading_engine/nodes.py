@@ -21,7 +21,9 @@ from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
-from .playbook import CREDIT, credit_strikes_for, strikes_for, thresholds_for, window_for
+from .playbook import (
+    CREDIT, credit_strikes_for, rides_to_close, strikes_for, thresholds_for, window_for,
+)
 from .broker import (
     BEAR_PUT_SPREAD,
     BULL_CALL_SPREAD,
@@ -748,6 +750,12 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             position.playbook, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, RISK_OFF_STOP_LOSS_PCT)
         )
         is_credit_pos = is_credit(position.strategy)
+        # Windows that let winners run keep only the stop and the force close.
+        # Booking an ITM debit spread at its +30% target gave up half of a
+        # structure capped near +64% in total; measured on bullish-stack
+        # mornings that cost 18.82 a trade against 36.40, for an identical
+        # worst case.
+        ride = rides_to_close(position.playbook)
 
         # Profit ratchet. What matters is whether this position HAS been up,
         # not whether it still is: `gave_back` is only ever evaluated inside
@@ -775,6 +783,20 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # position, not whatever window the clock is in now: an ATM spread is
         # still an ATM spread at 13:00, and holding it to the ITM target would
         # book it early for no reason.
+        elif ride:
+            # This window rides to the force close. Only the stop below and
+            # the force close above can end the trade, so a winner is never
+            # truncated by a target or a trail.
+            if return_pct <= stop_pct:
+                broker.sell_all(position.underlying)
+                action, exit_reason = "SELL_ALL", "STOP_LOSS"
+            else:
+                action = "TRAILING"
+                logger.info(
+                    "Riding %s at %+.1f%% to the force close (stop %+.0f%%).",
+                    position.strategy, return_pct, stop_pct,
+                )
+        # Rule A: Take Profit
         elif return_pct >= tp_pct:
             # Target reached. With trailing enabled this arms rather than
             # sells: the position runs while the 5-minute trend holds, so a

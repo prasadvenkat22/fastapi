@@ -87,6 +87,25 @@ class PlaybookWindow:
     # whole daily loss cap. One morning stop-out would then halt the session
     # and forfeit the afternoon credit trade, which is the larger edge.
     entry_fraction: "float | None" = None
+    # Let winners run to the force close: keep the stop, drop the take-profit,
+    # trail and ratchet.
+    #
+    # Measured on the 16 bullish-stack mornings, ITM call debit spreads at a
+    # 10:15 entry, per contract:
+    #
+    #     full exit ladder   +18.82 a trade   worst -54
+    #     stop only          +36.40 a trade   worst -54
+    #
+    # Same worst case, nearly double the return, and consistent across sample
+    # halves (+34.18 then +38.61). The mechanism is not subtle: an ITM 3-wide
+    # cannot return more than about +64% in total, and booking it at +30%
+    # gives up half the move. The 9 EMA trail that was supposed to let it run
+    # instead fires on ordinary 5-minute noise.
+    #
+    # Deliberately NOT applied to credit windows, whose gain is bounded by the
+    # credit collected -- there is no tail there to let run, and holding past
+    # the target only risks giving it back.
+    ride_to_close: bool = False
     note: str = ""
 
     def allows_tier(self, tier: str) -> bool:
@@ -120,8 +139,24 @@ WINDOWS = (
     PlaybookWindow(
         name="MORNING_DRIFT",
         start=time(10, 15), end=time(11, 30), placement=ITM, width=3.0,
-        # $1.30 average bar — between the opening and the lull.
-        take_profit_pct=35.0, stop_loss_pct=-30.0, risk_off_pct=-18.0,
+        # -20, not the -30 this window carried while it ran the full exit
+        # ladder. Once the take-profit is removed the stop is the ONLY exit
+        # before the force close, so its width stops being a noise question
+        # and becomes the whole downside. Swept across the 16 bullish-stack
+        # mornings, per contract:
+        #
+        #     -15   +11.93 a trade   worst  -47   halves  +1.34 / +22.53
+        #     -20   +36.32 a trade   worst  -54   halves +34.18 / +38.46
+        #     -30   +35.89 a trade   worst -150   halves  +6.43 / +65.36
+        #
+        # -20 and -30 earn the same average, but -30 costs three times as much
+        # on its worst day and its halves disagree wildly, which is a result
+        # resting on a couple of large recoveries rather than on the rule.
+        # -15 is inside the noise and gets stopped out of trades that worked.
+        #
+        # take_profit_pct is retained for reference but is not consulted while
+        # ride_to_close is set.
+        take_profit_pct=35.0, stop_loss_pct=-20.0, risk_off_pct=-18.0,
         # CLEAN only. Measured at a 10:15 entry over 60 sessions, ITM call
         # debit spreads returned +18.74 a trade on the 16 days the full
         # bullish stack held (price above VWAP and the 20 SMA, 9 EMA above
@@ -136,6 +171,7 @@ WINDOWS = (
         # earns most of the money. At 0.03 the worst case is about $55, so
         # even three morning stop-outs leave the afternoon intact.
         entry_fraction=0.03,
+        ride_to_close=True,
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "
@@ -292,6 +328,20 @@ def thresholds_for(playbook_name: str, defaults: tuple) -> tuple:
                 w.risk_off_pct if w.risk_off_pct is not None else defaults[2],
             )
     return defaults
+
+
+def rides_to_close(playbook_name: str) -> bool:
+    """Whether the strategy that OPENED this position lets winners run.
+
+    Matched on the window portion of the name, like thresholds_for, so a
+    position keeps the exit regime it was opened under even after the clock
+    has moved into a different window.
+    """
+    base = (playbook_name or "").split(":", 1)[0]
+    for w in WINDOWS:
+        if w.name == base:
+            return w.ride_to_close
+    return False
 
 
 def take_profit_for(playbook_name: str, default: float) -> float:

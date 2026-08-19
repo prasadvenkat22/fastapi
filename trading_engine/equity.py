@@ -36,6 +36,23 @@ NY = ZoneInfo("America/New_York")
 # the default entry fraction before the engine stands down.
 MAX_DAILY_LOSS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_PCT", "0.25"))
 
+# After a losing exit, refuse the SAME direction for this many minutes.
+#
+# Without it the engine re-enters the setup it was just stopped out of, on the
+# very next cycle, because the signals still read the same -- observed live
+# taking three put spreads in nineteen minutes, two of them already closed at
+# a loss, each paying the bid-ask both ways. Repeating a trade the market has
+# just rejected is not a new opportunity.
+REENTRY_COOLDOWN_MINUTES = float(os.getenv("TRADING_REENTRY_COOLDOWN_MINUTES", "20"))
+
+# Consecutive losing trades before entries stop for the session. The daily
+# loss limit counts dollars; this counts being wrong repeatedly, which can
+# happen well before the dollar limit on a day the strategy simply does not
+# fit the tape.
+MAX_CONSECUTIVE_LOSSES = int(os.getenv("TRADING_MAX_CONSECUTIVE_LOSSES", "3"))
+
+BULLISH_STRATEGIES = ("BULL_CALL_SPREAD", "PUT_CREDIT_SPREAD")
+
 
 @dataclass
 class EquityState:
@@ -50,6 +67,65 @@ class EquityState:
     def session_start_equity(self) -> float:
         """Equity at the start of today, i.e. before today's results."""
         return self.equity - self.realized_today
+
+
+def blocked_direction() -> "str | None":
+    """'bullish', 'bearish', or None — the side to refuse right now.
+
+    Looks only at the most recent closed trade: if it lost and closed inside
+    the cooldown, that direction is off the table. A winning exit imposes no
+    cooldown, since the setup just worked.
+    """
+    try:
+        db = SessionLocal()
+        try:
+            row = (
+                db.query(TradeHistory.strategy, TradeHistory.realized_pnl_dollars, TradeHistory.closed_at)
+                .order_by(TradeHistory.closed_at.desc())
+                .first()
+            )
+            if row is None or row[1] is None or row[1] >= 0 or row[2] is None:
+                return None
+            from datetime import timezone
+            age_min = (datetime.now(timezone.utc) - row[2]).total_seconds() / 60.0
+            if age_min >= REENTRY_COOLDOWN_MINUTES:
+                return None
+            direction = "bullish" if row[0] in BULLISH_STRATEGIES else "bearish"
+            logger.info(
+                "Re-entry cooldown: last %s trade lost %.2f, %.1f min ago — that side is blocked for %.0f min.",
+                direction, row[1], age_min, REENTRY_COOLDOWN_MINUTES,
+            )
+            return direction
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Cooldown check failed — not blocking.")
+        return None
+
+
+def consecutive_losses_today() -> int:
+    """How many of today's most recent closed trades lost, in a row."""
+    try:
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(TradeHistory.realized_pnl_dollars)
+                .filter(TradeHistory.closed_at >= _today_start())
+                .order_by(TradeHistory.closed_at.desc())
+                .all()
+            )
+            n = 0
+            for (pnl,) in rows:
+                if pnl is not None and pnl < 0:
+                    n += 1
+                else:
+                    break
+            return n
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Consecutive-loss check failed — reporting zero.")
+        return 0
 
 
 def _today_start() -> datetime:

@@ -20,7 +20,7 @@ from GENAI.vector_stores import VoyageEmbeddings
 from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
-from .equity import current_equity
+from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
 from .playbook import CREDIT, credit_strikes_for, strikes_for, thresholds_for, window_for
 from .broker import (
     BEAR_PUT_SPREAD,
@@ -947,6 +947,15 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # conditions: VIX at or above its ceiling is disorder, and disorder is
         # not directional — wide quotes and gap risk hurt a short spread as
         # much as a long one. Everything below assumes it has already passed.
+        # Refuse the side that just lost, for the cooldown period. The
+        # signals still read the same after a stop-out, so without this the
+        # engine immediately re-enters the trade the market just rejected.
+        cooling = blocked_direction()
+        if cooling == "bearish":
+            strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
+        elif cooling == "bullish":
+            strict_bull = relaxed_bull = momentum_bull = trend_bull = clean_bull = False
+
         # Short setups are suppressed until the bearish start time, whatever
         # the signals say. Long setups are unaffected.
         if _is_before_bearish_start():
@@ -987,6 +996,16 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             if eq.halted:
                 window = None
                 action = "HALTED_DAILY_LOSS"
+            else:
+                # A run of losses says the strategy does not fit today's tape,
+                # and that can be true well before the dollar limit is hit.
+                streak = consecutive_losses_today()
+                if streak >= MAX_CONSECUTIVE_LOSSES:
+                    logger.warning(
+                        "%d consecutive losing trades today — standing down for the session.", streak,
+                    )
+                    window = None
+                    action = "HALTED_LOSS_STREAK"
 
             if window is not None:
                 spot = fetch_qqq_spot()

@@ -38,7 +38,8 @@ from .broker import (
 )
 NY = ZoneInfo("America/New_York")
 
-from .data_feed import fetch_market_breadth, fetch_qqq_bars, fetch_qqq_spot, fetch_tnx, fetch_vix
+from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_qqq_session_vwap,
+                        fetch_qqq_spot, fetch_tnx, fetch_vix)
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -369,17 +370,8 @@ def sma_agent(state: TradingState) -> dict:
 
     # Rule C: VWAP, the institutional anchor. Must reset each session — a
     # VWAP carried across days is not VWAP, it is a slow moving average.
-    vwap_side = "UNKNOWN"
-    try:
-        ny_index = bars.index.tz_convert(NY)
-        today = ny_index[-1].date()
-        session = bars[ny_index.date == today]
-        if not session.empty and session["Volume"].sum() > 0:
-            typical = (session["High"] + session["Low"] + session["Close"]) / 3.0
-            vwap = float((typical * session["Volume"]).sum() / session["Volume"].sum())
-            vwap_side = "ABOVE_VWAP" if last_close > vwap else "BELOW_VWAP"
-    except Exception:
-        logger.exception("VWAP unavailable this cycle.")
+    vwap = fetch_qqq_session_vwap()
+    vwap_side = "UNKNOWN" if vwap is None else ("ABOVE_VWAP" if last_close > vwap else "BELOW_VWAP")
 
     return {"sma_trend": trend, "ema9_side": ema9_side,
             "ema_cross": ema_cross, "vwap_side": vwap_side}

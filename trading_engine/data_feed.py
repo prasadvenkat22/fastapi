@@ -14,6 +14,7 @@ needs tick-by-tick trade classification data no snapshot-quote API provides)
 — it's intentionally dropped rather than approximated poorly.
 """
 
+import logging
 import os
 from dataclasses import dataclass
 from datetime import time
@@ -22,6 +23,8 @@ from zoneinfo import ZoneInfo
 import httpx
 import pandas as pd
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 NY = ZoneInfo("America/New_York")
 MARKET_OPEN_ET = time(9, 30)
@@ -130,6 +133,66 @@ def fetch_qqq_spot() -> float:
     if bars.empty:
         return float(fetch_qqq_bars()["Close"].iloc[-1])
     return float(bars["Close"].iloc[-1])
+
+
+def fetch_qqq_session_vwap() -> "float | None":
+    """Session VWAP for QQQ, priced from yfinance bars but VOLUME-checked.
+
+    yfinance's intraday volume for QQQ is unreliable: measured against
+    Tradier's quote for the same session it reported 200.9M against 19.4M,
+    and the figure changed between successive calls for identical bars. Price
+    agrees to the cent across both feeds, so only the weighting is affected --
+    but VWAP is volume-weighted and feeds one of the four entry rules, so a
+    skewed weight silently moves an entry condition.
+
+    Tradier's session volume is used to sanity-check the bar volumes. If they
+    disagree by more than a factor of two the bar volumes are discarded and
+    VWAP falls back to an unweighted typical price, which is less precise but
+    is not weighted by a number known to be wrong.
+    """
+    try:
+        bars = yf.Ticker("QQQ").history(period="1d", interval="5m")
+        if bars.empty:
+            return None
+        session = bars[bars.index.tz_convert(NY).time >= MARKET_OPEN_ET]
+        if session.empty:
+            session = bars
+        typical = (session["High"] + session["Low"] + session["Close"]) / 3.0
+        bar_vol = float(session["Volume"].sum())
+
+        ref = _tradier_session_volume()
+        trust = bar_vol > 0 and (ref is None or 0.5 <= bar_vol / ref <= 2.0)
+        if trust:
+            return float((typical * session["Volume"]).sum() / bar_vol)
+
+        logger.warning(
+            "QQQ bar volume %.0f disagrees with Tradier's %.0f — VWAP falling back to unweighted typical price.",
+            bar_vol, ref or 0.0,
+        )
+        return float(typical.mean())
+    except Exception:
+        logger.exception("VWAP unavailable.")
+        return None
+
+
+def _tradier_session_volume() -> "float | None":
+    """Today's cumulative QQQ volume from Tradier, as a reference."""
+    api_key = os.getenv("TRADIER_API_KEY")
+    if not api_key:
+        return None
+    env = os.getenv("TRADIER_ENV", "sandbox").lower()
+    base_url = TRADIER_PRODUCTION_URL if env == "production" else TRADIER_SANDBOX_URL
+    try:
+        r = httpx.get(base_url, params={"symbols": "QQQ", "greeks": "false"},
+                      headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                      timeout=10.0)
+        r.raise_for_status()
+        q = r.json().get("quotes", {}).get("quote")
+        if isinstance(q, list):
+            q = q[0] if q else None
+        return float(q["volume"]) if q and q.get("volume") is not None else None
+    except Exception:
+        return None
 
 
 def _regular_session_open(bars: pd.DataFrame) -> float:

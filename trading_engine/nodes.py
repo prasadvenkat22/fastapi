@@ -169,8 +169,8 @@ RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
 # mid-range rather than extreme -- the opposite construction to the
 # overbought/oversold gates, which look for a snap-back.
 RSI_BULL_BAND = (float(os.getenv("TRADING_RSI_BULL_LOW", "50.0")),
-                 float(os.getenv("TRADING_RSI_BULL_HIGH", "62.0")))
-RSI_BEAR_BAND = (float(os.getenv("TRADING_RSI_BEAR_LOW", "38.0")),
+                 float(os.getenv("TRADING_RSI_BULL_HIGH", "65.0")))
+RSI_BEAR_BAND = (float(os.getenv("TRADING_RSI_BEAR_LOW", "35.0")),
                  float(os.getenv("TRADING_RSI_BEAR_HIGH", "48.0")))
 
 # How long the headline read (RSS scrape + Voyage embedding + Claude verdict)

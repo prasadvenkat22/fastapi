@@ -65,19 +65,22 @@ class PlaybookWindow:
 WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
-        start=time(9, 45), end=time(10, 15), placement=ATM, width=3.0,
-        take_profit_pct=90.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        start=time(9, 45), end=time(10, 15), placement=ATM, width=2.0,
+        take_profit_pct=40.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
         note="Opening range resolved. Pay for leverage while a real directional "
              "leg is most likely; this is the window that can capture a big day. "
-             "Takes profit at 90%: an ATM spread entered near $1.14 maxes out "
-             "around +163%, so 90% captures most of a real move while staying "
-             "reachable. The same target on ITM would be impossible -- that "
-             "structure caps near +58%.",
+             "40% ARMS the trailing exit rather than selling. A 90-100% target "
+             "sounds right and is effectively unreachable from a morning "
+             "entry: doubling a $2-wide ATM spread needs QQQ up more than $6 "
+             "with 3 hours left, against a typical DAILY range of $3.50-6.30. "
+             "The position would simply ride to the force close. Arming low "
+             "and trailing the 9 EMA gives the same uncapped upside from a "
+             "target that actually fires.",
     ),
     PlaybookWindow(
         name="MORNING_DRIFT",
-        start=time(10, 15), end=time(11, 30), placement=ATM, width=3.0,
-        take_profit_pct=90.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
+        start=time(10, 15), end=time(11, 30), placement=ATM, width=2.0,
+        take_profit_pct=40.0, stop_loss_pct=-10.0, risk_off_pct=-5.0,
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "

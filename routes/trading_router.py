@@ -17,9 +17,9 @@ from schemas_pgrs.trading_schema import (
     TradingStatusResponse,
 )
 from trading_engine import scheduler
-from trading_engine.broker import estimate_intrinsic_value
+from trading_engine.broker import estimate_credit_value, estimate_spread_value, fill_price, is_credit
 from trading_engine.playbook import WINDOWS
-from trading_engine.data_feed import TradierDataError, fetch_qqq_bars
+from trading_engine.data_feed import TradierDataError, fetch_qqq_spot
 from trading_engine.nodes import KILL_SWITCH_PATH
 from trading_engine.service import execute_and_persist_cycle
 
@@ -70,10 +70,21 @@ def _build_open_position_response(db: Session) -> OpenPositionResponse:
     if row is None:
         return OpenPositionResponse(open=False)
 
-    spot = float(fetch_qqq_bars()["Close"].iloc[-1])
-    current_value = estimate_intrinsic_value(row.strategy, row.long_strike, row.short_strike, spot)
-    unrealized_pct = round(((current_value - row.entry_net_debit) / row.entry_net_debit) * 100, 2)
-    unrealized_dollars = round((current_value - row.entry_net_debit) * row.quantity * 100, 2)
+    # Must price exactly as the engine does, or this endpoint reports a P&L
+    # the rules will never act on. It previously used intrinsic value alone,
+    # which ignores the time value still in a spread hours from expiry --
+    # observed reporting +47% on a position the engine marked at +5.8%.
+    spot = fetch_qqq_spot()
+    if is_credit(row.strategy):
+        current_value = fill_price(
+            estimate_credit_value(row.strategy, row.short_strike, row.long_strike, spot), "buy")
+        per_spread = row.entry_net_debit - current_value   # credit profits as it decays
+    else:
+        current_value = fill_price(
+            estimate_spread_value(row.strategy, row.long_strike, row.short_strike, spot), "sell")
+        per_spread = current_value - row.entry_net_debit
+    unrealized_pct = round((per_spread / row.entry_net_debit) * 100, 2)
+    unrealized_dollars = round(per_spread * row.quantity * 100, 2)
 
     return OpenPositionResponse(
         open=True,

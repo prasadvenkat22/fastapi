@@ -134,6 +134,16 @@ TRAILING_EXITS_ENABLED = os.getenv("TRADING_TRAILING_EXITS", "true").lower() == 
 # still on the right side of the 9 EMA. Whichever triggers first wins.
 TRAIL_GIVEBACK = float(os.getenv("TRADING_TRAIL_GIVEBACK", "0.15"))
 
+# Profit level at which the ratchet starts protecting, INDEPENDENT of the
+# take-profit target that arms the trailing exit.
+#
+# Tying the two together was wrong. A position peaking at +17% against a 40%
+# target never armed, so nothing protected it -- observed live giving back
+# +16.9% to +2.2% in three minutes with the ratchet dormant, free to continue
+# to the -10% stop having been up 17%. Protecting a gain and deciding when to
+# let a winner run are different questions and need different thresholds.
+RATCHET_ARM_PCT = float(os.getenv("TRADING_RATCHET_ARM_PCT", "12.0"))
+
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
 # rises through the day as time value drains, which lowers that ceiling as
@@ -684,7 +694,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # the arm point, so the take-profit branch never sees it, and without
         # this it would ride all the way to the -10% stop having been up 45%.
         peak_return = max(position.peak_return_pct, return_pct)
-        armed = peak_return >= tp_pct
+        armed = peak_return >= tp_pct                     # trailing exit
+        ratchet_armed = peak_return >= RATCHET_ARM_PCT     # profit protection
         gave_back = peak_return > 0 and return_pct <= peak_return * (1.0 - TRAIL_GIVEBACK)
 
         # Rule Z: same-day expiration hard close — overrides P&L entirely.
@@ -732,7 +743,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # Ratchet rung: armed earlier, has since given back too much. Sits
         # above the stop so a position that was up 45% exits near 38% instead
         # of riding to -10%.
-        elif TRAILING_EXITS_ENABLED and armed and gave_back:
+        elif TRAILING_EXITS_ENABLED and ratchet_armed and gave_back:
             logger.info(
                 "Profit ratchet: peaked at %+.1f%%, now %+.1f%% (gave back more than %.0f%% of the gain) — closing.",
                 peak_return, return_pct, TRAIL_GIVEBACK * 100,

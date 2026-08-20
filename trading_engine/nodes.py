@@ -221,6 +221,21 @@ MIN_GIVEBACK_PCT = float(os.getenv("TRADING_MIN_GIVEBACK_PCT", "10.0"))
 # position rather than the direction.
 CREDIT_TRAIL_STRIKE_BUFFER = float(os.getenv("TRADING_CREDIT_TRAIL_BUFFER", "2.0"))
 
+# Share of a debit spread's MAXIMUM profit at which a riding position books
+# instead of running to the force close.
+#
+# A ride has no take-profit by design, because an ITM debit spread capped near
+# +60% was giving up half its move to a +30% target. But the cap itself is a
+# real number: a spread cannot be worth more than its width, so once it is
+# within a tenth of that there is no move left to ride -- only the last few
+# cents of convergence, held through the widest quotes of the day.
+#
+# Expressed as a share of max profit rather than a return, because the two
+# differ per entry. A $5 spread bought at $3.23 has $1.77 of profit in it, so
+# the ceiling is +49% of premium paid; bought at $2.50 the same 90% ceiling is
+# +90%. The number that stays constant across entries is the share.
+RIDE_CEILING_FRACTION = float(os.getenv("TRADING_RIDE_CEILING", "0.90"))
+
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
 # rises through the day as time value drains, which lowers that ceiling as
@@ -1001,7 +1016,24 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # a target or a trail.
             deadline = ride_deadline(position.playbook)
             past_deadline = deadline is not None and datetime.now(NY).time() >= deadline
-            if return_pct <= stop_pct:
+            # The one number a ride still respects. A debit spread cannot
+            # exceed its width, so this is the point where the remaining
+            # upside no longer pays for the gamma risk of holding it.
+            width = abs(position.short_strike - position.long_strike)
+            max_return_pct = (
+                (width - position.entry_net_debit) / position.entry_net_debit * 100
+                if position.entry_net_debit > 0 else 0.0
+            )
+            ceiling_pct = RIDE_CEILING_FRACTION * max_return_pct
+            if max_return_pct > 0 and return_pct >= ceiling_pct:
+                logger.info(
+                    "Ride ceiling: %s at %+.1f%% is %.0f%% of the %+.1f%% this structure "
+                    "can pay — booking rather than holding for the last few cents.",
+                    position.strategy, return_pct, RIDE_CEILING_FRACTION * 100, max_return_pct,
+                )
+                broker.sell_all(position.underlying)
+                action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
+            elif return_pct <= stop_pct:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "STOP_LOSS"
             elif past_deadline:

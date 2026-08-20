@@ -45,6 +45,17 @@ def _env_time(var: str, default: str) -> time:
         h, m = default.split(":")
         return time(int(h), int(m))
 
+def _env_float(var: str, default: "float | None") -> "float | None":
+    """A float from the environment, or the default when unset or unparseable."""
+    raw = os.getenv(var)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 # How the long leg sits relative to the ATM short strike.
 ITM = "ITM"       # debit, long leg in the money  — high win rate, capped upside
 ATM = "ATM"       # debit, long leg at the money  — lower win rate, larger upside
@@ -65,6 +76,23 @@ class PlaybookWindow:
     # means total loss for one and the standard buy-it-back-at-twice-the-
     # premium stop for the other.
     take_profit_pct: float
+    # How deep in the money the LONG leg sits, in dollars. None means "as deep
+    # as the spread is wide", which puts the short leg exactly at the money --
+    # the placement every measurement in this file was run on.
+    #
+    # Separating depth from width is what makes the two competing shapes one
+    # parameter. At width 5, depth 5 is the deep-ITM spread (long 705 / short
+    # 710 with QQQ at 710); depth 2 is the widely-quoted 60-delta long /
+    # 20-delta short (long 708 / short 713), which costs less and has roughly
+    # double the ceiling -- +110% against +55% priced at a 09:45 entry.
+    #
+    # The ceiling is not the expectancy. Swept over 16 bullish-stack mornings,
+    # a long leg $2 in the money won 31% of the time and its result flipped
+    # sign between sample halves, against 56% and a stable +25.25 for the deep
+    # placement. Depth stays at the width by default for that reason;
+    # TRADING_MORNING_LONG_DEPTH is there to test the other shape without a
+    # code change, not because the evidence asks for it.
+    long_depth: "float | None" = None
     # None means "use the engine-wide value", which is what the environment
     # sets. Hardcoding a number here silently overrode every env override --
     # TRADING_STOP_LOSS_PCT was tuned three times in one session and reached
@@ -222,7 +250,14 @@ WINDOWS = (
         # $4 buys its higher average with a wider gap between sample halves
         # (5.6x against 2.6x for $3), so some of the gain is a few large wins
         # rather than a steadier edge.
-        start=time(10, 15), end=time(11, 30), placement=ITM, width=4.0,
+        # $5 wide, up from $4. The width buys a higher ceiling -- max gain
+        # goes from +61% to +55% of a larger premium, $177 against $152 a
+        # contract priced at a 09:45 entry -- and a deeper long leg with it,
+        # since depth follows width by default and depth is what measured
+        # well. Untested at this width: the sweep in the block below covers
+        # $3, $4 and $5, but the $5 row was run at a $2 depth, not $5.
+        start=time(10, 15), end=time(11, 30), placement=ITM, width=5.0,
+        long_depth=_env_float("TRADING_MORNING_LONG_DEPTH", None),
         # -20, not the -30 this window carried while it ran the full exit
         # ladder. Once the take-profit is removed the stop is the ONLY exit
         # before the force close, so its width stops being a noise question
@@ -268,7 +303,12 @@ WINDOWS = (
         # session would halt before 13:30 and forfeit the credit trade that
         # earns most of the money. At 0.03 the worst case is about $55, so
         # even three morning stop-outs leave the afternoon intact.
-        entry_fraction=0.03,
+        # 0.04, up from 0.03, because the $5 spread costs $322 a contract and
+        # 3% of a $10,130 account is $304 -- the window would have gone quiet
+        # without a single log line saying why. The risk slice is unchanged
+        # and still governs: 50% of the daily budget is $302, and one stop on
+        # a $322 contract is $64, so the fraction is what binds here.
+        entry_fraction=0.04,
         risk_share=0.50,
         ride_to_close=True,
         # 13:25, five minutes before AFTERNOON_CREDIT opens, so the slot is
@@ -291,7 +331,12 @@ WINDOWS = (
     ),
     PlaybookWindow(
         name="AFTERNOON_CREDIT",
-        start=time(13, 30), end=time(15, 0), placement=CREDIT, width=3.0,
+        # $4 wide, up from $3. On a credit vertical the width is the LONG
+        # leg's distance -- the short strike is placed by volatility and does
+        # not move -- so this buys more credit for more capital at risk,
+        # width-minus-credit per contract, and the risk allocation resizes
+        # the position accordingly rather than quietly taking more exposure.
+        start=time(13, 30), end=time(15, 0), placement=CREDIT, width=4.0,
         # 50 ARMS the trail rather than booking; 90 is where it books. The
         # fixed 50% exit was leaving the second half of the credit behind on
         # a 0DTE structure that has no next session to collect it in -- see
@@ -372,7 +417,15 @@ def strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool) -> tup
     w = window.width
     if window.placement == ATM:
         return (atm_strike, atm_strike + w) if bullish else (atm_strike, atm_strike - w)
-    return (atm_strike - w, atm_strike) if bullish else (atm_strike + w, atm_strike)
+    # Depth positions the LONG leg; width then places the short one a fixed
+    # distance away. Depth defaults to the width, which puts the short leg at
+    # the money and reproduces the placement every sweep in this file used.
+    d = window.long_depth if window.long_depth is not None else w
+    if bullish:
+        long_strike = atm_strike - d
+        return long_strike, long_strike + w
+    long_strike = atm_strike + d
+    return long_strike, long_strike - w
 
 
 # How far out of the money the short leg sits on a credit vertical. Further

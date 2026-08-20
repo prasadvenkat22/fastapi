@@ -38,6 +38,7 @@ from .broker import (
     estimate_credit_value,
     estimate_spread_value,
     fill_price,
+    minutes_to_expiry,
     round_to_strike,
 )
 NY = ZoneInfo("America/New_York")
@@ -492,6 +493,96 @@ def compute_adx(bars, period: int = ADX_PERIOD) -> float:
     return float(adx.iloc[-1]) if len(adx) and adx.iloc[-1] == adx.iloc[-1] else float("nan")
 
 
+# Iron Condor shadow log. Notionally opens a condor at these times each day
+# and marks it every cycle, WITHOUT trading it.
+#
+# Measured over 60 sessions the structure lost money at every parameter
+# combination tried -- 23 of them, across two entry times, four wing
+# distances, two profit targets and two stop multiples. At its own 09:45
+# entry the best cell was -41.36 a condor and the worst -53.10, against the
+# +61.00 at an 85% win rate that the existing 13:30 credit trade made on the
+# same sideways sessions.
+#
+# That is enough to refuse to trade it and not enough to close the question:
+# it rests on vendor bars and our own pricing model. So the condor is marked
+# and written to the cycle log instead, building a forward out-of-sample
+# record at no risk. If it earns its place over a few weeks, the schema work
+# is justified then.
+SHADOW_CONDOR_ENTRIES = ((9, 45), (10, 15))
+# Wings a FIXED distance out, not a sigma multiple. The live credit window
+# places its short strike at 3 sigma, which is right for a single wing sold
+# at 13:30 -- but applied to a 09:45 condor it put the wings 12 points out
+# and collected $0.10 the pair. The strategy being evaluated collects
+# $80-110, so a sigma-placed log would be evidence about a different trade.
+# $4 is the closest match to its 0.15-delta short strike and was the best
+# of the distances measured.
+SHADOW_CONDOR_OFFSET = float(os.getenv("TRADING_SHADOW_CONDOR_OFFSET", "4.0"))
+CONDOR_WIDTH = float(os.getenv("TRADING_SHADOW_CONDOR_WIDTH", "3.0"))
+
+
+def shadow_condor_marks(bars, spot: float) -> dict:
+    """Mark condors notionally opened earlier today, from the bar series alone.
+
+    Deliberately stateless — it reconstructs the entry from the historical
+    bar at each entry time rather than remembering anything, so it cannot
+    drift out of sync with the live position and cannot influence a decision.
+    """
+    marks: dict = {}
+    try:
+        idx = bars.index
+        if getattr(idx, "tz", None) is not None:
+            idx = idx.tz_convert(NY)
+        else:
+            return marks
+        today = datetime.now(NY).date()
+        closes = bars["Close"]
+        sd20 = closes.rolling(20).std()
+
+        for hour, minute in SHADOW_CONDOR_ENTRIES:
+            key = "condor_%02d%02d" % (hour, minute)
+            hits = [
+                i for i, ts in enumerate(idx)
+                if ts.date() == today and (ts.hour, ts.minute) == (hour, minute)
+            ]
+            if not hits:
+                continue
+            pos = hits[0]
+            entry_spot = float(closes.iloc[pos])
+            sd = sd20.iloc[pos]
+            offset = SHADOW_CONDOR_OFFSET
+            atm = round_to_strike(entry_spot)
+            call_short, call_long = atm + offset, atm + offset + CONDOR_WIDTH
+            put_short, put_long = atm - offset, atm - offset - CONDOR_WIDTH
+
+            entry_minutes = minutes_to_expiry(idx[pos].to_pydatetime())
+            credit = (
+                fill_price(estimate_credit_value(CALL_CREDIT_SPREAD, call_short, call_long,
+                                                 entry_spot, entry_minutes), "sell")
+                + fill_price(estimate_credit_value(PUT_CREDIT_SPREAD, put_short, put_long,
+                                                   entry_spot, entry_minutes), "sell")
+            )
+            if credit <= 0.02:
+                continue
+            cost = (
+                fill_price(estimate_credit_value(CALL_CREDIT_SPREAD, call_short, call_long, spot), "buy")
+                + fill_price(estimate_credit_value(PUT_CREDIT_SPREAD, put_short, put_long, spot), "buy")
+            )
+            marks[key] = {
+                "entry_spot": round(entry_spot, 2),
+                "entry_sd20": round(float(sd), 4) if sd == sd else None,
+                "call_short": call_short, "put_short": put_short,
+                "width": CONDOR_WIDTH,
+                "credit": round(credit, 4),
+                "value_now": round(cost, 4),
+                "return_pct": round((credit - cost) / credit * 100.0, 2),
+                "breached": bool(spot >= call_short or spot <= put_short),
+            }
+    except Exception:
+        # Never let an observability feature break a trading cycle.
+        logger.exception("Shadow condor marking failed — continuing without it.")
+    return marks
+
+
 def bollinger_agent(state: TradingState) -> dict:
     """20-period Bollinger Bands (2 standard deviations)."""
     bars = fetch_qqq_bars()
@@ -524,8 +615,13 @@ def bollinger_agent(state: TradingState) -> dict:
     else:
         cross = "NONE"
 
+    # Observability only — a condor we do NOT trade, marked so a forward
+    # record accumulates. See shadow_condor_marks for why it is not traded.
+    shadow = shadow_condor_marks(bars, float(last_close))
+
     return {"bollinger_zone": zone, "bollinger_cross": cross,
-            "bollinger_sd": round(float(std), 4) if std == std else 0.0}
+            "bollinger_sd": round(float(std), 4) if std == std else 0.0,
+            "shadow_condor": shadow}
 
 
 def rsi_agent(state: TradingState) -> dict:

@@ -14,6 +14,7 @@ class TradingState(TypedDict):
     ema_cross: str             # 'EMA9_ABOVE_SMA20'/'EMA9_BELOW_SMA20' — velocity
     vwap_side: str             # 'ABOVE_VWAP'/'BELOW_VWAP'/'UNKNOWN'
     rsi_band: str              # 'BULL_BAND'/'BEAR_BAND'/'NONE' — trend strength             # 'ABOVE_EMA9' or 'BELOW_EMA9' — trailing-exit reference             # 'ABOVE_SMA' or 'BELOW_SMA'
+    shadow_condor: dict        # Iron Condor marked but NOT traded — forward evidence only
     adx: float                 # Wilder ADX(14) — trend STRENGTH, not direction
     adx_zone: str              # 'TRENDING' (>=22), 'CHOPPY' (<22), or 'UNKNOWN'
     bollinger_zone: str

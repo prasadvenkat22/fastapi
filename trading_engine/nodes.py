@@ -44,7 +44,7 @@ from .broker import (
 NY = ZoneInfo("America/New_York")
 
 from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_qqq_session_vwap,
-                        fetch_qqq_spot, fetch_tnx, fetch_vix)
+                        fetch_oil, fetch_qqq_spot, fetch_tnx, fetch_vix)
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -691,6 +691,16 @@ async def market_signals_agent(state: TradingState) -> dict:
     breadth_trend = record_and_summarize(breadth)
     vix = fetch_vix()
     tnx = fetch_tnx()
+    # Crude is fetched and REPORTED but does not gate anything yet. Every
+    # other macro term here was threshold-tuned against measured outcomes;
+    # this one has no such history, and wiring an untested input into the
+    # sentiment that gates risk-off exits would change live behaviour on a
+    # guess. Logged now so a threshold can be set from our own data.
+    try:
+        oil = fetch_oil()
+    except Exception:
+        logger.exception('Crude fetch failed — continuing without it.')
+        oil = None
     _record_macro_reading(vix, tnx)
     # The headline read is the expensive half of this agent and the half that
     # does not change minute to minute, so it is refreshed on its own clock.
@@ -772,6 +782,22 @@ async def market_signals_agent(state: TradingState) -> dict:
     # risk-off even when the absolute level is still under the ceiling,
     # which is exactly the mid-session regime change a level-only check
     # sleeps through.
+    # Direction is recorded in both directions. The gate below only fires on
+    # yields RISING, which is the equity-negative case and the one that was
+    # threshold-tuned -- but falling yields are a real tailwind for a
+    # long-duration index and were previously not visible anywhere in the log.
+    yields_direction = (
+        "RISING" if tnx.change_bps >= TNX_SPIKE_BPS
+        else "FALLING" if tnx.change_bps <= -TNX_SPIKE_BPS
+        else "FLAT"
+    )
+    if oil is not None:
+        logger.info(
+            "Macro watch — crude %.2f (%+.2f%% from open), 10Y %.3f%% (%+.1fbp, %s), VIX %.2f (%+.2f%%).",
+            oil.level, oil.change_pct, tnx.level, tnx.change_bps, yields_direction,
+            vix.level, vix.change_pct,
+        )
+
     yields_spiking = tnx.change_bps >= TNX_SPIKE_BPS
     if yields_spiking:
         logger.warning(
@@ -811,6 +837,12 @@ async def market_signals_agent(state: TradingState) -> dict:
         # sentiment flip can be explained after the fact instead of guessed at.
         "macro_confidence": llm_confidence,
         "macro_risk_factor": llm_risk_factor,
+        # Watched and recorded, not yet gating — see the fetch above.
+        "oil_level": round(oil.level, 2) if oil else 0.0,
+        "oil_change_pct": round(oil.change_pct, 2) if oil else 0.0,
+        "tnx_level": round(tnx.level, 3),
+        "tnx_change_bps": round(tnx.change_bps, 1),
+        "yields_direction": yields_direction,
     }
 
 

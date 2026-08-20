@@ -80,6 +80,19 @@ class VixReading:
 
 
 @dataclass
+class OilReading:
+    """WTI crude as a level and an intraday move.
+
+    Read as a rate of change like ^TNX, not a level: crude at $86 says
+    nothing on its own, while +3% inside a session is an energy shock feeding
+    straight into inflation expectations and the long end.
+    """
+    level: float          # latest front-month print
+    session_open: float   # first regular-session bar of the day
+    change_pct: float     # % move from the 09:30 open (positive = crude rising)
+
+
+@dataclass
 class TnxReading:
     """10-year Treasury yield as a level and an intraday move, in basis points.
 
@@ -195,6 +208,11 @@ def _tradier_session_volume() -> "float | None":
         return None
 
 
+# Front-month WTI. Configurable because the front month rolls and a data
+# vendor outage on one contract should not need a code change.
+OIL_SYMBOL = os.getenv("TRADING_OIL_SYMBOL", "CL=F")
+
+
 def _regular_session_open(bars: pd.DataFrame) -> float:
     """First regular-hours opening print in an intraday bar series.
 
@@ -240,6 +258,34 @@ def fetch_vix() -> VixReading:
     change_pct = ((level - session_open) / session_open) * 100.0 if session_open else 0.0
 
     return VixReading(level=level, session_open=session_open, change_pct=change_pct)
+
+
+def fetch_oil() -> "OilReading":
+    """WTI crude front-month (CL=F) as a level plus its move since the 09:30
+    cash open.
+
+    Crude is the macro input QQQ has no other line of sight to. VIX prices
+    equity fear, ^TNX prices the discount rate, breadth prices participation
+    — none of them see an energy shock until it has already shown up in one
+    of those, by which point the move has happened. A crude spike feeds
+    inflation expectations, which feeds the long end, which is exactly the
+    channel that compresses a long-duration index like the Nasdaq-100.
+
+    CL=F trades close to around the clock — the first bar of the day lands at
+    00:00 ET, ~565 bars against the ~390 of a cash session — so the anchor is
+    taken from regular hours for the same reason as VIX and ^TNX. Measuring
+    from bar zero would report the move since midnight and bury an
+    opening-bell spike under overnight drift.
+    """
+    bars = yf.Ticker(OIL_SYMBOL).history(period="1d", interval="1m")
+    if bars.empty:
+        raise RuntimeError("yfinance returned no crude oil data.")
+
+    level = float(bars["Close"].iloc[-1])
+    session_open = _regular_session_open(bars)
+    change_pct = ((level - session_open) / session_open) * 100.0 if session_open else 0.0
+
+    return OilReading(level=level, session_open=session_open, change_pct=change_pct)
 
 
 def fetch_tnx() -> TnxReading:

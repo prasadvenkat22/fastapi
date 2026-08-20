@@ -24,7 +24,7 @@ from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
 from .playbook import (
     CREDIT, credit_strikes_for, final_take_profit_for, ride_deadline,
-    rides_to_close, strikes_for, thresholds_for, window_for,
+    rides_to_close, risk_share_for, strikes_for, thresholds_for, window_for,
 )
 from .broker import (
     BEAR_PUT_SPREAD,
@@ -77,6 +77,17 @@ POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
 # $200 daily cap, so the cap halts the day on a single loss. Lower the
 # fraction alongside re-enabling the debit windows.
 ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.10"))
+
+# Share of the day's risk budget a window gets when it names none of its own,
+# and the share a post-loss re-entry gets whatever window it is in.
+#
+# Re-entries are budgeted separately because they are a different trade: the
+# tape has just disagreed with the setup. equity.REENTRY_COOLDOWN_MINUTES
+# measured every extra shot after a loss as costing money on average (+51.17
+# a day at no cooldown, +58.13 at thirty minutes, monotonic), so the shot
+# that survives the cooldown gets the smaller allowance, not the larger one.
+DEFAULT_RISK_SHARE = float(os.getenv("TRADING_DEFAULT_RISK_SHARE", "0.20"))
+REENTRY_RISK_SHARE = float(os.getenv("TRADING_REENTRY_RISK_SHARE", "0.30"))
 
 # Cap on scale-ins per position, unchanged from the original hardcoded 3.
 # 0: scaling into a loser doubles the position on a thesis the market has
@@ -1357,6 +1368,10 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # Both checks run before the price fetch below, so a halted or
             # out-of-window cycle costs nothing.
             eq = current_equity(POSITION_BUDGET)
+            # Hoisted: sizing below needs to know whether this entry follows
+            # a loss, and a second query would just ask the same question of
+            # the same rows.
+            streak = 0
             if eq.halted:
                 window = None
                 action = "HALTED_DAILY_LOSS"
@@ -1367,6 +1382,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 # setup, so the exemption has to be read defensively.
                 exempt = window is not None and window.exempt_from_streak_halt
                 streak = consecutive_losses_today()
+
                 if streak >= MAX_CONSECUTIVE_LOSSES and not exempt:
                     logger.warning(
                         "%d consecutive losing trades today — standing down for the session.", streak,
@@ -1414,6 +1430,45 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     # Buying: you pay the ask.
                     net_debit = fill_price(estimate_spread_value(strategy, long_strike, short_strike, spot), "buy")
                     quantity = broker.estimate_spread_quantity(eq.equity * entry_fraction, net_debit)
+
+                # Half size after a loss. The cooldown decides WHETHER to
+                # take the next trade; this decides how big it is, and a
+                # trade taken into a tape that has just stopped one out is
+                # the wrong place to be larger than usual.
+                if streak > 0 and quantity > 1:
+                    logger.info(
+                        "Re-entry after %d loss(es) today — halving size from %d to %d contracts.",
+                        streak, quantity, quantity // 2,
+                    )
+                    quantity = quantity // 2
+
+                # Risk allocation. The entry fraction has already said how
+                # much capital to deploy; this says how much of the day's
+                # loss budget that trade is allowed to consume, which is the
+                # number the daily cap is actually written in.
+                risk_share = (
+                    REENTRY_RISK_SHARE if streak > 0
+                    else risk_share_for(window.name, DEFAULT_RISK_SHARE)
+                )
+                stop_pct_for_entry = thresholds_for(
+                    window.name, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, RISK_OFF_STOP_LOSS_PCT)
+                )[1]
+                # net_debit is the premium paid on a debit spread and the
+                # credit received on a credit one, and the stop is a
+                # percentage of exactly that number in both cases -- so one
+                # expression prices the intended loss for either structure.
+                risk_per_contract = abs(stop_pct_for_entry) / 100.0 * net_debit * 100
+                risk_budget = risk_share * eq.daily_loss_limit
+                if risk_per_contract > 0:
+                    max_by_risk = int(risk_budget // risk_per_contract)
+                    if max_by_risk < quantity:
+                        logger.info(
+                            "Risk allocation: %s may spend %.0f%% of the $%.0f daily budget "
+                            "($%.0f); one contract stops at $%.0f — sizing %d contracts, not %d.",
+                            window.name, risk_share * 100, eq.daily_loss_limit,
+                            risk_budget, risk_per_contract, max_by_risk, quantity,
+                        )
+                        quantity = max_by_risk
 
                 if quantity > 0:
                     playbook = f"{window.name}:{tier}"

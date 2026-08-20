@@ -99,6 +99,28 @@ class PlaybookWindow:
     # Refuse short entries. The tier ladder is symmetric -- CLEAN has a bear
     # side that opens a bear put spread -- but the measured edge is not.
     bullish_only: bool = False
+    # Share of the DAY's risk budget one trade from this window may spend.
+    #
+    # The entry fraction says how much capital a trade deploys and nothing
+    # about what it can lose, which are different questions once the windows
+    # run different structures: 10% of equity buys 3 credit spreads stopping
+    # at -$122, or 4 morning debit spreads stopping at -$199. Sizing that
+    # looks even in dollars deployed is not even in dollars at risk.
+    #
+    # A share, not dollars, so the allocation follows the daily loss cap --
+    # raise TRADING_MAX_DAILY_LOSS_PCT and every window scales with it.
+    # 0.50 morning / 0.30 re-entry / 0.20 afternoon is the split as
+    # requested; the windows do not compete for capital (one position at a
+    # time, and the morning hands its slot over at 13:25), so this governs
+    # per-trade size rather than reserving pools.
+    #
+    # Measured against the STOP, not the structural maximum. A credit
+    # spread's true worst case is width-minus-credit -- $260 on the 3-wide
+    # sold at 0.405 -- and budgeting against that at a 2% daily cap sizes
+    # every credit trade to zero contracts. The stop is what the engine
+    # intends to lose; the gap between it and the maximum is a 0DTE tail the
+    # cap cannot price.
+    risk_share: "float | None" = None
     # Per-window override of TRADING_ENTRY_FRACTION. None means the global.
     #
     # Needed because one fraction cannot serve both structures. A credit
@@ -247,6 +269,7 @@ WINDOWS = (
         # earns most of the money. At 0.03 the worst case is about $55, so
         # even three morning stop-outs leave the afternoon intact.
         entry_fraction=0.03,
+        risk_share=0.50,
         ride_to_close=True,
         # 13:25, five minutes before AFTERNOON_CREDIT opens, so the slot is
         # genuinely free when the credit window looks for an entry.
@@ -275,6 +298,7 @@ WINDOWS = (
         # final_take_profit_pct above. -100% is the classic credit stop: buy
         # it back for twice what you sold it for.
         take_profit_pct=50.0, final_take_profit_pct=90.0, stop_loss_pct=-100.0, risk_off_pct=-60.0,
+        risk_share=0.20,
         exempt_from_streak_halt=True,
         note="Theta is steepest in the last two hours and a debit spread is on "
              "the wrong side of it — it needs a move and there is little day "
@@ -434,6 +458,20 @@ def ride_deadline(playbook_name: str) -> "time | None":
         if w.name == base:
             return w.ride_until
     return None
+
+
+def risk_share_for(playbook_name: str, default: float) -> float:
+    """Share of the day's risk budget one trade from this strategy may spend.
+
+    Looked up by window name like thresholds_for, so a window that has not
+    been given a share falls back to the engine-wide default rather than to
+    whatever the clock is in now.
+    """
+    base = (playbook_name or "").split(":", 1)[0]
+    for w in WINDOWS:
+        if w.name == base and w.risk_share is not None:
+            return w.risk_share
+    return default
 
 
 def final_take_profit_for(playbook_name: str) -> "float | None":

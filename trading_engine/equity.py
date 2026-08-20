@@ -43,7 +43,22 @@ MAX_DAILY_LOSS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_PCT", "0.02"))
 # taking three put spreads in nineteen minutes, two of them already closed at
 # a loss, each paying the bid-ask both ways. Repeating a trade the market has
 # just rejected is not a new opportunity.
-REENTRY_COOLDOWN_MINUTES = float(os.getenv("TRADING_REENTRY_COOLDOWN_MINUTES", "20"))
+#
+# 30 rather than the original 20, which was picked rather than measured.
+# Simulated over 59 sessions on the deployed config, varying only this:
+#
+#     0 min   +51.17 a day   158 trades   worst day -259
+#    20 min   +55.03 a day   154 trades   worst day -241
+#    30 min   +58.13 a day   149 trades   worst day -241
+#    45 min   +58.44 a day   150 trades   worst day -241
+#    90 min   +60.15 a day   143 trades   worst day -241
+#
+# Monotonic: every extra shot after a loss costs money on average. Removing
+# the cooldown entirely gives up 228 dollars over the sample AND widens the
+# worst day. 30 takes most of the available gain; past 45 the curve is nearly
+# flat and the sample thins, so there is no case for going further on this
+# evidence.
+REENTRY_COOLDOWN_MINUTES = float(os.getenv("TRADING_REENTRY_COOLDOWN_MINUTES", "30"))
 
 # Consecutive losing trades before entries stop for the session. The daily
 # loss limit counts dollars; this counts being wrong repeatedly, which can

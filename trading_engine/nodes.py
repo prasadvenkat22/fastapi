@@ -23,8 +23,8 @@ from schemas_pgrs.trading_schema import MarketSentimentOutput
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
 from .playbook import (
-    CREDIT, credit_strikes_for, ride_deadline, rides_to_close, strikes_for,
-    thresholds_for, window_for,
+    CREDIT, credit_strikes_for, final_take_profit_for, ride_deadline,
+    rides_to_close, strikes_for, thresholds_for, window_for,
 )
 from .broker import (
     BEAR_PUT_SPREAD,
@@ -196,6 +196,19 @@ RATCHET_ARM_PCT = float(os.getenv("TRADING_RATCHET_ARM_PCT", "32.0"))
 # Whichever giveback is LARGER applies, so big winners still ratchet
 # proportionally while small ones get room to breathe.
 MIN_GIVEBACK_PCT = float(os.getenv("TRADING_MIN_GIVEBACK_PCT", "10.0"))
+
+# How close spot must come to a credit spread's SHORT strike, in dollars,
+# before the 9 EMA is allowed to end the ride.
+#
+# A debit spread needs direction, so price crossing the 9 EMA the wrong way
+# is a real threat to it. A credit spread does not: it wins if the short
+# strike holds, whichever way price wanders below it. Replayed on the
+# 2026-08-20 trade, the ungated 9 EMA trail closed a short 714 call at +66%
+# at 14:48 on a rally that stalled five dollars below the strike -- the
+# position went on to +75%. Gated at two dollars it stayed open and the
+# ratchet owned the exit, which is the rule that actually measures the
+# position rather than the direction.
+CREDIT_TRAIL_STRIKE_BUFFER = float(os.getenv("TRADING_CREDIT_TRAIL_BUFFER", "2.0"))
 
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
@@ -1002,33 +1015,59 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # sells: the position runs while the 5-minute trend holds, so a
             # strong move is not truncated at a number chosen in advance.
             #
-            # The 9 EMA IS the trail — there is no separate high-water mark.
-            # A giveback large enough to matter necessarily drags price
-            # through the 9 EMA, which fires the exit, so a ratchet would be
-            # mostly redundant machinery.
+            # Two things end the ride: the 9 EMA turning against the
+            # structure, and the ratchet below, which measures the position's
+            # own giveback. Whichever fires first wins -- a price trail alone
+            # knows nothing about P&L, and spread value decays independently
+            # of direction.
             #
             # What that does not cover: a violent reversal inside one cycle.
             # Price can round-trip a long way in 60 seconds and the exit only
             # sees it on the next tick. Trailing genuinely trades a capped,
             # certain gain for an uncapped, less certain one.
-            # Trailing applies to debit positions only. A credit spread's
-            # gain is bounded by the credit collected, so there is no tail to
-            # let run -- holding past the target only risks giving it back.
+            # Credit positions trail too, where their window sets a final
+            # target. The old rule booked them at the target on the grounds
+            # that a credit spread's gain is bounded by the credit collected
+            # and so has no tail to run. Bounded is not the same as finished:
+            # observed live on 2026-08-20, the 13:30 call credit spread was
+            # booked at +51% and was worth +72% forty-five minutes later,
+            # with spot four dollars below the short strike. What ends the
+            # ride is the same thing that ends a debit ride -- price turning
+            # against the structure -- not the target being reached.
+            final_tp = final_take_profit_for(position.playbook)
+            credit_trails = is_credit_pos and final_tp is not None
+            # An adverse move is a move toward the short strike, which is UP
+            # for a short call and DOWN for a short put -- the mirror of the
+            # debit spreads, and the same 9 EMA reading.
             trend_broken = (
-                (position.strategy == BULL_CALL_SPREAD and ema9_side == "BELOW_EMA9")
-                or (position.strategy == BEAR_PUT_SPREAD and ema9_side == "ABOVE_EMA9")
+                (position.strategy in (BULL_CALL_SPREAD, PUT_CREDIT_SPREAD)
+                 and ema9_side == "BELOW_EMA9")
+                or (position.strategy in (BEAR_PUT_SPREAD, CALL_CREDIT_SPREAD)
+                    and ema9_side == "ABOVE_EMA9")
             )
-            if is_credit_pos or not TRAILING_EXITS_ENABLED or trend_broken or gave_back:
+            if credit_trails and trend_broken:
+                # Direction alone does not threaten short premium -- distance
+                # to the short strike does. qqq_close is the same 5-minute
+                # series the 9 EMA is built from, so the two agree.
+                bar_close = state.get("qqq_close")
+                if bar_close:
+                    trend_broken = (
+                        abs(position.short_strike - float(bar_close)) <= CREDIT_TRAIL_STRIKE_BUFFER
+                    )
+            hit_final = final_tp is not None and return_pct >= final_tp
+            books_at_target = (is_credit_pos and not credit_trails) or not TRAILING_EXITS_ENABLED
+            if hit_final or books_at_target or trend_broken or gave_back:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", (
-                    "TAKE_PROFIT" if (is_credit_pos or not TRAILING_EXITS_ENABLED)
+                    "TAKE_PROFIT" if (hit_final or books_at_target)
                     else ("RATCHET" if gave_back else "TRAIL_STOP")
                 )
             else:
                 action = "TRAILING"
                 logger.info(
-                    "Trailing %s at %+.1f%% (target %+.0f%%) — trend intact, letting it run.",
+                    "Trailing %s at %+.1f%% (armed at %+.0f%%, book at %s) — trend intact, letting it run.",
                     position.strategy, return_pct, tp_pct,
+                    f"{final_tp:+.0f}%" if final_tp is not None else "trend break",
                 )
         # Ratchet rung: armed earlier, has since given back too much. Sits
         # above the stop so a position that was up 45% exits near 38% instead
@@ -1106,7 +1145,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     # risk-off cut would just re-open the setup that had already failed --
     # the signals will still be saying the same thing, so it would churn
     # through the stop repeatedly.
-    may_reenter = position is None or exit_reason == "TAKE_PROFIT"
+    # RATCHET and TRAIL_STOP belong here too: both can only fire on a
+    # position that armed above its target, so they are winning exits under
+    # different names. Leaving them out cost the credit window a cycle every
+    # time it trailed out instead of booking at the target.
+    may_reenter = position is None or exit_reason in ("TAKE_PROFIT", "RATCHET", "TRAIL_STOP")
 
     if broker.get_open_position() is None and may_reenter and not past_cutoff and not in_warmup:
         # Bullish: bull call debit spread (long ITM call, short ATM call).

@@ -71,6 +71,24 @@ class PlaybookWindow:
     # no trade, because thresholds_for preferred the literal in this table.
     stop_loss_pct: "float | None" = None
     risk_off_pct: "float | None" = None
+    # Credit windows only: take_profit_pct stops being the exit and becomes
+    # the point where the trail ARMS, and this is the hard book.
+    #
+    # A credit spread's gain is bounded by the credit collected, which was
+    # the argument for booking it at a fixed 50% and never trailing. Bounded
+    # is not the same as worthless: 50% of the credit leaves the other half
+    # on the table, and on 0DTE there is no next session to collect it in.
+    # Observed live on 2026-08-20 — sold the 714/717 call spread for 0.405 at
+    # 13:30, booked it at 0.197 (+51%, +62.43) at 14:09, and by 14:55 the
+    # same spread was worth 0.114 (+72%, +87.42) with spot four dollars below
+    # the short strike and 35 minutes still to run.
+    #
+    # 90 rather than 100 because the last tenth is the worst-paid: buying
+    # back a spread at 0.04 costs the same two-legged bid-ask as buying it at
+    # 0.20, and it is bought while short gamma into the close. What protects
+    # the ride is the ratchet, not the target -- see the giveback logic in
+    # nodes.execution_risk_agent.
+    final_take_profit_pct: "float | None" = None
     # Which entry tiers may open this window. None means any tier.
     #
     # The tier ladder is global but the measured edge is not: morning ITM call
@@ -251,9 +269,12 @@ WINDOWS = (
     PlaybookWindow(
         name="AFTERNOON_CREDIT",
         start=time(13, 30), end=time(15, 0), placement=CREDIT, width=3.0,
-        # 50% of the credit captured, per the strategy note. -100% is the
-        # classic credit stop: buy it back for twice what you sold it for.
-        take_profit_pct=50.0, stop_loss_pct=-100.0, risk_off_pct=-60.0,
+        # 50 ARMS the trail rather than booking; 90 is where it books. The
+        # fixed 50% exit was leaving the second half of the credit behind on
+        # a 0DTE structure that has no next session to collect it in -- see
+        # final_take_profit_pct above. -100% is the classic credit stop: buy
+        # it back for twice what you sold it for.
+        take_profit_pct=50.0, final_take_profit_pct=90.0, stop_loss_pct=-100.0, risk_off_pct=-60.0,
         exempt_from_streak_halt=True,
         note="Theta is steepest in the last two hours and a debit spread is on "
              "the wrong side of it — it needs a move and there is little day "
@@ -412,6 +433,21 @@ def ride_deadline(playbook_name: str) -> "time | None":
     for w in WINDOWS:
         if w.name == base:
             return w.ride_until
+    return None
+
+
+def final_take_profit_for(playbook_name: str) -> "float | None":
+    """The hard book-it target for the strategy that OPENED this position,
+    or None if that strategy exits at its take_profit_pct instead.
+
+    Set means the window arms a trail at take_profit_pct and runs to here;
+    the lookup is by name, like thresholds_for, so a position keeps the exit
+    regime it was opened under even after the clock moves on.
+    """
+    base = (playbook_name or "").split(":", 1)[0]
+    for w in WINDOWS:
+        if w.name == base:
+            return w.final_take_profit_pct
     return None
 
 

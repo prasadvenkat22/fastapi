@@ -14,6 +14,7 @@ from typing import List
 from zoneinfo import ZoneInfo
 
 import feedparser
+import pandas as pd
 from langchain_anthropic import ChatAnthropic
 
 from GENAI.vector_stores import VoyageEmbeddings
@@ -429,8 +430,66 @@ def sma_agent(state: TradingState) -> dict:
     vwap = fetch_qqq_session_vwap()
     vwap_side = "UNKNOWN" if vwap is None else ("ABOVE_VWAP" if last_close > vwap else "BELOW_VWAP")
 
+    # Trend STRENGTH, alongside the direction read above. Recorded only — see
+    # ADX_TREND_THRESHOLD for why it gates nothing.
+    adx = compute_adx(bars)
+    adx_ok = adx == adx  # False for NaN
+    adx_zone = (
+        "UNKNOWN" if not adx_ok
+        else ("TRENDING" if adx >= ADX_TREND_THRESHOLD else "CHOPPY")
+    )
+
     return {"sma_trend": trend, "ema9_side": ema9_side, "ema_cross": ema_cross,
-            "vwap_side": vwap_side, "ema50_reject": ema50_reject}
+            "vwap_side": vwap_side, "ema50_reject": ema50_reject,
+            "adx": round(adx, 2) if adx_ok else 0.0, "adx_zone": adx_zone}
+
+
+ADX_PERIOD = int(os.getenv("TRADING_ADX_PERIOD", "14"))
+# Conventional trending/choppy line. Recorded only -- ADX does not gate any
+# entry, because measured over 60 sessions it did not earn one.
+#
+# On the morning debit leg a 22 threshold discriminated nothing: +4.50 a trade
+# above it against +4.03 below. On the credit leg it was informative but
+# BACKWARDS from the usual advice -- selling premium returned +63.39 a trade at
+# ADX >= 22 and +35.28 below it, every split stable across sample halves. High
+# ADX means high volatility, which widens our 3-sigma strike placement and
+# fattens the credit at the same time: further away and paid more. Gating
+# credit to quiet tape would skip the best trades.
+#
+# Logged so the question can be revisited on our own forward data.
+ADX_TREND_THRESHOLD = float(os.getenv("TRADING_ADX_TREND_THRESHOLD", "22.0"))
+
+
+def _wilder(series, period: int):
+    """Wilder's smoothing — an EMA with alpha = 1/period."""
+    return series.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+
+
+def compute_adx(bars, period: int = ADX_PERIOD) -> float:
+    """Wilder's ADX over the fetched bar series, or NaN if too short.
+
+    Measures how strongly price is trending without saying which way — the
+    directional read stays with the MA/VWAP stack in sma_agent.
+    """
+    high, low, close = bars["High"], bars["Low"], bars["Close"]
+    prev_close, prev_high, prev_low = close.shift(1), high.shift(1), low.shift(1)
+
+    true_range = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
+    ).max(axis=1)
+
+    up_move, down_move = high - prev_high, prev_low - low
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    atr = _wilder(true_range, period)
+    plus_di = 100.0 * _wilder(plus_dm, period) / atr
+    minus_di = 100.0 * _wilder(minus_dm, period) / atr
+
+    total = (plus_di + minus_di).replace(0.0, float("nan"))
+    dx = 100.0 * (plus_di - minus_di).abs() / total
+    adx = _wilder(dx, period)
+    return float(adx.iloc[-1]) if len(adx) and adx.iloc[-1] == adx.iloc[-1] else float("nan")
 
 
 def bollinger_agent(state: TradingState) -> dict:

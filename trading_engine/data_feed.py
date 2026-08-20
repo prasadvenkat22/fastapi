@@ -31,6 +31,8 @@ MARKET_OPEN_ET = time(9, 30)
 
 TRADIER_SANDBOX_URL = "https://sandbox.tradier.com/v1/markets/quotes"
 TRADIER_PRODUCTION_URL = "https://api.tradier.com/v1/markets/quotes"
+TRADIER_SANDBOX_CHAIN_URL = "https://sandbox.tradier.com/v1/markets/options/chains"
+TRADIER_PRODUCTION_CHAIN_URL = "https://api.tradier.com/v1/markets/options/chains"
 
 # Nasdaq-100 constituents used to compute market breadth.
 #
@@ -365,3 +367,212 @@ async def fetch_market_breadth() -> MarketBreadth:
         unchanged=unchanged,
         basket_size=len(quotes),
     )
+
+
+# ---------------------------------------------------------------------------
+# Option chain
+# ---------------------------------------------------------------------------
+#
+# Everything the engine has priced until now came out of a normal-CDF model in
+# broker.py — entry cost, unrealized P&L, stops, the strike distances, the
+# sizing that follows from them. The model is internally consistent, which is
+# why it works as a simulator, but it has never once been compared against a
+# real quote. Nothing downstream can be more accurate than that assumption.
+#
+# This module fetches the real thing. It does NOT yet price decisions: the
+# first job is to log what the model says next to what the market says, on
+# live positions, until there is enough evidence to say which parts of the
+# model are wrong and by how much. Greeks come with it, which is what makes
+# delta-based strike selection possible later.
+
+
+@dataclass(frozen=True)
+class OptionQuote:
+    """One leg, as the market actually quotes it."""
+    symbol: str
+    strike: float
+    option_type: str          # 'call' or 'put'
+    bid: float
+    ask: float
+    delta: "float | None"
+    gamma: "float | None"
+    theta: "float | None"
+    iv: "float | None"
+    volume: int
+    open_interest: int
+
+    @property
+    def mid(self) -> float:
+        """Midpoint, or whichever side exists if the book is one-sided.
+
+        A 0DTE strike far out of the money routinely quotes 0.00 bid, and
+        averaging that with the ask understates what closing it costs.
+        """
+        if self.bid > 0 and self.ask > 0:
+            return round((self.bid + self.ask) / 2.0, 4)
+        return round(self.ask or self.bid, 4)
+
+
+def today_expiry(now=None) -> str:
+    """Today's contract expiration, YYYY-MM-DD in market time.
+
+    QQQ lists daily expirations, and the engine only ever trades the one that
+    expires today — so this is the expiry, not a choice.
+    """
+    from datetime import datetime
+    now = now or datetime.now(NY)
+    return now.strftime("%Y-%m-%d")
+
+
+def fetch_option_chain(expiration: "str | None" = None, symbol: str = "QQQ") -> dict:
+    """The full chain for one expiration, keyed by (option_type, strike).
+
+    Returns an empty dict rather than raising when the chain is unavailable.
+    Every caller so far is observational — a chain that fails to load must
+    degrade to the model quietly, not stop a cycle that was managing a live
+    position.
+    """
+    api_key = os.getenv("TRADIER_API_KEY")
+    if not api_key:
+        logger.warning("TRADIER_API_KEY is not set — option chain unavailable.")
+        return {}
+
+    env = os.getenv("TRADIER_ENV", "sandbox").lower()
+    base_url = TRADIER_PRODUCTION_CHAIN_URL if env == "production" else TRADIER_SANDBOX_CHAIN_URL
+    expiration = expiration or today_expiry()
+
+    try:
+        r = httpx.get(
+            base_url,
+            params={"symbol": symbol, "expiration": expiration, "greeks": "true"},
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        payload = (r.json() or {}).get("options") or {}
+        rows = payload.get("option") or []
+    except httpx.HTTPError as e:
+        logger.warning("Option chain fetch failed (%s) — falling back to the model.", e)
+        return {}
+    except ValueError as e:
+        logger.warning("Option chain returned unparseable JSON (%s).", e)
+        return {}
+
+    if isinstance(rows, dict):        # Tradier collapses a single result
+        rows = [rows]
+
+    chain = {}
+    for row in rows:
+        try:
+            greeks = row.get("greeks") or {}
+            q = OptionQuote(
+                symbol=row.get("symbol", ""),
+                strike=float(row["strike"]),
+                option_type=row.get("option_type", ""),
+                bid=float(row.get("bid") or 0.0),
+                ask=float(row.get("ask") or 0.0),
+                delta=_maybe_float(greeks.get("delta")),
+                gamma=_maybe_float(greeks.get("gamma")),
+                theta=_maybe_float(greeks.get("theta")),
+                iv=_maybe_float(greeks.get("mid_iv")),
+                volume=int(row.get("volume") or 0),
+                open_interest=int(row.get("open_interest") or 0),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        chain[(q.option_type, q.strike)] = q
+    if not chain:
+        logger.warning("Option chain for %s %s came back empty.", symbol, expiration)
+    return chain
+
+
+def _maybe_float(v) -> "float | None":
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def chain_vertical(chain: dict, option_type: str, buy_strike: float,
+                   sell_strike: float) -> "dict | None":
+    """Market price of a vertical: long `buy_strike`, short `sell_strike`.
+
+    Mirrors broker.estimate_spread_value's argument order, so the model and
+    the market can be compared leg for leg. Both credit and debit structures
+    fit: a credit spread's cost to close is the same vertical with the short
+    strike as the long leg, which is exactly how estimate_credit_value
+    delegates.
+
+    bid/ask are the NATURAL prices — what you would actually receive selling
+    the spread and pay buying it, each crossing the wrong side of both legs.
+    That gap is the number the model's flat fill assumption cannot see.
+    """
+    long_leg = chain.get((option_type, float(buy_strike)))
+    short_leg = chain.get((option_type, float(sell_strike)))
+    if long_leg is None or short_leg is None:
+        return None
+    return {
+        "bid": round(long_leg.bid - short_leg.ask, 4),
+        "ask": round(long_leg.ask - short_leg.bid, 4),
+        "mid": round(long_leg.mid - short_leg.mid, 4),
+        "long_leg": long_leg,
+        "short_leg": short_leg,
+    }
+
+
+def strike_for_delta(chain: dict, option_type: str, target_delta: float) -> "float | None":
+    """The listed strike whose delta sits closest to `target_delta`.
+
+    Puts quote a negative delta; the comparison is on magnitude so a caller
+    can ask for 0.60 without knowing which side it is on. Nothing calls this
+    for placement yet — it exists so the 60-delta long / 20-delta short shape
+    can be measured against the deep-ITM placement on real greeks rather than
+    on a model's opinion of what a 60 delta is.
+    """
+    best, best_gap = None, None
+    for (kind, strike), q in chain.items():
+        if kind != option_type or q.delta is None:
+            continue
+        gap = abs(abs(q.delta) - abs(target_delta))
+        if best_gap is None or gap < best_gap:
+            best, best_gap = strike, gap
+    return best
+
+
+def log_price_divergence(option_type: str, buy_strike: float, sell_strike: float,
+                         model_value: float, label: str, chain: "dict | None" = None) -> "dict | None":
+    """Record what the model priced against what the chain quotes.
+
+    Observational only, and deliberately so. The model sizes positions, sets
+    stops and decides exits; swapping it for live quotes changes every one of
+    those at once, on a system that is currently making money. This logs the
+    gap first so the swap can be argued from evidence — and so a chain that
+    is thin, stale or one-sided shows up as a bad data source before it is
+    trusted with a decision.
+
+    Returns the market quote, or None when the chain has nothing for these
+    strikes.
+    """
+    chain = fetch_option_chain() if chain is None else chain
+    if not chain:
+        return None
+    market = chain_vertical(chain, option_type, buy_strike, sell_strike)
+    if market is None:
+        logger.info("Chain has no %s %.0f/%.0f — model-only for %s.",
+                    option_type, buy_strike, sell_strike, label)
+        return None
+
+    mid = market["mid"]
+    gap = mid - model_value
+    pct = (gap / model_value * 100.0) if model_value else 0.0
+    long_leg, short_leg = market["long_leg"], market["short_leg"]
+    logger.info(
+        "Chain vs model [%s] %s %.0f/%.0f: model %.3f, market mid %.3f (%+.3f, %+.1f%%), "
+        "natural %.3f/%.3f — legs %.0fΔ %.3f / %.0fΔ %.3f, OI %d/%d",
+        label, option_type, buy_strike, sell_strike, model_value, mid, gap, pct,
+        market["bid"], market["ask"],
+        (long_leg.delta or 0) * 100, long_leg.mid,
+        (short_leg.delta or 0) * 100, short_leg.mid,
+        long_leg.open_interest, short_leg.open_interest,
+    )
+    return market

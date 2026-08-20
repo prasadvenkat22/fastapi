@@ -33,6 +33,7 @@ from .broker import (
     MockBrokerClient,
     default_mock_broker,
     is_credit,
+    option_type_for,
     CALL_CREDIT_SPREAD,
     PUT_CREDIT_SPREAD,
     estimate_credit_value,
@@ -44,7 +45,8 @@ from .broker import (
 NY = ZoneInfo("America/New_York")
 
 from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_qqq_session_vwap,
-                        fetch_oil, fetch_qqq_spot, fetch_tnx, fetch_vix)
+                        fetch_oil, fetch_qqq_spot, fetch_tnx, fetch_vix,
+                        log_price_divergence)
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -1469,15 +1471,15 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     # A $3-wide sold for $0.40 collects $40 a contract and can
                     # lose $260 -- sizing on the credit understates exposure
                     # more than sixfold.
-                    net_debit = fill_price(
-                        estimate_credit_value(strategy, short_strike, long_strike, spot), "sell"
-                    )
+                    model_mid = estimate_credit_value(strategy, short_strike, long_strike, spot)
+                    net_debit = fill_price(model_mid, "sell")
                     quantity = broker.estimate_credit_quantity(
                         eq.equity * entry_fraction, net_debit, window.width
                     )
                 else:
                     # Buying: you pay the ask.
-                    net_debit = fill_price(estimate_spread_value(strategy, long_strike, short_strike, spot), "buy")
+                    model_mid = estimate_spread_value(strategy, long_strike, short_strike, spot)
+                    net_debit = fill_price(model_mid, "buy")
                     quantity = broker.estimate_spread_quantity(eq.equity * entry_fraction, net_debit)
 
                 # Half size after a loss. The cooldown decides WHETHER to
@@ -1520,6 +1522,27 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         quantity = max_by_risk
 
                 if quantity > 0:
+                    # What the market says this spread is worth, next to what
+                    # the model just decided it is worth. Logged at the moment
+                    # of entry because that is where the two can be compared
+                    # against a price that is about to be committed to.
+                    #
+                    # A credit spread's model value is its cost to CLOSE, so
+                    # the short strike is the long leg of that vertical --
+                    # the same argument order estimate_credit_value uses.
+                    try:
+                        buy_leg, sell_leg = (
+                            (short_strike, long_strike) if is_credit_window
+                            else (long_strike, short_strike)
+                        )
+                        log_price_divergence(
+                            option_type_for(strategy), buy_leg, sell_leg, model_mid,
+                            f"entry {window.name}",
+                        )
+                    except Exception:
+                        # Never let an observational log stop an entry.
+                        logger.exception("Chain divergence log failed — entering anyway.")
+
                     playbook = f"{window.name}:{tier}"
                     logger.info(
                         "Entering %s via %s: %s %d contracts, long %.1f / short %.1f at $%.2f "

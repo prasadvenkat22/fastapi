@@ -14,9 +14,9 @@ from sqlalchemy.orm import Session
 from GENAI.vector_stores import VoyageEmbeddings
 from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 
-from .broker import (MockBrokerClient, MockSpreadPosition, estimate_credit_value,
+from .broker import (MockBrokerClient, MockSpreadPosition, estimate_credit_value, option_type_for,
                       estimate_spread_value, fill_price, is_credit)
-from .data_feed import fetch_qqq_spot
+from .data_feed import fetch_qqq_spot, log_price_divergence
 from .equity import current_equity
 from .graph import run_trading_cycle
 from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
@@ -68,6 +68,23 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
                 estimate_spread_value(open_row.strategy, open_row.long_strike, open_row.short_strike, spot),
                 "sell",
             )
+        # The same comparison the entry makes, repeated every cycle a position
+        # is open: this is where the model's mark drives the stop, the trail
+        # and the ratchet, so a mark that drifts from the market is a decision
+        # made on a price that does not exist. Guarded — an observational log
+        # must never interrupt managing a live position.
+        try:
+            buy_leg, sell_leg = (
+                (open_row.short_strike, open_row.long_strike) if is_credit(open_row.strategy)
+                else (open_row.long_strike, open_row.short_strike)
+            )
+            log_price_divergence(
+                option_type_for(open_row.strategy), buy_leg, sell_leg, current_value,
+                f"open {open_row.playbook or open_row.strategy}",
+            )
+        except Exception:
+            logger.exception("Chain divergence log failed — continuing with the model mark.")
+
         position = MockSpreadPosition(
             strategy=open_row.strategy,
             underlying=open_row.underlying,

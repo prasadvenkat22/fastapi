@@ -23,6 +23,15 @@ PUT_CREDIT_SPREAD = "PUT_CREDIT_SPREAD"     # bullish/neutral — short put belo
 CREDIT_STRATEGIES = (CALL_CREDIT_SPREAD, PUT_CREDIT_SPREAD)
 
 
+def option_type_for(strategy: str) -> str:
+    """'call' or 'put' — which side of the chain a strategy's legs live on.
+
+    Both legs of a vertical are always the same type; only the strikes and
+    which one is short differ.
+    """
+    return "call" if strategy in (BULL_CALL_SPREAD, CALL_CREDIT_SPREAD) else "put"
+
+
 def is_credit(strategy: str) -> bool:
     return strategy in CREDIT_STRATEGIES
 

@@ -78,6 +78,9 @@ class PlaybookWindow:
     # entry and -4.49 when it did not, so letting a looser tier open this
     # window trades exactly the days that lose.
     entry_tiers: "frozenset[str] | None" = None
+    # Refuse short entries. The tier ladder is symmetric -- CLEAN has a bear
+    # side that opens a bear put spread -- but the measured edge is not.
+    bullish_only: bool = False
     # Per-window override of TRADING_ENTRY_FRACTION. None means the global.
     #
     # Needed because one fraction cannot serve both structures. A credit
@@ -110,6 +113,9 @@ class PlaybookWindow:
 
     def allows_tier(self, tier: str) -> bool:
         return self.entry_tiers is None or tier in self.entry_tiers
+
+    def allows_direction(self, bullish: bool) -> bool:
+        return bullish or not self.bullish_only
 
 
 # Ordered, non-overlapping. Times are ET.
@@ -165,6 +171,20 @@ WINDOWS = (
         # the good bucket held: +17.99 then +20.00, 50% win rate in both.
         # ATM and OTM flipped sign between halves and stay off entirely.
         entry_tiers=frozenset({"CLEAN"}),
+        # Long only. CLEAN is symmetric and its bear side opens a bear put
+        # spread, which was never measured before it shipped. Measured now, on
+        # the 16 bearish-stack mornings at a 10:15 entry: ITM -15.52 a trade
+        # at a 25% win rate, OTM -9.96 at a 6% win rate.
+        #
+        # It also fails the specification test that killed the dip tier. Moving
+        # the judging bar five minutes at a time gives +4.13, -7.04, -15.52,
+        # +18.23, +27.07 -- the sign is not stable, so there is no reliable
+        # edge in either direction. The bullish side over the same sweep gives
+        # +6.15, +9.12, +36.40, +34.50, +27.62: positive throughout.
+        #
+        # That also means +36.40 is the luckiest cell of the bullish sweep and
+        # +9 to +36 is the honest range. The direction holds; the size does not.
+        bullish_only=True,
         # One contract. At the global 0.10 this window would take 5, and a
         # single -30% stop would cost $274 against a $200 daily cap -- the
         # session would halt before 13:30 and forfeit the credit trade that

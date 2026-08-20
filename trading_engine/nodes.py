@@ -1088,6 +1088,17 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 window = None
                 action = "TIER_NOT_ALLOWED"
 
+            # Direction gate. The tier ladder is symmetric but the measured
+            # edge is not: on bearish-stack mornings the bear put spread
+            # returned -15.52 a trade at a 25% win rate, and its sign was not
+            # even stable across a five-minute shift of the judging bar.
+            if window is not None and not window.allows_direction(bullish):
+                logger.info(
+                    "%s is long-only — refusing the bearish %s setup.", window.name, tier,
+                )
+                window = None
+                action = "DIRECTION_NOT_ALLOWED"
+
             # A window may also size itself, because one fraction cannot serve
             # both structures — see PlaybookWindow.entry_fraction.
             entry_fraction = ENTRY_FRACTION

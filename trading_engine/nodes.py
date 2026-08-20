@@ -22,7 +22,8 @@ from schemas_pgrs.trading_schema import MarketSentimentOutput
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
 from .playbook import (
-    CREDIT, credit_strikes_for, rides_to_close, strikes_for, thresholds_for, window_for,
+    CREDIT, credit_strikes_for, ride_deadline, rides_to_close, strikes_for,
+    thresholds_for, window_for,
 )
 from .broker import (
     BEAR_PUT_SPREAD,
@@ -784,12 +785,24 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # still an ATM spread at 13:00, and holding it to the ITM target would
         # book it early for no reason.
         elif ride:
-            # This window rides to the force close. Only the stop below and
-            # the force close above can end the trade, so a winner is never
-            # truncated by a target or a trail.
+            # This window rides. Only the stop, the handoff deadline, and the
+            # force close can end the trade, so a winner is never truncated by
+            # a target or a trail.
+            deadline = ride_deadline(position.playbook)
+            past_deadline = deadline is not None and datetime.now(NY).time() >= deadline
             if return_pct <= stop_pct:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "STOP_LOSS"
+            elif past_deadline:
+                # Hand the single position slot to the next window. Holding a
+                # morning winner past 13:25 blocked the credit trade entirely,
+                # which measured +36.40 a day against +80.87 for handing over.
+                logger.info(
+                    "Handoff: closing %s at %+.1f%% so the next window can trade.",
+                    position.strategy, return_pct,
+                )
+                broker.sell_all(position.underlying)
+                action, exit_reason = "SELL_ALL", "HANDOFF"
             else:
                 action = "TRAILING"
                 logger.info(
@@ -1120,13 +1133,25 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             else:
                 # A run of losses says the strategy does not fit today's tape,
                 # and that can be true well before the dollar limit is hit.
+                # window is None here whenever an earlier gate refused the
+                # setup, so the exemption has to be read defensively.
+                exempt = window is not None and window.exempt_from_streak_halt
                 streak = consecutive_losses_today()
-                if streak >= MAX_CONSECUTIVE_LOSSES:
+                if streak >= MAX_CONSECUTIVE_LOSSES and not exempt:
                     logger.warning(
                         "%d consecutive losing trades today — standing down for the session.", streak,
                     )
                     window = None
                     action = "HALTED_LOSS_STREAK"
+                elif streak >= MAX_CONSECUTIVE_LOSSES:
+                    # The dollar cap above still governs this window, so risk
+                    # stays bounded. Three morning stops cost $111 against a
+                    # $200 cap yet would otherwise forfeit the credit trade,
+                    # which is the larger edge by roughly three to one.
+                    logger.info(
+                        "%d consecutive losses, but %s is exempt from the streak halt — "
+                        "the daily cap still applies.", streak, window.name,
+                    )
 
             if window is not None:
                 spot = fetch_qqq_spot()

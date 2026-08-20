@@ -109,6 +109,29 @@ class PlaybookWindow:
     # credit collected -- there is no tail there to let run, and holding past
     # the target only risks giving it back.
     ride_to_close: bool = False
+    # End the ride at this time instead of the force close, handing the single
+    # position slot to a later window.
+    #
+    # Riding a morning winner to 15:45 blocks the 13:30 credit window
+    # completely, because the engine holds one position at a time. Measured
+    # over the 16 bullish-stack sessions:
+    #
+    #     morning rides to 15:45, credit never trades   +36.40 a day
+    #     morning hands over at 13:25, credit trades    +80.87 a day
+    #
+    # The cut costs the morning trade 18 dollars (+36.40 -> +18.04, still
+    # stable across halves) and buys a credit trade worth about 63. Holding
+    # the better-looking single trade was costing more than it made.
+    ride_until: "time | None" = None
+    # Ignore the consecutive-loss halt. The dollar cap still governs this
+    # window, so risk stays bounded.
+    #
+    # MAX_CONSECUTIVE_LOSSES was calibrated when every trade was the same size
+    # and structure. It no longer is: three morning stops cost 3 x $37 = $111
+    # against a $200 cap, yet would stand the session down and forfeit the
+    # credit trade, which is the larger edge by roughly three to one. A cheap
+    # loss should not be able to cancel an expensive opportunity.
+    exempt_from_streak_halt: bool = False
     note: str = ""
 
     def allows_tier(self, tier: str) -> bool:
@@ -192,6 +215,9 @@ WINDOWS = (
         # even three morning stop-outs leave the afternoon intact.
         entry_fraction=0.03,
         ride_to_close=True,
+        # 13:25, five minutes before AFTERNOON_CREDIT opens, so the slot is
+        # genuinely free when the credit window looks for an entry.
+        ride_until=time(13, 25),
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "
@@ -213,6 +239,7 @@ WINDOWS = (
         # 50% of the credit captured, per the strategy note. -100% is the
         # classic credit stop: buy it back for twice what you sold it for.
         take_profit_pct=50.0, stop_loss_pct=-100.0, risk_off_pct=-60.0,
+        exempt_from_streak_halt=True,
         note="Theta is steepest in the last two hours and a debit spread is on "
              "the wrong side of it — it needs a move and there is little day "
              "left to get one. Selling premium turns that decay into the edge: "
@@ -362,6 +389,15 @@ def rides_to_close(playbook_name: str) -> bool:
         if w.name == base:
             return w.ride_to_close
     return False
+
+
+def ride_deadline(playbook_name: str) -> "time | None":
+    """When the ride ends for the strategy that OPENED this position."""
+    base = (playbook_name or "").split(":", 1)[0]
+    for w in WINDOWS:
+        if w.name == base:
+            return w.ride_until
+    return None
 
 
 def take_profit_for(playbook_name: str, default: float) -> float:

@@ -167,7 +167,22 @@ WINDOWS = (
     ),
     PlaybookWindow(
         name="MORNING_DRIFT",
-        start=time(10, 15), end=time(11, 30), placement=ITM, width=3.0,
+        # $4 wide, not $3. ITM placement is (atm - width, atm), so a wider
+        # spread also pushes the long leg deeper in the money, and depth is
+        # what actually pays. Measured on the 16 bullish-stack mornings:
+        #
+        #     $3 wide, long $3 ITM   50% win  +18.04   halves +11.15 / +29.52
+        #     $4 wide, long $4 ITM   56% win  +25.25   halves  +9.23 / +51.95
+        #     $4 wide, long $2 ITM   31% win   +9.27   FLIPS
+        #     $5 wide, long $2 ITM   31% win  +13.23   FLIPS
+        #
+        # The last row is the widely-quoted 60-delta long / 20-delta short
+        # placement. It is the worst of the set here: the leverage comes from
+        # a shallower long leg, and shallower is what loses. Note the caveat --
+        # $4 buys its higher average with a wider gap between sample halves
+        # (5.6x against 2.6x for $3), so some of the gain is a few large wins
+        # rather than a steadier edge.
+        start=time(10, 15), end=time(11, 30), placement=ITM, width=4.0,
         # -20, not the -30 this window carried while it ran the full exit
         # ladder. Once the take-profit is removed the stop is the ONLY exit
         # before the force close, so its width stops being a noise question

@@ -1162,7 +1162,22 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     # time it trailed out instead of booking at the target.
     may_reenter = position is None or exit_reason in ("TAKE_PROFIT", "RATCHET", "TRAIL_STOP")
 
-    if broker.get_open_position() is None and may_reenter and not past_cutoff and not in_warmup:
+    # The 14:00 cutoff is a DEBIT rule: a bought spread needs enough day left
+    # for the move it is paying for. A credit spread wants the opposite --
+    # less time left is less time for the short strike to be reached -- and
+    # AFTERNOON_CREDIT is written to run to 15:00 for exactly that reason.
+    #
+    # Applying the cutoff to it anyway killed the last hour of its window.
+    # Observed on 2026-08-20: the window's setup came back at 14:50 and again
+    # at 14:51, 14:52 and 14:54, all four inside the window and all four
+    # refused by an hour that has nothing to do with short premium. The
+    # window's own end time is what bounds a credit entry.
+    entry_window = window_for()
+    cutoff_blocks_entry = past_cutoff and not (
+        entry_window is not None and entry_window.placement == CREDIT
+    )
+
+    if broker.get_open_position() is None and may_reenter and not cutoff_blocks_entry and not in_warmup:
         # Bullish: bull call debit spread (long ITM call, short ATM call).
         # Bearish: bear put debit spread (long ITM put, short ATM put). Same
         # market_sentiment=GOOD gate either direction (a calm macro
@@ -1328,7 +1343,9 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # momentum leg and a positive-theta ITM one through the midday
             # lull. window is None outside every window — that is a no-entry
             # period, including any gap left by retiring a strategy.
-            window = window_for()
+            # Resolved once, above the entry gate, because the cutoff check
+            # needs to know whether this is a credit window.
+            window = entry_window
 
             # A window may restrict which tiers can open it. MORNING_DRIFT
             # takes CLEAN only: the same ITM structure measured +18.74 a

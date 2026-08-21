@@ -11,6 +11,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py rideratchet # profit protection for a riding position
     python scripts/sweep.py retries     # morning window length: does a second entry pay?
     python scripts/sweep.py breach      # model-free: how often a strike distance holds
     python scripts/sweep.py windows     # every window solo: which earns, which does not
@@ -259,6 +260,30 @@ def sweep_retries(sessions: dict):
     PB.WINDOWS = base
 
 
+def sweep_rideratchet(sessions: dict):
+    """Should a riding position protect a gain, and from what level?
+
+    A ride keeps only its stop and its deadline, which is what let the
+    2026-08-21 morning trade peak at +26.4% and close at +16.7%. The counter-
+    argument is measured too: booking rides at a fixed target earned +18.82 a
+    trade against +36.40 for letting them run. A ratchet is the middle -- it
+    only acts after a gain exists -- and the arm level decides whether it
+    protects winners or truncates them.
+    """
+    print("")
+    print("RIDE RATCHET -- arm level for a riding position (giveback 20%, floor 5 points)")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+    for arm in (0.0, 12.0, 18.0, 25.0, 32.0):
+        N.RIDE_RATCHET_ARM_PCT = arm
+        trades = []
+        for bars in sessions.values():
+            trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
+        label = "off (current)" if arm == 0 else f"arm at +{arm:.0f}%"
+        _report(label, trades, len(sessions))
+    N.RIDE_RATCHET_ARM_PCT = 0.0
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -481,6 +506,8 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("rideratchet", "all"):
+        sweep_rideratchet(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

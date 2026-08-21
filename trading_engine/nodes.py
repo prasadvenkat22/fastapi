@@ -239,6 +239,26 @@ CREDIT_TRAIL_STRIKE_BUFFER = float(os.getenv("TRADING_CREDIT_TRAIL_BUFFER", "2.0
 # +90%. The number that stays constant across entries is the share.
 RIDE_CEILING_FRACTION = float(os.getenv("TRADING_RIDE_CEILING", "0.90"))
 
+# Profit protection for a RIDING position: arm at this return, then close if
+# it hands back more than the giveback below.
+#
+# A ride deliberately has no take-profit, and until now it had nothing else
+# either -- between the stop and the ceiling there was no rung at all. The
+# engine-wide ratchet lives in a branch a riding position never reaches, and
+# its 32% arm sits above where these trades actually peak.
+#
+# Observed live on 2026-08-21: the morning spread peaked at +26.4% as QQQ hit
+# 715 at 11:52 and closed at the 13:25 handoff for +16.7%, handing back 9.7
+# points with no rule watching. That is the same hole RATCHET_ARM_PCT was
+# written to close for non-riding positions.
+#
+# Separate giveback knobs because the engine-wide MIN_GIVEBACK_PCT of 10
+# points is most of a 26-point peak -- it would have fired at +16.4%, which
+# is where the handoff landed anyway. Zero disables the rung entirely.
+RIDE_RATCHET_ARM_PCT = float(os.getenv("TRADING_RIDE_RATCHET_ARM", "0"))
+RIDE_GIVEBACK = float(os.getenv("TRADING_RIDE_GIVEBACK", "0.20"))
+RIDE_MIN_GIVEBACK_PCT = float(os.getenv("TRADING_RIDE_MIN_GIVEBACK", "5.0"))
+
 # Least credit worth selling a spread for, per contract.
 #
 # Without a floor the engine will open a credit vertical that collects
@@ -1120,6 +1140,18 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             elif return_pct <= stop_pct:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "STOP_LOSS"
+            elif (
+                RIDE_RATCHET_ARM_PCT > 0
+                and peak_return >= RIDE_RATCHET_ARM_PCT
+                and return_pct <= peak_return - max(peak_return * RIDE_GIVEBACK,
+                                                    RIDE_MIN_GIVEBACK_PCT)
+            ):
+                logger.info(
+                    "Ride ratchet: peaked at %+.1f%%, now %+.1f%% — booking the ride "
+                    "rather than carrying it to the handoff.", peak_return, return_pct,
+                )
+                broker.sell_all(position.underlying)
+                action, exit_reason = "SELL_ALL", "RATCHET"
             elif past_deadline:
                 # Hand the single position slot to the next window. Holding a
                 # morning winner past 13:25 blocked the credit trade entirely,

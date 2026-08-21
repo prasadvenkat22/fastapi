@@ -424,6 +424,14 @@ def today_expiry(now=None) -> str:
     return now.strftime("%Y-%m-%d")
 
 
+# One chain per expiration per cycle. Three callers now want it in the same
+# minute -- the entry log, the open-position mark and the shadow condor -- and
+# the chain is a 400-500 contract payload that does not change meaningfully
+# inside the 60 seconds between cron runs.
+_CHAIN_CACHE: dict = {}
+_CHAIN_TTL_SECONDS = 30.0
+
+
 def fetch_option_chain(expiration: "str | None" = None, symbol: str = "QQQ") -> dict:
     """The full chain for one expiration, keyed by (option_type, strike).
 
@@ -440,6 +448,11 @@ def fetch_option_chain(expiration: "str | None" = None, symbol: str = "QQQ") -> 
     env = os.getenv("TRADIER_ENV", "sandbox").lower()
     base_url = TRADIER_PRODUCTION_CHAIN_URL if env == "production" else TRADIER_SANDBOX_CHAIN_URL
     expiration = expiration or today_expiry()
+
+    import time as _time
+    cached = _CHAIN_CACHE.get((symbol, expiration))
+    if cached and (_time.monotonic() - cached[0]) < _CHAIN_TTL_SECONDS:
+        return cached[1]
 
     try:
         r = httpx.get(
@@ -483,6 +496,7 @@ def fetch_option_chain(expiration: "str | None" = None, symbol: str = "QQQ") -> 
         chain[(q.option_type, q.strike)] = q
     if not chain:
         logger.warning("Option chain for %s %s came back empty.", symbol, expiration)
+    _CHAIN_CACHE[(symbol, expiration)] = (_time.monotonic(), chain)
     return chain
 
 
@@ -576,3 +590,40 @@ def log_price_divergence(option_type: str, buy_strike: float, sell_strike: float
         long_leg.open_interest, short_leg.open_interest,
     )
     return market
+
+
+def chain_condor_value(call_short: float, call_long: float, put_short: float,
+                       put_long: float, chain: "dict | None" = None) -> "dict | None":
+    """What it costs to close an iron condor right now, at real quotes.
+
+    Returns the mid and the NATURAL cost -- buying both shorts at the ask and
+    selling both wings at the bid -- because the gap between them is the whole
+    question for a structure whose exit target is a few cents. Also returns
+    the combined four-leg bid-ask width, which is what a 90%-decay exit has to
+    pay to get out.
+    """
+    chain = fetch_option_chain() if chain is None else chain
+    if not chain:
+        return None
+    legs = {
+        "call_short": chain.get(("call", float(call_short))),
+        "call_long": chain.get(("call", float(call_long))),
+        "put_short": chain.get(("put", float(put_short))),
+        "put_long": chain.get(("put", float(put_long))),
+    }
+    if any(v is None for v in legs.values()):
+        return None
+    mid = ((legs["call_short"].mid - legs["call_long"].mid)
+           + (legs["put_short"].mid - legs["put_long"].mid))
+    natural = ((legs["call_short"].ask - legs["call_long"].bid)
+               + (legs["put_short"].ask - legs["put_long"].bid))
+    width = sum(q.ask - q.bid for q in legs.values())
+    return {
+        "mid": round(mid, 4),
+        "natural": round(natural, 4),
+        "spread_width": round(width, 4),
+        "short_deltas": [
+            round(legs["call_short"].delta, 3) if legs["call_short"].delta is not None else None,
+            round(legs["put_short"].delta, 3) if legs["put_short"].delta is not None else None,
+        ],
+    }

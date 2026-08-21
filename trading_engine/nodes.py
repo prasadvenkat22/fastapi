@@ -46,7 +46,7 @@ NY = ZoneInfo("America/New_York")
 
 from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_qqq_session_vwap,
                         fetch_oil, fetch_qqq_spot, fetch_tnx, fetch_vix,
-                        log_price_divergence)
+                        chain_condor_value, log_price_divergence)
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -608,6 +608,21 @@ def shadow_condor_marks(bars, spot: float) -> dict:
                 fill_price(estimate_credit_value(CALL_CREDIT_SPREAD, call_short, call_long, spot), "buy")
                 + fill_price(estimate_credit_value(PUT_CREDIT_SPREAD, put_short, put_long, spot), "buy")
             )
+            # The same mark, at real quotes. Everything above is the model
+            # marking its own homework: it produced the entry credit and it
+            # produces the value now, so a condor can look like a 94% winner
+            # without a market ever having offered either price. The chain
+            # says what closing it actually costs, and the four-leg bid-ask
+            # width says whether a 90%-decay exit is reachable at all -- on
+            # the quotes measured so far it is $9-11 a block against a target
+            # of $6-13, which is most or all of the last tenth.
+            market = None
+            try:
+                market = chain_condor_value(call_short, call_short + CONDOR_WIDTH,
+                                            put_short, put_short - CONDOR_WIDTH)
+            except Exception:
+                logger.exception("Chain condor mark failed — model mark only.")
+
             marks[key] = {
                 "entry_spot": round(entry_spot, 2),
                 "entry_sd20": round(float(sd), 4) if sd == sd else None,
@@ -617,6 +632,18 @@ def shadow_condor_marks(bars, spot: float) -> dict:
                 "value_now": round(cost, 4),
                 "return_pct": round((credit - cost) / credit * 100.0, 2),
                 "breached": bool(spot >= call_short or spot <= put_short),
+                # Market marks, None when the chain is unavailable or the
+                # strikes are not listed. return_pct_market uses the model's
+                # entry credit -- the snapshot cannot recover a price from
+                # 09:45 -- so it isolates the exit side of the question.
+                "market_value_now": market["mid"] if market else None,
+                "market_natural_cost": market["natural"] if market else None,
+                "market_spread_width": market["spread_width"] if market else None,
+                "market_short_deltas": market["short_deltas"] if market else None,
+                "return_pct_market": (
+                    round((credit - market["mid"]) / credit * 100.0, 2)
+                    if market and credit else None
+                ),
             }
     except Exception:
         # Never let an observability feature break a trading cycle.

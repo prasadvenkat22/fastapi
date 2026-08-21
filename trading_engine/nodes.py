@@ -289,6 +289,29 @@ MIN_CREDIT = float(os.getenv("TRADING_MIN_CREDIT", "0.05"))
 # selling. Sigma placement remains the fallback when the chain is missing.
 CREDIT_SHORT_DELTA = float(os.getenv("TRADING_CREDIT_SHORT_DELTA", "0.20"))
 
+# Most of equity ONE position may put at structural risk -- not at stop risk.
+#
+# Every other control in this engine governs the loss the rules intend: the
+# stop, the risk share, the daily cap. None of them governs the loss the
+# market can impose. A credit spread's stop is a percentage of the credit
+# collected, perhaps $59 a contract; its structural maximum is width minus
+# credit, $341 a contract, and a gap through both strikes pays the second
+# number, not the first. The daily cap does not help -- it halts new entries
+# after realised losses and cannot close the distance on a position already
+# open.
+#
+# That gap is invisible while size is small and is the whole story once size
+# is the thing being raised. Swept over 60 sessions, daily P&L scales almost
+# perfectly linearly with the entry fraction (+71.53/day at 10%, +225.44 at
+# 30%) precisely because those sessions contained no gap -- the short strike
+# held in 89% of them and the stop caught the rest. Sizing off that curve is
+# sizing off a sample that never met the risk being taken.
+#
+# 0.15: one position may put 15% of the account at structural risk. At
+# today's equity that is four credit contracts, and it is the constraint that
+# binds rather than the capital fraction.
+MAX_POSITION_RISK_PCT = float(os.getenv("TRADING_MAX_POSITION_RISK_PCT", "0.15"))
+
 # Let a credit window open without a directional tier, taking its side from
 # the trend alone.
 #
@@ -1693,6 +1716,23 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                             risk_budget, risk_per_contract, max_by_risk, quantity,
                         )
                         quantity = max_by_risk
+
+                # The tail cap. Structural loss is the premium paid on a debit
+                # spread and width-minus-credit on a credit one -- what the
+                # position loses when the stop does not get a chance to work.
+                structural_per_contract = (
+                    (window.width - net_debit) * 100 if is_credit_window else net_debit * 100
+                )
+                if quantity > 0 and structural_per_contract > 0:
+                    max_by_tail = int((MAX_POSITION_RISK_PCT * eq.equity) // structural_per_contract)
+                    if max_by_tail < quantity:
+                        logger.info(
+                            "Tail cap: %d contracts would put $%.0f at structural risk, above "
+                            "%.0f%% of $%.0f equity — sizing %d.",
+                            quantity, quantity * structural_per_contract,
+                            MAX_POSITION_RISK_PCT * 100, eq.equity, max_by_tail,
+                        )
+                        quantity = max_by_tail
 
                 if is_credit_window and 0 < quantity and net_debit < MIN_CREDIT:
                     logger.info(

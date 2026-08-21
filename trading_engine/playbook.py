@@ -327,7 +327,20 @@ WINDOWS = (
         # without a single log line saying why. The risk slice is unchanged
         # and still governs: 50% of the daily budget is $302, and one stop on
         # a $322 contract is $64, so the fraction is what binds here.
-        entry_fraction=0.04,
+        # 0.08. Swept over 60 sessions with equity compounding, the daily cap
+        # live and the tail cap enforced:
+        #
+        #      4%  +66.65 a day   worst -118.06
+        #      8%  +70.54 a day   worst -230.80
+        #     12%  +80.01 a day   worst -318.95
+        #     20%  +80.12 a day   worst -495.25   (tail cap binds, no gain)
+        #
+        # 12% earns the most and is not chosen, because this window's whole
+        # record is nine trades. Tripling the worst day to buy 20% more from
+        # the least-sampled part of the engine is sizing a thin edge as though
+        # it were the credit window's 76-trade one. 8% buys a second contract
+        # on cheaper entries and stops there.
+        entry_fraction=0.08,
         risk_share=0.50,
         ride_to_close=True,
         # 13:25, five minutes before AFTERNOON_CREDIT opens, so the slot is
@@ -362,7 +375,13 @@ WINDOWS = (
         # final_take_profit_pct above. -100% is the classic credit stop: buy
         # it back for twice what you sold it for.
         take_profit_pct=50.0, final_take_profit_pct=90.0, stop_loss_pct=-100.0, risk_off_pct=-60.0,
-        risk_share=0.20, ratchet_giveback=0.30,
+        # 0.35, not 0.20. Swept over 60 sessions with equity compounding and
+        # the daily cap live, the slice binds up to 35% and stops mattering
+        # above it -- +59.14 a day at 20%, +71.53 at 35%, and identical at 50%
+        # and 80% because the capital fraction takes over as the constraint.
+        # 0.35 is therefore the point where this window stops being throttled
+        # by a share it was never the reason for.
+        risk_share=0.35, ratchet_giveback=0.30,
         exempt_from_streak_halt=True,
         note="Theta is steepest in the last two hours and a debit spread is on "
              "the wrong side of it — it needs a move and there is little day "

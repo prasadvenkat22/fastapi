@@ -11,6 +11,9 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py cooldown    # how long to stand down after a loss
+    python scripts/sweep.py size        # fewer, larger trades vs more, smaller ones
+    python scripts/sweep.py daily       # does trading MORE per day earn more per day?
     python scripts/sweep.py creditexit  # giveback and window length for the credit trade
     python scripts/sweep.py creditgate  # does the credit window need a directional tier?
     python scripts/sweep.py rideratchet # profit protection for a riding position
@@ -64,14 +67,87 @@ class _FakeDatetime(datetime):
         return _Clock.now
 
 
+class _Cooldown:
+    """The post-loss cooldown and the loss streak, simulated.
+
+    Both were stubbed to "never blocking" in the first version of this
+    harness, which quietly made two of the engine's risk rules invisible to
+    every sweep run through it -- including any sweep of the cooldown itself.
+    """
+    minutes = 30.0
+    last_loss_at = None
+    last_loss_dir = None
+    streak_today = 0
+
+    BULLISH = ("BULL_CALL_SPREAD", "PUT_CREDIT_SPREAD")
+
+    @classmethod
+    def open_session(cls):
+        cls.last_loss_at = None
+        cls.last_loss_dir = None
+        cls.streak_today = 0
+
+    @classmethod
+    def book(cls, strategy: str, pnl: float, ts):
+        if pnl < 0:
+            cls.last_loss_at = ts
+            cls.last_loss_dir = "bullish" if strategy in cls.BULLISH else "bearish"
+            cls.streak_today += 1
+        else:
+            cls.streak_today = 0
+
+    @classmethod
+    def blocked(cls):
+        if cls.last_loss_at is None or cls.minutes <= 0:
+            return None
+        age = (_Clock.now - cls.last_loss_at).total_seconds() / 60.0
+        return cls.last_loss_dir if age < cls.minutes else None
+
+    @classmethod
+    def streak(cls):
+        return cls.streak_today
+
+
+class _Account:
+    """Equity that actually moves, so sizing and the circuit breaker are real.
+
+    The first version of this harness handed the engine a fixed $10,000 with
+    halted=False on every cycle of every session. That silently removed two
+    things the live engine has: the daily loss cap, which stops entries once
+    the session is down its limit, and compounding, which makes every
+    position size a function of what the account has already made. Neither
+    matters while sizing is held constant -- and both are the entire question
+    the moment sizing is what is being swept.
+    """
+    equity = EQUITY
+    realized_today = 0.0
+    cap_pct = 0.06
+
+    @classmethod
+    def open_session(cls):
+        cls.realized_today = 0.0
+
+    @classmethod
+    def book(cls, pnl: float):
+        cls.equity += pnl
+        cls.realized_today += pnl
+
+    @classmethod
+    def state(cls) -> EquityState:
+        session_start = cls.equity - cls.realized_today
+        limit = max(session_start, 0.0) * cls.cap_pct
+        return EquityState(EQUITY, cls.equity - EQUITY, cls.equity, cls.realized_today,
+                           limit, limit > 0 and cls.realized_today <= -limit)
+
+
 def _patch_engine():
     """Point the engine at simulated time and account state."""
     N.datetime = _FakeDatetime
     PB.datetime = _FakeDatetime
     broker_mod.datetime = _FakeDatetime
-    N.blocked_direction = lambda: None
-    N.consecutive_losses_today = lambda: 0
-    N.current_equity = lambda *_: EquityState(EQUITY, 0.0, EQUITY, 0.0, EQUITY * 0.06, False)
+    N.blocked_direction = _Cooldown.blocked
+    N.consecutive_losses_today = _Cooldown.streak
+    N.current_equity = lambda *_: _Account.state()
     # Observational only, and it would fire a live HTTP request per bar.
     N.log_price_divergence = lambda *a, **k: None
     # No chain, deliberately. Entries price from the chain since 2026-08-21,
@@ -124,7 +200,9 @@ def _mark(position, spot: float) -> float:
 
 def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
     """One session through the engine. Returns the trades it closed."""
-    broker = MockBrokerClient(position=None, available_cash=EQUITY)
+    _Account.open_session()
+    _Cooldown.open_session()
+    broker = MockBrokerClient(position=None, available_cash=_Account.equity)
     trades, entry = [], None
 
     for i in range(len(day_bars)):
@@ -156,13 +234,18 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
             entry = {"ts": ts, "strategy": after.strategy, "qty": after.quantity,
                      "debit": after.entry_net_debit, "playbook": after.playbook}
         elif before is not None and after is None and entry is not None:
-            trades.append(_close(entry, before, spot, ts, out.get("exit_reason", "")))
+            closed = _close(entry, before, spot, ts, out.get("exit_reason", ""))
+            _Account.book(closed["pnl"])
+            _Cooldown.book(closed["strategy"], closed["pnl"], ts)
+            trades.append(closed)
             entry = None
 
     position = broker.get_open_position()
     if position is not None and entry is not None:
         spot = float(day_bars["Close"].iloc[-1])
-        trades.append(_close(entry, position, spot, day_bars.index[-1], "EOD"))
+        closed = _close(entry, position, spot, day_bars.index[-1], "EOD")
+        _Account.book(closed["pnl"])
+        trades.append(closed)
     return trades
 
 
@@ -260,6 +343,157 @@ def sweep_retries(sessions: dict):
             trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
         _report(f"entries until {end.strftime('%H:%M')}", trades, len(sessions))
     PB.WINDOWS = base
+
+
+def _report_daily(label: str, per_day: list):
+    """Per SESSION, not per trade -- the only frame in which "more trades"
+    can be judged, since a rule that adds trades usually adds worse ones."""
+    if not per_day:
+        print(f"  {label:34s} nothing traded")
+        return
+    days = len(per_day)
+    total = sum(d["pnl"] for d in per_day)
+    trades = sum(d["trades"] for d in per_day)
+    green = len([d for d in per_day if d["pnl"] > 0])
+    half = days // 2
+    h1 = sum(d["pnl"] for d in per_day[:half]) / max(half, 1)
+    h2 = sum(d["pnl"] for d in per_day[half:]) / max(days - half, 1)
+    print(f"  {label:34s} {days:2d} days  {trades / days:4.2f} tr/day  "
+          f"{total / days:+8.2f}/day  {total:+9.2f} tot  {green / days * 100:3.0f}% green days  "
+          f"worst {min(d['pnl'] for d in per_day):+8.2f}  halves {h1:+7.2f}/{h2:+7.2f}")
+
+
+def sweep_cooldown(sessions: dict):
+    """How long to refuse the side that just lost, and how big the morning is.
+
+    The cooldown was measured once before, on a different configuration and
+    with a different tool. Re-measuring it here is not duplication: the
+    engine it governs has changed underneath it -- new widths, chain pricing,
+    a different ratchet -- and a stand-down length is only meaningful against
+    the trades it is standing down from.
+    """
+    print("")
+    print("POST-LOSS COOLDOWN -- minutes the losing side is refused")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    for minutes in (0.0, 15.0, 30.0, 60.0, 120.0):
+        _Cooldown.minutes = minutes
+        _Account.equity = EQUITY
+        per_day = []
+        for day, bars in sessions.items():
+            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
+            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
+                            "trades": len(trades)})
+        _report_daily(f"{minutes:.0f} min" + (" (current)" if minutes == 30 else ""),
+                      per_day)
+    _Cooldown.minutes = 30.0
+
+    print("")
+    print("MORNING SIZE -- capital the debit window may deploy")
+    print("")
+    base = PB.WINDOWS
+    for fraction in (0.04, 0.08, 0.12, 0.20):
+        PB.WINDOWS = tuple(
+            replace(w, entry_fraction=fraction) if w.name == "MORNING_DRIFT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _Account.equity = EQUITY
+        per_day = []
+        for day, bars in sessions.items():
+            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
+            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
+                            "trades": len(trades)})
+        _report_daily(f"morning fraction {fraction:.0%}" + (" (current)" if fraction == 0.04 else ""),
+                      per_day)
+    PB.WINDOWS = base
+    _Account.equity = EQUITY
+
+
+def sweep_daily(sessions: dict):
+    """Would trading more per day have earned more per day?
+
+    Every rule tested so far that ADDS trades has cost money: a longer
+    morning window took +21.58 a trade to +1.74, a looser credit gate took
+    89% wins to 76%, a longer credit window left the total flat. This asks
+    the question at the level it was posed -- whole sessions, all windows
+    switched on together, one position at a time as the engine actually runs.
+    """
+    print("")
+    print("TRADES PER DAY vs DOLLARS PER DAY -- 60 sessions, one position at a time")
+    print("")
+    combos = [
+        ("credit only", {"AFTERNOON_CREDIT"}),
+        ("morning only", {"MORNING_DRIFT"}),
+        ("morning + credit (current)", {"MORNING_DRIFT", "AFTERNOON_CREDIT"}),
+        ("+ midday grinder", {"MORNING_DRIFT", "ITM_GRINDER", "AFTERNOON_CREDIT"}),
+        ("all four windows", {w.name for w in PB.WINDOWS}),
+    ]
+    for label, names in combos:
+        PB.ENABLED_WINDOWS = frozenset(names)
+        per_day = []
+        for day, bars in sessions.items():
+            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
+            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
+                            "trades": len(trades)})
+        _report_daily(label, per_day)
+
+
+def sweep_size(sessions: dict):
+    """Same trades, more contracts: where does size stop paying?
+
+    P&L scales linearly with contracts and risk does not, because the daily
+    loss cap is a fixed share of equity: past some size one bad session hits
+    the cap, entries stop, and the rest of that day's opportunities are
+    forfeited. That break is what this looks for, and it is only visible now
+    that the harness carries equity and halts like the live engine.
+    """
+    print("")
+    print("SIZE -- credit window's share of the daily risk budget")
+    print("")
+    base = PB.WINDOWS
+    for share in (0.20, 0.35, 0.50, 0.80):
+        PB.WINDOWS = tuple(
+            replace(w, risk_share=share) if w.name == "AFTERNOON_CREDIT" else w for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _Account.equity = EQUITY
+        per_day = []
+        for day, bars in sessions.items():
+            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
+            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
+                            "trades": len(trades)})
+        _report_daily(f"credit share {share:.0%}" + (" (current)" if share == 0.20 else ""),
+                      per_day)
+        print(f"{'':36s} ending equity ${_Account.equity:,.2f}")
+    PB.WINDOWS = base
+
+    # Past 35% the risk slice stops binding and the ENTRY FRACTION does --
+    # the slice permits contracts the capital allocation cannot buy. So the
+    # second half of the size question is how much capital an entry may
+    # deploy, held at a slice loose enough not to interfere.
+    print("")
+    print("SIZE -- capital an entry may deploy, credit slice held at 50%")
+    print("")
+    base_fraction = N.ENTRY_FRACTION
+    PB.WINDOWS = tuple(
+        replace(w, risk_share=0.50) if w.name == "AFTERNOON_CREDIT" else w for w in base
+    )
+    for fraction in (0.10, 0.15, 0.20, 0.30):
+        N.ENTRY_FRACTION = fraction
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _Account.equity = EQUITY
+        per_day = []
+        for day, bars in sessions.items():
+            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
+            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
+                            "trades": len(trades)})
+        _report_daily(f"entry fraction {fraction:.0%}" + (" (current)" if fraction == 0.10 else ""),
+                      per_day)
+        print(f"{'':36s} ending equity ${_Account.equity:,.2f}")
+    N.ENTRY_FRACTION = base_fraction
+    PB.WINDOWS = base
+    _Account.equity = EQUITY
 
 
 def sweep_creditexit(sessions: dict):
@@ -580,6 +814,12 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("cooldown", "all"):
+        sweep_cooldown(sessions)
+    if which in ("size", "all"):
+        sweep_size(sessions)
+    if which in ("daily", "all"):
+        sweep_daily(sessions)
     if which in ("creditexit", "all"):
         sweep_creditexit(sessions)
     if which in ("creditgate", "all"):

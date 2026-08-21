@@ -238,6 +238,20 @@ CREDIT_TRAIL_STRIKE_BUFFER = float(os.getenv("TRADING_CREDIT_TRAIL_BUFFER", "2.0
 # +90%. The number that stays constant across entries is the share.
 RIDE_CEILING_FRACTION = float(os.getenv("TRADING_RIDE_CEILING", "0.90"))
 
+# Least credit worth selling a spread for, per contract.
+#
+# Without a floor the engine will open a credit vertical that collects
+# nothing. Sizing does not stop it -- estimate_credit_quantity divides the
+# budget by width-minus-credit, which is at its LARGEST when the credit is
+# zero, so a worthless entry sizes like a normal one. return_pct then reads
+# 0.0 forever (it guards its own denominator), so the position can never take
+# profit and never stop out; it just holds full width of downside to the
+# force close for an upside of nothing.
+#
+# Found by scripts/sweep.py replaying 60 sessions: on quiet days the model
+# prices a 3-sigma-out spread at zero and the engine takes it.
+MIN_CREDIT = float(os.getenv("TRADING_MIN_CREDIT", "0.05"))
+
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
 # rises through the day as time value drains, which lowers that ceiling as
@@ -549,7 +563,14 @@ def compute_adx(bars, period: int = ADX_PERIOD) -> float:
 # and written to the cycle log instead, building a forward out-of-sample
 # record at no risk. If it earns its place over a few weeks, the schema work
 # is justified then.
-SHADOW_CONDOR_ENTRIES = ((9, 45), (10, 15))
+# 13:30 added after the 2026-08-21 sweep. The two morning entries were chosen
+# when the question was "does the 09:45 condor the notes recommend work" --
+# it does not, at -0.32 to +3.66 a condor with halves that flip sign. The
+# same sweep found the 13:30 cell is the one worth watching: +38.95 a condor
+# unfiltered and +54.62 behind ADX<22, at 82-88% win rates with halves that
+# agree. The shadow log has to cover the promising cell, not just the
+# rejected one, or the forward record answers a question nobody is asking.
+SHADOW_CONDOR_ENTRIES = ((9, 45), (10, 15), (13, 30))
 # Wings a FIXED distance out, not a sigma multiple. The live credit window
 # places its short strike at 3 sigma, which is right for a single wing sold
 # at 13:30 -- but applied to a 09:45 condor it put the wings 12 points out
@@ -1547,6 +1568,14 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                             risk_budget, risk_per_contract, max_by_risk, quantity,
                         )
                         quantity = max_by_risk
+
+                if is_credit_window and 0 < quantity and net_debit < MIN_CREDIT:
+                    logger.info(
+                        "%s priced at %.3f credit, below the %.2f floor — no entry. "
+                        "A spread sold for nothing carries the full width of risk.",
+                        window.name, net_debit, MIN_CREDIT,
+                    )
+                    quantity = 0
 
                 if quantity > 0:
                     # What the market says this spread is worth, next to what

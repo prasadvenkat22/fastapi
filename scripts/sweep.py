@@ -11,6 +11,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py orb         # single-leg weekly calls on an opening-range break
 
 What it cannot replay, and what that costs:
 
@@ -291,6 +292,87 @@ def _run_condor(bars: pd.DataFrame, i: int, offset: float, wing: float = 3.0) ->
     return {"pnl": round(pnl, 2), "reason": reason, "pct": round((pnl / 100) / credit * 100, 2)}
 
 
+def _bs_call(spot: float, strike: float, years: float, iv: float) -> tuple:
+    """Black-Scholes call price and delta, zero rate, zero dividend.
+
+    broker.py prices VERTICALS with a CDF on the spread's midpoint, which has
+    no single-leg equivalent -- so a single call needs its own pricer. Zero
+    rate is a rounding error over three days.
+    """
+    import math
+    if years <= 0:
+        intrinsic = max(spot - strike, 0.0)
+        return intrinsic, (1.0 if spot > strike else 0.0)
+    vt = iv * math.sqrt(years)
+    d1 = (math.log(spot / strike) + 0.5 * iv * iv * years) / vt
+    d2 = d1 - vt
+    nd1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
+    nd2 = 0.5 * (1.0 + math.erf(d2 / math.sqrt(2.0)))
+    return spot * nd1 - strike * nd2, nd1
+
+
+def sweep_orb(sessions: dict, iv: float = 0.185, dte: float = 3.0):
+    """Buy a 60-delta weekly call when QQQ breaks the 09:30-09:45 high.
+
+    Nothing here touches the engine -- this is a different instrument (one
+    long call, not a vertical) and a different entry (opening-range break,
+    not the CLEAN stack), so it is simulated on its own terms and judged
+    against what the engine actually earns.
+
+    IV is held constant at the level measured on the live chain for this
+    tenor. That is the sim's main weakness: a real breakout often comes with
+    a small IV bid, which would help the winners slightly.
+    """
+    print("")
+    print(f"OPENING RANGE BREAK -> 60-delta call, {dte:.0f} DTE, IV {iv:.3f}")
+    print("   +20% target / -15% stop, as the note specifies")
+    print("")
+    for exit_by in (dtime(12, 0), dtime(15, 55)):
+        results = []
+        for bars in sessions.values():
+            opening = [i for i, ts in enumerate(bars.index) if dtime(9, 30) <= ts.time() < dtime(9, 45)]
+            if not opening:
+                continue
+            or_high = float(bars["High"].iloc[opening].max())
+            entry_i = None
+            for i, ts in enumerate(bars.index):
+                if ts.time() < dtime(9, 45) or ts.time() >= exit_by:
+                    continue
+                if float(bars["Close"].iloc[i]) > or_high:
+                    entry_i = i
+                    break
+            if entry_i is None:
+                continue
+            spot = float(bars["Close"].iloc[entry_i])
+            # The strike whose delta is nearest 0.60, on the listed $1 grid.
+            strike = min((round(spot) + k for k in range(-8, 3)),
+                         key=lambda K: abs(_bs_call(spot, K, dte / 365.0, iv)[1] - 0.60))
+            entry_px, _ = _bs_call(spot, strike, dte / 365.0, iv)
+            if entry_px <= 0:
+                continue
+            entry_ts = bars.index[entry_i]
+            pnl_pct, reason = None, None
+            for j in range(entry_i + 1, len(bars)):
+                ts = bars.index[j]
+                if ts.time() >= exit_by:
+                    break
+                elapsed_days = (ts - entry_ts).total_seconds() / 86400.0
+                px, _ = _bs_call(float(bars["Close"].iloc[j]), strike,
+                                 max(dte - elapsed_days, 0.0) / 365.0, iv)
+                pnl_pct, reason = (px - entry_px) / entry_px * 100.0, "TIME_EXIT"
+                if px >= entry_px * 1.20:
+                    pnl_pct, reason = 20.0, "TARGET"
+                    break
+                if px <= entry_px * 0.85:
+                    pnl_pct, reason = -15.0, "STOP"
+                    break
+            if pnl_pct is None:
+                continue
+            results.append({"pnl": round(pnl_pct / 100.0 * entry_px * 100, 2),
+                            "pct": round(pnl_pct, 2), "reason": reason})
+        _report(f"exit by {exit_by.strftime('%H:%M')}", results, len(sessions))
+
+
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     _patch_engine()
@@ -302,6 +384,8 @@ def main():
         sweep_credit(sessions)
     if which in ("condor", "all"):
         sweep_condor(sessions)
+    if which in ("orb", "all"):
+        sweep_orb(sessions)
 
 
 if __name__ == "__main__":

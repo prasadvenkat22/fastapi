@@ -660,6 +660,24 @@ def shadow_condor_marks(bars, spot: float) -> dict:
             except Exception:
                 logger.exception("Chain condor mark failed — model mark only.")
 
+            # The market's price for this condor AT ENTRY, logged in the
+            # minutes around the entry bar. The mark is stateless and
+            # recomputed from bars every cycle, so it can never recover a
+            # quote from earlier in the day -- and without a real entry
+            # credit the whole forward record is model fiction, which is the
+            # error this file just spent a session correcting elsewhere.
+            try:
+                age_min = abs((datetime.now(NY) - idx[pos].to_pydatetime()).total_seconds()) / 60.0
+                if age_min <= 6.0 and market is not None:
+                    logger.info(
+                        "Shadow condor %s ENTRY at market: credit %.3f mid / %.3f natural "
+                        "(model says %.3f), four-leg width %.3f, short deltas %s",
+                        key, market["mid"], market["natural"], credit,
+                        market["spread_width"], market["short_deltas"],
+                    )
+            except Exception:
+                pass
+
             marks[key] = {
                 "entry_spot": round(entry_spot, 2),
                 "entry_sd20": round(float(sd), 4) if sd == sd else None,

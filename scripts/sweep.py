@@ -11,6 +11,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py windows     # every window solo: which earns, which does not
     python scripts/sweep.py orb         # single-leg weekly calls on an opening-range break
 
 What it cannot replay, and what that costs:
@@ -68,6 +69,14 @@ def _patch_engine():
     N.current_equity = lambda *_: EquityState(EQUITY, 0.0, EQUITY, 0.0, EQUITY * 0.06, False)
     # Observational only, and it would fire a live HTTP request per bar.
     N.log_price_divergence = lambda *a, **k: None
+    # No chain, deliberately. Entries price from the chain since 2026-08-21,
+    # but there are no HISTORICAL chains to replay -- and reaching for today's
+    # would price a June entry at August's quotes. Left in, the first run of
+    # this sweep filled debit spreads at an expired chain's penny asks and
+    # reported +43,559 a trade. The model is the only pricing a replay can
+    # use, which is precisely why a premium-selling window cannot be validated
+    # by one.
+    N.fetch_option_chain = lambda *a, **k: {}
 
 
 def _session_vwap(bars_slice: pd.DataFrame) -> float:
@@ -196,6 +205,30 @@ def sweep_morning(sessions: dict):
                 trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
             depth_label = "deep (long = width)" if depth is None else f"long ${depth:.0f} ITM"
             _report(f"${width:.0f} wide, {depth_label}", trades, len(sessions))
+    PB.WINDOWS = base
+
+
+def sweep_windows(sessions: dict):
+    """Each window traded alone, so no window can hide inside another's P&L.
+
+    Read the credit row with the caveat in mind: it sells far-out-of-the-money
+    premium, which is exactly where broker.py's model was measured wrong on
+    2026-08-21 -- 0.30 modelled against 0.02 quoted. There are no historical
+    chains to replay, so a backtest of a premium-selling window cannot be
+    trusted in absolute terms. Its forward record, priced from the chain since
+    2026-08-21, is the evidence that counts.
+    """
+    print("")
+    print("EVERY WINDOW SOLO -- 60 sessions")
+    print("")
+    base = PB.WINDOWS
+    for w in base:
+        PB.ENABLED_WINDOWS = frozenset({w.name})
+        trades = []
+        for bars in sessions.values():
+            trades += replay_session(bars, w.start, dtime(15, 45))
+        flag = "  [MODEL-PRICED, see docstring]" if w.placement == "CREDIT" else ""
+        _report(f"{w.name} ${w.width:.0f} {w.placement}{flag}", trades, len(sessions))
     PB.WINDOWS = base
 
 
@@ -380,6 +413,8 @@ def main():
     print(f"{len(sessions)} sessions, {min(sessions)} to {max(sessions)}")
     if which in ("morning", "all"):
         sweep_morning(sessions)
+    if which in ("windows", "all"):
+        sweep_windows(sessions)
     if which in ("credit", "all"):
         sweep_credit(sessions)
     if which in ("condor", "all"):

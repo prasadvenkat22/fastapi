@@ -23,8 +23,9 @@ from schemas_pgrs.trading_schema import MarketSentimentOutput
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
 from .playbook import (
-    CREDIT, credit_strikes_for, final_take_profit_for, ride_deadline,
-    rides_to_close, risk_share_for, strikes_for, thresholds_for, window_for,
+    CREDIT, credit_strikes_for, final_take_profit_for, ratchet_giveback_for,
+    ride_deadline, rides_to_close, risk_share_for, strikes_for, thresholds_for,
+    window_for,
 )
 from .broker import (
     BEAR_PUT_SPREAD,
@@ -287,6 +288,21 @@ MIN_CREDIT = float(os.getenv("TRADING_MIN_CREDIT", "0.05"))
 # enough that it expires worthless most days, close enough to be worth
 # selling. Sigma placement remains the fallback when the chain is missing.
 CREDIT_SHORT_DELTA = float(os.getenv("TRADING_CREDIT_SHORT_DELTA", "0.20"))
+
+# Let a credit window open without a directional tier, taking its side from
+# the trend alone.
+#
+# The tier ladder was built for debit spreads, which need a move to pay and
+# so need a directional read worth acting on. A credit spread does not: it
+# pays if its short strike holds, and the strike holding is mostly a question
+# of distance and time, not direction. Measured model-free over 60 sessions,
+# a call short four dollars above spot at 13:30 is never touched in 92% of
+# them -- with no signal required at all.
+#
+# What the gate costs is window time. On 2026-08-21 the credit window opened
+# at 13:30 and the tier did not line up until 14:29, so the trade collected
+# an hour less decay than it could have.
+CREDIT_LOOSE_GATE = os.getenv("TRADING_CREDIT_LOOSE_GATE", "false").lower() == "true"
 
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
@@ -1102,7 +1118,10 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # protecting, whatever the engine-wide arm point says.
         peak_return = max(position.peak_return_pct, return_pct)
         ratchet_armed = peak_return >= min(RATCHET_ARM_PCT, tp_pct)
-        giveback = max(peak_return * TRAIL_GIVEBACK, MIN_GIVEBACK_PCT)
+        giveback = max(
+            peak_return * ratchet_giveback_for(position.playbook, TRAIL_GIVEBACK),
+            MIN_GIVEBACK_PCT,
+        )
         gave_back = peak_return > 0 and return_pct <= peak_return - giveback
 
         # Rule Z: same-day expiration hard close — overrides P&L entirely.
@@ -1484,6 +1503,14 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             tier, bullish = "TREND", trend_bull
         else:
             tier, bullish = None, False
+
+        # No tier, but a credit window is open: sell premium on the side the
+        # trend is moving away from. Recorded as its own tier name so the
+        # scoreboard can separate it from the signal-driven entries.
+        if tier is None and CREDIT_LOOSE_GATE and not halt:
+            w = entry_window
+            if w is not None and w.placement == CREDIT and sma in ("ABOVE_SMA", "BELOW_SMA"):
+                tier, bullish = "THETA", sma == "ABOVE_SMA"
 
         if tier is not None:
             # Strike placement comes from the time-of-day window, so the same

@@ -117,6 +117,25 @@ class PlaybookWindow:
     # the ride is the ratchet, not the target -- see the giveback logic in
     # nodes.execution_risk_agent.
     final_take_profit_pct: "float | None" = None
+    # Share of the peak this window's ratchet hands back before booking.
+    # None means the engine-wide TRADING_TRAIL_GIVEBACK.
+    #
+    # Per-window because the number was inherited from the debit side and the
+    # two structures want different things from it. Swept over 60 sessions on
+    # the credit window, same structure and pricing in every arm:
+    #
+    #     15%   76 tr  89% win  +34.02/tr   halves +29.28/+38.75
+    #     20%   76 tr  89% win  +34.65/tr   halves +30.35/+38.95
+    #     30%   70 tr  89% win  +39.67/tr   halves +35.41/+43.93
+    #     50%   66 tr  85% win  +40.59/tr   halves +38.83/+42.35
+    #
+    # 30% earns 14% more a trade at an identical win rate and an identical
+    # worst trade, and both halves improve. The mechanism is in the exit mix:
+    # trades reaching the 90% target rise from 11 to 17 while ratchet exits
+    # fall from 36 to 24 -- a tight giveback was booking winners that had not
+    # finished decaying. 50% keeps drifting that way but starts giving back
+    # the win rate and widens the worst trade, so it is past the useful point.
+    ratchet_giveback: "float | None" = None
     # Which entry tiers may open this window. None means any tier.
     #
     # The tier ladder is global but the measured edge is not: morning ITM call
@@ -343,7 +362,7 @@ WINDOWS = (
         # final_take_profit_pct above. -100% is the classic credit stop: buy
         # it back for twice what you sold it for.
         take_profit_pct=50.0, final_take_profit_pct=90.0, stop_loss_pct=-100.0, risk_off_pct=-60.0,
-        risk_share=0.20,
+        risk_share=0.20, ratchet_giveback=0.30,
         exempt_from_streak_halt=True,
         note="Theta is steepest in the last two hours and a debit spread is on "
              "the wrong side of it — it needs a move and there is little day "
@@ -511,6 +530,15 @@ def ride_deadline(playbook_name: str) -> "time | None":
         if w.name == base:
             return w.ride_until
     return None
+
+
+def ratchet_giveback_for(playbook_name: str, default: float) -> float:
+    """How much of its peak a strategy hands back before the ratchet books."""
+    base = (playbook_name or "").split(":", 1)[0]
+    for w in WINDOWS:
+        if w.name == base and w.ratchet_giveback is not None:
+            return w.ratchet_giveback
+    return default
 
 
 def risk_share_for(playbook_name: str, default: float) -> float:

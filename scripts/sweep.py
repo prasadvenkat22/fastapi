@@ -11,6 +11,8 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py creditexit  # giveback and window length for the credit trade
+    python scripts/sweep.py creditgate  # does the credit window need a directional tier?
     python scripts/sweep.py rideratchet # profit protection for a riding position
     python scripts/sweep.py retries     # morning window length: does a second entry pay?
     python scripts/sweep.py breach      # model-free: how often a strike distance holds
@@ -260,6 +262,78 @@ def sweep_retries(sessions: dict):
     PB.WINDOWS = base
 
 
+def sweep_creditexit(sessions: dict):
+    """Where the credit window's P&L is actually decided.
+
+    Its exits split 47% ratchet, 28% force close, 14% target, 9% stop -- so
+    the ratchet's giveback is the single most consequential number in the
+    window, and it was inherited from the debit side rather than chosen here.
+    Window length is the second: a trade still open at 15:00 keeps running,
+    but a NEW one cannot start, and today's closed at 15:19 with the window
+    long shut.
+
+    Same structure in every arm, so the model's premium bias cancels.
+    """
+    print("")
+    print("CREDIT RATCHET GIVEBACK -- share of peak handed back before booking")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
+    base_give, base_min = N.TRAIL_GIVEBACK, N.MIN_GIVEBACK_PCT
+    for give in (0.15, 0.20, 0.30, 0.50):
+        N.TRAIL_GIVEBACK = give
+        trades = []
+        for bars in sessions.values():
+            trades += replay_session(bars, dtime(13, 30), dtime(15, 45))
+        _report(f"giveback {give:.0%}" + (" (current)" if give == 0.20 else ""),
+                trades, len(sessions))
+    N.TRAIL_GIVEBACK = base_give
+
+    print("")
+    print("CREDIT WINDOW LENGTH -- how late a NEW credit entry may open")
+    print("")
+    base_windows = PB.WINDOWS
+    for end in (dtime(15, 0), dtime(15, 15), dtime(15, 30)):
+        PB.WINDOWS = tuple(
+            replace(w, end=end) if w.name == "AFTERNOON_CREDIT" else w for w in base_windows
+        )
+        PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
+        trades = []
+        for bars in sessions.values():
+            trades += replay_session(bars, dtime(13, 30), dtime(15, 45))
+        _report(f"entries until {end.strftime('%H:%M')}" + (" (current)" if end == dtime(15, 0) else ""),
+                trades, len(sessions))
+    PB.WINDOWS = base_windows
+
+
+def sweep_creditgate(sessions: dict):
+    """Does making the credit window wait for a directional tier pay for it?
+
+    Both arms trade the same structure at the same width, so the model's
+    known overstatement of far-OTM premium is common to them and cancels in
+    the comparison -- which is the one thing a model-priced replay can still
+    do honestly.
+    """
+    print("")
+    print("CREDIT ENTRY GATE -- directional tier vs trend-only (THETA)")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
+    for loose in (False, True):
+        N.CREDIT_LOOSE_GATE = loose
+        trades = []
+        for bars in sessions.values():
+            trades += replay_session(bars, dtime(13, 30), dtime(15, 45))
+        if trades:
+            mins = [t["ts"].hour * 60 + t["ts"].minute for t in trades]
+            avg = sum(mins) / len(mins)
+            when = f"avg entry {int(avg // 60):02d}:{int(avg % 60):02d}"
+        else:
+            when = ""
+        _report(("trend-only gate" if loose else "directional tier (current)"),
+                trades, len(sessions))
+        print(f"{'':34s} {when}")
+    N.CREDIT_LOOSE_GATE = False
+
+
 def sweep_rideratchet(sessions: dict):
     """Should a riding position protect a gain, and from what level?
 
@@ -506,6 +580,10 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("creditexit", "all"):
+        sweep_creditexit(sessions)
+    if which in ("creditgate", "all"):
+        sweep_creditgate(sessions)
     if which in ("rideratchet", "all"):
         sweep_rideratchet(sessions)
     if which in ("breach", "all"):

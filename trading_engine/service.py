@@ -16,7 +16,7 @@ from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 
 from .broker import (MockBrokerClient, MockSpreadPosition, estimate_credit_value, option_type_for,
                       estimate_spread_value, fill_price, is_credit)
-from .data_feed import fetch_qqq_spot, log_price_divergence
+from .data_feed import chain_vertical, fetch_qqq_spot, log_price_divergence
 from .equity import current_equity
 from .graph import run_trading_cycle
 from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
@@ -73,17 +73,33 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         # and the ratchet, so a mark that drifts from the market is a decision
         # made on a price that does not exist. Guarded — an observational log
         # must never interrupt managing a live position.
+        market_quote = None
         try:
             buy_leg, sell_leg = (
                 (open_row.short_strike, open_row.long_strike) if is_credit(open_row.strategy)
                 else (open_row.long_strike, open_row.short_strike)
             )
-            log_price_divergence(
+            market_quote = log_price_divergence(
                 option_type_for(open_row.strategy), buy_leg, sell_leg, current_value,
                 f"open {open_row.playbook or open_row.strategy}",
             )
         except Exception:
-            logger.exception("Chain divergence log failed — continuing with the model mark.")
+            logger.exception("Chain mark failed — continuing with the model mark.")
+
+        # Mark from the chain when it has these strikes, and fall back to the
+        # model when it does not.
+        #
+        # The model is not a small calibration away from the market. Measured
+        # live on 2026-08-21, it priced an open 716/720 call credit spread at
+        # 0.20-0.34 all afternoon while the market quoted 0.01-0.04 -- an
+        # 88-97% overstatement of what closing it cost. Every exit rule reads
+        # this number, and the ratchet duly closed that position at "+27%"
+        # when the market said it was worth +96% of its maximum.
+        #
+        # Mid, not natural: the mid is what a position is worth, the natural
+        # is what a fill costs, and entries price at the natural separately.
+        if market_quote is not None:
+            current_value = max(market_quote["mid"], 0.0)
 
         position = MockSpreadPosition(
             strategy=open_row.strategy,

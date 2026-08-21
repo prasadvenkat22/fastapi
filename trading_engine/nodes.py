@@ -46,7 +46,8 @@ NY = ZoneInfo("America/New_York")
 
 from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_qqq_session_vwap,
                         fetch_oil, fetch_qqq_spot, fetch_tnx, fetch_vix,
-                        chain_condor_value, log_price_divergence)
+                        chain_condor_value, chain_vertical, fetch_option_chain,
+                        log_price_divergence, strike_for_delta)
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -251,6 +252,21 @@ RIDE_CEILING_FRACTION = float(os.getenv("TRADING_RIDE_CEILING", "0.90"))
 # Found by scripts/sweep.py replaying 60 sessions: on quiet days the model
 # prices a 3-sigma-out spread at zero and the engine takes it.
 MIN_CREDIT = float(os.getenv("TRADING_MIN_CREDIT", "0.05"))
+
+# Target delta for a credit spread's SHORT strike, when the chain is
+# available to measure it.
+#
+# The volatility placement it replaces put the short strike three standard
+# deviations out, which sounds conservative and on a quiet afternoon is
+# simply too far to be worth selling. Measured live on 2026-08-21: it chose
+# the 716 call with spot near 710, a 7-delta strike the market valued at
+# $0.02 the spread. The engine believed it had collected $0.28 because the
+# model said so, and booked a profit on premium no one would have paid.
+#
+# 0.20 is the conventional short-strike delta for a credit vertical: far
+# enough that it expires worthless most days, close enough to be worth
+# selling. Sigma placement remains the fallback when the chain is missing.
+CREDIT_SHORT_DELTA = float(os.getenv("TRADING_CREDIT_SHORT_DELTA", "0.20"))
 
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
@@ -1502,10 +1518,30 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 spot = fetch_qqq_spot()
                 atm_strike = round_to_strike(spot)
                 is_credit_window = window.placement == CREDIT
+                # One chain for placement and pricing; it is cached for the
+                # cycle, and every use of it falls back to the model.
+                try:
+                    chain = fetch_option_chain()
+                except Exception:
+                    logger.exception("Chain fetch failed — pricing from the model.")
+                    chain = {}
+
                 if is_credit_window:
                     # Bullish sells puts below spot, bearish sells calls above.
                     strategy = PUT_CREDIT_SPREAD if bullish else CALL_CREDIT_SPREAD
                     short_strike, long_strike = credit_strikes_for(window, atm_strike, bullish, bb_sd)
+                    delta_strike = strike_for_delta(
+                        chain, option_type_for(strategy), CREDIT_SHORT_DELTA) if chain else None
+                    if delta_strike is not None:
+                        short_strike = delta_strike
+                        long_strike = (short_strike + window.width if not bullish
+                                       else short_strike - window.width)
+                        logger.info(
+                            "Credit strikes by delta: short %.0f (~%.2f delta), long %.0f — "
+                            "sigma placement would have used %.0f.",
+                            short_strike, CREDIT_SHORT_DELTA, long_strike,
+                            credit_strikes_for(window, atm_strike, bullish, bb_sd)[0],
+                        )
                 else:
                     strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
                     long_strike, short_strike = strikes_for(window, atm_strike, bullish)
@@ -1521,6 +1557,13 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     # more than sixfold.
                     model_mid = estimate_credit_value(strategy, short_strike, long_strike, spot)
                     net_debit = fill_price(model_mid, "sell")
+                    # What the market would actually pay for it. Selling a
+                    # vertical fills at its natural bid: the short leg's bid
+                    # against the long leg's ask.
+                    market = chain_vertical(chain, option_type_for(strategy),
+                                            short_strike, long_strike) if chain else None
+                    if market is not None:
+                        net_debit = max(market["bid"], 0.0)
                     quantity = broker.estimate_credit_quantity(
                         eq.equity * entry_fraction, net_debit, window.width
                     )
@@ -1528,6 +1571,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     # Buying: you pay the ask.
                     model_mid = estimate_spread_value(strategy, long_strike, short_strike, spot)
                     net_debit = fill_price(model_mid, "buy")
+                    # Buying a vertical fills at its natural ask.
+                    market = chain_vertical(chain, option_type_for(strategy),
+                                            long_strike, short_strike) if chain else None
+                    if market is not None and market["ask"] > 0:
+                        net_debit = market["ask"]
                     quantity = broker.estimate_spread_quantity(eq.equity * entry_fraction, net_debit)
 
                 # Half size after a loss. The cooldown decides WHETHER to

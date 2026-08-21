@@ -11,6 +11,8 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py retries     # morning window length: does a second entry pay?
+    python scripts/sweep.py breach      # model-free: how often a strike distance holds
     python scripts/sweep.py windows     # every window solo: which earns, which does not
     python scripts/sweep.py orb         # single-leg weekly calls on an opening-range break
 
@@ -232,6 +234,68 @@ def sweep_windows(sessions: dict):
     PB.WINDOWS = base
 
 
+def sweep_retries(sessions: dict):
+    """Does letting the morning window stay open pay for a second entry?
+
+    Today's move went 709.40 at 10:15 to 715 by 11:50 and the engine caught
+    it at 11:01, when the fourth confirmation finally arrived. It then rode
+    to the 13:25 handoff. Nothing could re-enter, because MORNING_DRIFT
+    closes at 11:30 -- so a setup that re-fires at noon has no window to fire
+    into. This sweeps that end time.
+    """
+    print("")
+    print("MORNING WINDOW LENGTH -- how late may a debit entry still open?")
+    print("")
+    base = PB.WINDOWS
+    for end in (dtime(11, 30), dtime(12, 30), dtime(13, 0), dtime(13, 25)):
+        PB.WINDOWS = tuple(
+            replace(w, end=end) if w.name == "MORNING_DRIFT" else w for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+        trades = []
+        for bars in sessions.values():
+            trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
+        _report(f"entries until {end.strftime('%H:%M')}", trades, len(sessions))
+    PB.WINDOWS = base
+
+
+def sweep_breach(sessions: dict):
+    """How often a short strike survives -- from bars alone, no pricing.
+
+    The one question about credit spreads and condors a replay can still
+    answer honestly. Whether the model prices premium correctly is a separate
+    argument; whether QQQ travels $4 from 13:30 is a fact in the bars. Combine
+    a hold rate here with a real credit from the chain and the expected value
+    follows.
+    """
+    print("")
+    print("STRIKE SURVIVAL -- share of sessions where the short strike is never touched")
+    print("   one-sided = a call short above spot; condor = either side breached")
+    print("")
+    for entry in (dtime(9, 45), dtime(10, 15), dtime(13, 30), dtime(14, 30)):
+        row = []
+        for offset in (2.0, 3.0, 4.0, 5.0, 6.0):
+            held_call = held_condor = total = 0
+            for bars in sessions.values():
+                hits = [i for i, ts in enumerate(bars.index) if ts.time() == entry]
+                if not hits:
+                    continue
+                i = hits[0]
+                spot = float(bars["Close"].iloc[i])
+                rest = bars.iloc[i + 1:]
+                rest = rest[rest.index.map(lambda t: t.time() <= dtime(15, 45))]
+                if rest.empty:
+                    continue
+                total += 1
+                up_ok = float(rest["High"].max()) < spot + offset
+                down_ok = float(rest["Low"].min()) > spot - offset
+                held_call += 1 if up_ok else 0
+                held_condor += 1 if (up_ok and down_ok) else 0
+            if total:
+                row.append(f"${offset:.0f}: {held_call / total * 100:3.0f}% / {held_condor / total * 100:3.0f}%")
+        print(f"  {entry.strftime('%H:%M')} entry   " + "   ".join(row))
+
+
 def sweep_credit(sessions: dict):
     print("\nAFTERNOON_CREDIT -- width, entries 13:30-15:00\n")
     base = PB.WINDOWS
@@ -415,6 +479,10 @@ def main():
         sweep_morning(sessions)
     if which in ("windows", "all"):
         sweep_windows(sessions)
+    if which in ("retries", "all"):
+        sweep_retries(sessions)
+    if which in ("breach", "all"):
+        sweep_breach(sessions)
     if which in ("credit", "all"):
         sweep_credit(sessions)
     if which in ("condor", "all"):

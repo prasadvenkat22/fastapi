@@ -146,6 +146,10 @@ class PlaybookWindow:
     # Refuse short entries. The tier ladder is symmetric -- CLEAN has a bear
     # side that opens a bear put spread -- but the measured edge is not.
     bullish_only: bool = False
+    # The mirror. A window that may only take the SHORT side -- for a credit
+    # structure that sells calls above a falling market, which is a different
+    # trade from buying puts into one.
+    bearish_only: bool = False
     # Share of the DAY's risk budget one trade from this window may spend.
     #
     # The entry fraction says how much capital a trade deploys and nothing
@@ -210,6 +214,17 @@ class PlaybookWindow:
     # stable across halves) and buys a credit trade worth about 63. Holding
     # the better-looking single trade was costing more than it made.
     ride_until: "time | None" = None
+    # A hand-over deadline for a window that does NOT ride. Same purpose as
+    # ride_until and a separate field because the ride branch owns that one:
+    # a position is closed at this time so the next window's slot is free.
+    #
+    # Without it a morning credit spread exits only on its target, its stop or
+    # the 15:45 force close, so a quiet bearish morning parks it in the single
+    # position slot all day and AFTERNOON_CREDIT -- the window carrying most
+    # of the engine's edge -- never opens. That is the exact failure the
+    # 13:25 handoff was measured to prevent: +36.40 a day holding the morning
+    # against +80.87 handing over.
+    close_by: "time | None" = None
     # Ignore the consecutive-loss halt. The dollar cap still governs this
     # window, so risk stays bounded.
     #
@@ -225,7 +240,9 @@ class PlaybookWindow:
         return self.entry_tiers is None or tier in self.entry_tiers
 
     def allows_direction(self, bullish: bool) -> bool:
-        return bullish or not self.bullish_only
+        if bullish:
+            return not self.bearish_only
+        return not self.bullish_only
 
 
 # Ordered, non-overlapping. Times are ET.
@@ -390,6 +407,56 @@ WINDOWS = (
              "first candidate for removal if the scoreboard does not defend it.",
     ),
     PlaybookWindow(
+        # Sell calls above a morning that is going down.
+        #
+        # Built because the engine has nothing for a bad morning. MORNING_DRIFT
+        # is long-only and its CLEAN gate will not fire into a decline, so a
+        # falling session is simply not traded until 13:30 -- and the obvious
+        # filler, a put debit spread, is the structure that measured 27% wins
+        # at -50.62 a trade.
+        #
+        # This is not that trade. A bear call spread wins if price merely fails
+        # to rise, where a put debit spread needs the decline to continue, and
+        # the two behave nothing alike on a day that stops falling and drifts.
+        #
+        # It is OFF because it was measured and it loses. Over 60 sessions,
+        # 32 trades, with the 13:25 handoff in place:
+        #
+        #     38% win   -57.64 a trade   -1844 total   halves -37.95 / -77.32
+        #     exits: 14 stop-loss, 13 ratchet, 4 handoff, 1 target
+        #
+        # Adding it takes the engine from +49.85 a day to +19.15. Negative in
+        # both halves and worse in the second, so this is not a thin-sample
+        # verdict that better data might reverse.
+        #
+        # The reason is the same one that killed the morning put debit spread,
+        # and that is the part worth keeping: MORNING DECLINES IN QQQ TEND TO
+        # REVERSE. A put debit spread needs the fall to continue and is bled by
+        # the bounce; a bear call spread needs the strike to hold and is run
+        # over by it. Two structures, opposite exposures, one fact about the
+        # instrument. 2026-08-21 is the shape exactly -- down into 10:15, then
+        # 709.40 to 715 by 11:50.
+        #
+        # The arithmetic leaves no room for a 38% win rate either: about $59 of
+        # credit against $341 of structural risk, on a strike that survives 48%
+        # of sessions from 10:15 against 92% from 13:30.
+        #
+        # So the engine's answer to a bad morning is to wait and sell calls at
+        # 13:30. Sitting out is not a gap in the strategy; it is the strategy
+        # declining a bet it has measured.
+        name="MORNING_CREDIT",
+        start=time(10, 15), end=time(11, 30), placement=CREDIT, width=4.0,
+        take_profit_pct=50.0, final_take_profit_pct=90.0,
+        stop_loss_pct=-100.0, risk_off_pct=-60.0,
+        risk_share=0.50, ratchet_giveback=0.30,
+        bearish_only=True,
+        close_by=time(13, 25),
+        exempt_from_streak_halt=True,
+        note="The bad-morning counterpart to MORNING_DRIFT. Sells the side the "
+             "market is moving away from rather than buying the direction it "
+             "is moving in.",
+    ),
+    PlaybookWindow(
         name="ITM_GRINDER",
         start=time(11, 30), end=time(13, 30), placement=ITM, width=3.0,
         # Quietest window of the session at $0.83 a bar, which is exactly what
@@ -485,6 +552,30 @@ def window_for(now: Optional[datetime] = None) -> Optional[PlaybookWindow]:
         if w.start <= t < w.end:
             return w if w.name in ENABLED_WINDOWS else None
     return None
+
+
+def window_for_direction(bullish: bool, now: Optional[datetime] = None) -> Optional[PlaybookWindow]:
+    """The window covering `now` that will accept this direction.
+
+    WINDOWS was documented as non-overlapping and the plain window_for()
+    returns the first match, which is fine while each hour has one owner. It
+    stops being fine the moment two windows share an hour and differ only by
+    the side they take -- a long-only debit window and a short-only credit one
+    covering the same morning. Then the direction is part of the lookup, not
+    something checked afterwards.
+    """
+    now = now or datetime.now(NY)
+    t = now.time()
+    fallback = None
+    for w in WINDOWS:
+        if not (w.start <= t < w.end) or w.name not in ENABLED_WINDOWS:
+            continue
+        if w.allows_direction(bullish):
+            return w
+        fallback = fallback or w
+    # Nothing takes this side right now. Return the window that owns the hour
+    # anyway, so the caller logs DIRECTION_NOT_ALLOWED rather than "no window".
+    return fallback
 
 
 def strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool) -> tuple[float, float]:
@@ -583,6 +674,15 @@ def rides_to_close(playbook_name: str) -> bool:
         if w.name == base:
             return w.ride_to_close
     return False
+
+
+def close_deadline(playbook_name: str) -> "time | None":
+    """When a non-riding window must hand its slot over, if it must."""
+    base = (playbook_name or "").split(":", 1)[0]
+    for w in WINDOWS:
+        if w.name == base:
+            return w.close_by
+    return None
 
 
 def ride_deadline(playbook_name: str) -> "time | None":

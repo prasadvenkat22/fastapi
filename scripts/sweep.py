@@ -12,6 +12,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
     python scripts/sweep.py events      # what scheduled macro days actually cost
+    python scripts/sweep.py badmorning # does a bearish credit window fill the gap?
     python scripts/sweep.py latestop   # tighter credit stop into peak gamma?
     python scripts/sweep.py hours       # when in the day does QQQ actually move?
     python scripts/sweep.py weekday     # is Monday or Friday a different market?
@@ -505,6 +506,37 @@ def sweep_events(sessions: dict):
         total = sum(d["pnl"] for d in per)
         print(f"    {mode:10s} {total / len(per):+9.2f}/day   {total:+10.2f} total")
     CAL.EVENT_BLACKOUT = base_mode
+
+
+def sweep_badmorning(sessions: dict):
+    """Does selling calls into a falling morning beat sitting it out?
+
+    On a down morning MORNING_DRIFT does not fire -- it is long-only and its
+    CLEAN gate will not confirm into a decline -- so nothing trades until
+    13:30. The obvious filler is a put debit spread, which measured 27% wins
+    at -50.62 a trade. MORNING_CREDIT is the other option: sell calls above a
+    market moving away from them, the same structure that works in the
+    afternoon, six hours earlier.
+
+    Against it: a call short four dollars out survives 48% of sessions from
+    10:15 and 92% from 13:30. The question is whether restricting it to
+    bearish sessions closes that gap.
+    """
+    print("")
+    print("BAD MORNINGS -- sitting out against selling calls into the decline")
+    print("")
+    combos = [
+        ("current (drift + credit)", {"MORNING_DRIFT", "AFTERNOON_CREDIT"}),
+        ("+ bearish morning credit", {"MORNING_DRIFT", "MORNING_CREDIT", "AFTERNOON_CREDIT"}),
+        ("morning credit only", {"MORNING_CREDIT", "AFTERNOON_CREDIT"}),
+    ]
+    for label, names in combos:
+        PB.ENABLED_WINDOWS = frozenset(names)
+        trades, per_day = _run_arm(sessions, dtime(9, 45))
+        _report_daily(label, per_day)
+        mc = [t for t in trades if (t["playbook"] or "").startswith("MORNING_CREDIT")]
+        if mc:
+            _report("    of which MORNING_CREDIT", mc, len(sessions))
 
 
 def sweep_latestop(sessions: dict):
@@ -1446,6 +1478,8 @@ def main():
         sweep_retries(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
+    if which in ("badmorning", "all"):
+        sweep_badmorning(sessions)
     if which in ("latestop", "all"):
         sweep_latestop(sessions)
     if which in ("hours", "all"):

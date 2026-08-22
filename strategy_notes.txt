@@ -298,6 +298,16 @@ knob usually still exists.
   Refusing longs on a down session    Costs 7-9 dollars a day and does not
                                       improve the worst day by a cent.
   Uncapping on strong ADX             Worse at every threshold tested.
+  A bear call spread on bad mornings  38% wins, -57.64 a trade, negative in
+                                      both halves. Same cause as the put debit
+                                      spread: morning declines reverse, which
+                                      bleeds a structure needing continuation
+                                      and runs over one needing the strike to
+                                      hold. The engine waits and sells calls at
+                                      13:30 instead, where the strike survives
+                                      92% of sessions against 48% at 10:15.
+  A tighter credit stop near the bell  Worse at every setting, and the worst
+                                      day did not improve by a cent.
   Yields and crude as gates           No usable signal at decision time.
 
 Still open, with forward evidence accumulating: an iron condor at 13:30. It

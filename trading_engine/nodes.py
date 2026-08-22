@@ -25,9 +25,9 @@ from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
 from .macro_calendar import blackout_active as event_blackout_active, describe as describe_event
 from .playbook import (
-    CREDIT, credit_strikes_for, final_take_profit_for, ratchet_giveback_for,
-    ride_deadline, rides_to_close, risk_share_for, strikes_for, thresholds_for,
-    window_for,
+    CREDIT, close_deadline, credit_strikes_for, final_take_profit_for,
+    ratchet_giveback_for, ride_deadline, rides_to_close, risk_share_for,
+    strikes_for, thresholds_for, window_for, window_for_direction,
 )
 from .broker import (
     BEAR_PUT_SPREAD,
@@ -1243,10 +1243,24 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         )
         gave_back = peak_return > 0 and return_pct <= peak_return - giveback
 
+        # Hand-over deadline for a window that does not ride. Checked with
+        # the force close because it is the same kind of rule: a clock that
+        # closes a position regardless of what it is worth, so the next
+        # window can have the slot.
+        hand_over = close_deadline(position.playbook)
+        past_hand_over = hand_over is not None and datetime.now(NY).time() >= hand_over
+
         # Rule Z: same-day expiration hard close — overrides P&L entirely.
         if force_close:
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "FORCE_CLOSE"
+        elif past_hand_over:
+            logger.info(
+                "Handoff: closing %s at %+.1f%% so the next window can trade.",
+                position.strategy, return_pct,
+            )
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "HANDOFF"
         # Rule A: Take Profit
         # Judged against the target of the strategy that OPENED this
         # position, not whatever window the clock is in now: an ATM spread is
@@ -1662,9 +1676,12 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # momentum leg and a positive-theta ITM one through the midday
             # lull. window is None outside every window — that is a no-entry
             # period, including any gap left by retiring a strategy.
-            # Resolved once, above the entry gate, because the cutoff check
-            # needs to know whether this is a credit window.
-            window = entry_window
+            # Resolved by direction, not just by the clock. Two windows can
+            # share an hour and differ only in the side they take -- a
+            # long-only debit window and a short-only credit one -- so the
+            # direction has to be part of the lookup. entry_window above
+            # remains the clock-only answer, which is all the cutoff needs.
+            window = window_for_direction(bullish)
 
             # A window may restrict which tiers can open it. MORNING_DRIFT
             # takes CLEAN only: the same ITM structure measured +18.74 a

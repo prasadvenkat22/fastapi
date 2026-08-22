@@ -12,6 +12,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
     python scripts/sweep.py events      # what scheduled macro days actually cost
+    python scripts/sweep.py latestop   # tighter credit stop into peak gamma?
     python scripts/sweep.py hours       # when in the day does QQQ actually move?
     python scripts/sweep.py weekday     # is Monday or Friday a different market?
     python scripts/sweep.py macro       # do yields, crude and VIX predict our day?
@@ -504,6 +505,33 @@ def sweep_events(sessions: dict):
         total = sum(d["pnl"] for d in per)
         print(f"    {mode:10s} {total / len(per):+9.2f}/day   {total:+10.2f} total")
     CAL.EVENT_BLACKOUT = base_mode
+
+
+def sweep_latestop(sessions: dict):
+    """Should the credit stop tighten as gamma peaks into the close?
+
+    The stop is a share of the credit collected and ignores the clock, so a
+    spread sold for 0.60 stops at 1.20 whether that happens at 13:45 or
+    15:30. Those are not the same event: a late move against a 0DTE short
+    strike travels further, and nothing is left afterwards to recover in.
+    """
+    print("")
+    print("LATE-SESSION CREDIT STOP -- flat -100% against tightening near the close")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    base_pct, base_time = N.LATE_STOP_PCT, N.LATE_STOP_TIME
+    for pct, when, label in (
+        (0.0, dtime(15, 0), "flat -100% (current)"),
+        (-60.0, dtime(15, 0), "-60% from 15:00"),
+        (-50.0, dtime(15, 0), "-50% from 15:00"),
+        (-30.0, dtime(15, 0), "-30% from 15:00"),
+        (-50.0, dtime(14, 30), "-50% from 14:30"),
+        (-50.0, dtime(15, 15), "-50% from 15:15"),
+    ):
+        N.LATE_STOP_PCT, N.LATE_STOP_TIME = pct, when
+        _, per_day = _run_arm(sessions, dtime(9, 45))
+        _report_daily(label, per_day)
+    N.LATE_STOP_PCT, N.LATE_STOP_TIME = base_pct, base_time
 
 
 def sweep_hours(sessions: dict):
@@ -1418,6 +1446,8 @@ def main():
         sweep_retries(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
+    if which in ("latestop", "all"):
+        sweep_latestop(sessions)
     if which in ("hours", "all"):
         sweep_hours(sessions)
     if which in ("weekday", "all"):

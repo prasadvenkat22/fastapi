@@ -129,11 +129,62 @@ class MarketBreadth:
 BAR_INTERVAL = os.getenv("TRADING_BAR_INTERVAL", "5m")
 
 
+# Drop the bar that is still forming, so indicators only ever see closed data.
+#
+# yfinance includes the in-progress bar and updates it every time it is
+# fetched, so a five-minute indicator recomputed once a minute is really being
+# recomputed against a partial candle. It does not lag -- it REPAINTS.
+# Observed live on 2026-08-21 inside a single bar:
+#
+#     15:00  close 711.88  rsi_band NONE
+#     15:01  close 712.23  rsi_band BULL_BAND   <- appeared
+#     15:04  close 712.44  rsi_band BULL_BAND
+#     15:05  close 712.50  rsi_band NONE        <- gone by the close
+#
+# The morning trade entered at 15:01 on that band, which no longer existed
+# when the bar finished. That is not a signal, it is a snapshot of a candle
+# still being drawn.
+#
+# The decisive argument is not the repaint though: scripts/sweep.py steps
+# five-minute bars, so every measurement behind every parameter in this engine
+# evaluated entries at bar CLOSES. Running live on partial bars means live and
+# measured are different strategies. This makes them the same one.
+#
+# Exits are unaffected in the way that matters -- a position marks from the
+# option chain every minute, so the stop, the ratchet and the target still see
+# live prices. Only the indicator-derived reads move to closed bars.
+BAR_CLOSE_ONLY = os.getenv("TRADING_BAR_CLOSE_ONLY", "true").lower() == "true"
+
+
+def _drop_forming_bar(bars: pd.DataFrame, interval: str) -> pd.DataFrame:
+    """Remove a trailing bar whose period has not elapsed yet."""
+    if len(bars) < 2 or not interval.endswith("m"):
+        return bars
+    try:
+        minutes = int(interval[:-1])
+    except ValueError:
+        return bars
+    last = bars.index[-1]
+    now = pd.Timestamp.now(tz=last.tz) if getattr(last, "tz", None) else pd.Timestamp.now()
+    if now < last + pd.Timedelta(minutes=minutes):
+        return bars.iloc[:-1]
+    return bars
+
+
 def fetch_qqq_bars(period: str = "5d", interval: str = None) -> pd.DataFrame:
-    """Intraday QQQ bars via yfinance at BAR_INTERVAL. Columns: Open, High, Low, Close, Volume."""
-    bars = yf.Ticker("QQQ").history(period=period, interval=interval or BAR_INTERVAL)
+    """Intraday QQQ bars via yfinance at BAR_INTERVAL, closed bars only.
+
+    Columns: Open, High, Low, Close, Volume. See BAR_CLOSE_ONLY above for why
+    the in-progress bar is dropped.
+    """
+    interval = interval or BAR_INTERVAL
+    bars = yf.Ticker("QQQ").history(period=period, interval=interval)
     if bars.empty:
         raise RuntimeError("yfinance returned no QQQ bars — market may be closed or the symbol is unavailable.")
+    if BAR_CLOSE_ONLY:
+        bars = _drop_forming_bar(bars, interval)
+        if bars.empty:
+            raise RuntimeError("QQQ bar series held only an unfinished bar.")
     return bars
 
 

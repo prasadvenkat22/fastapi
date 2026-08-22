@@ -10,7 +10,7 @@ above into a final trading decision.
 import logging
 import os
 from dataclasses import replace as _dc_replace
-from datetime import datetime
+from datetime import datetime, time as dtime
 from typing import List
 from zoneinfo import ZoneInfo
 
@@ -226,6 +226,24 @@ MIN_GIVEBACK_PCT = float(os.getenv("TRADING_MIN_GIVEBACK_PCT", "10.0"))
 # ratchet owned the exit, which is the rule that actually measures the
 # position rather than the direction.
 CREDIT_TRAIL_STRIKE_BUFFER = float(os.getenv("TRADING_CREDIT_TRAIL_BUFFER", "2.0"))
+
+# A tighter stop for CREDIT positions in the last part of the session.
+#
+# The stop is a percentage of the credit collected and does not care what
+# time it is, so a spread sold for 0.60 stops at 1.20 whether that happens at
+# 13:45 or 15:30. Those are not the same event. Gamma on a 0DTE short strike
+# peaks into the close, so a late move against it travels further and faster
+# than the same move at midday, and there is no time left afterwards for the
+# position to recover.
+#
+# Zero disables it and the flat stop applies all session.
+LATE_STOP_PCT = float(os.getenv("TRADING_LATE_STOP_PCT", "0"))
+_late_raw = os.getenv("TRADING_LATE_STOP_TIME", "15:00")
+try:
+    _lh, _lm = (int(p) for p in _late_raw.split(":"))
+    LATE_STOP_TIME = dtime(_lh, _lm)
+except ValueError:
+    LATE_STOP_TIME = dtime(15, 0)
 
 # Share of a debit spread's MAXIMUM profit at which a riding position books
 # instead of running to the force close.
@@ -1187,6 +1205,17 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             position.playbook, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, RISK_OFF_STOP_LOSS_PCT)
         )
         is_credit_pos = is_credit(position.strategy)
+        # Late-session tightening, credit positions only. A long debit spread
+        # has the opposite exposure into the close -- it converges toward its
+        # width -- so pulling its stop in would book the convergence it is
+        # being held for.
+        if is_credit_pos and LATE_STOP_PCT < 0 and datetime.now(NY).time() >= LATE_STOP_TIME:
+            if stop_pct < LATE_STOP_PCT:
+                logger.info(
+                    "Past %s — tightening the credit stop from %+.0f%% to %+.0f%% for peak gamma.",
+                    LATE_STOP_TIME.strftime("%H:%M"), stop_pct, LATE_STOP_PCT,
+                )
+                stop_pct = LATE_STOP_PCT
         # Windows that let winners run keep only the stop and the force close.
         # Booking an ITM debit spread at its +30% target gave up half of a
         # structure capped near +64% in total; measured on bullish-stack

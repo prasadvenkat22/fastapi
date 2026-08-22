@@ -12,6 +12,9 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
     python scripts/sweep.py events      # what scheduled macro days actually cost
+    python scripts/sweep.py mstop      # is the morning stop too tight for the new structure?
+    python scripts/sweep.py worstdays  # anatomy of the losing sessions
+    python scripts/sweep.py taper      # tighten the ratchet as a position nears its max
     python scripts/sweep.py severity   # trade only SEVERE bad mornings, not any bearish read
     python scripts/sweep.py badmorning # does a bearish credit window fill the gap?
     python scripts/sweep.py latestop   # tighter credit stop into peak gamma?
@@ -507,6 +510,117 @@ def sweep_events(sessions: dict):
         total = sum(d["pnl"] for d in per)
         print(f"    {mode:10s} {total / len(per):+9.2f}/day   {total:+10.2f} total")
     CAL.EVENT_BLACKOUT = base_mode
+
+
+def sweep_mstop(sessions: dict):
+    """Is the morning stop calibrated for a structure it no longer trades?
+
+    Every one of the eight worst sessions contains a MORNING_DRIFT stop-out,
+    and four of them CLOSED UP -- +9.04, +7.07, +6.69, +3.99 -- so the trade
+    was stopped on a pullback and the day recovered without it. Losing
+    sessions also have a SMALLER average move than winning ones, 4.34 against
+    5.73. That is chop, not adverse trend.
+
+    The -20% stop was measured on the DEEP placement, a $322 contract whose
+    long leg sat $5 in the money. The window now runs a $260 contract with the
+    long leg $2 in the money -- cheaper, and far more sensitive to an ordinary
+    pullback, since a shallower long leg carries more gamma. The same
+    percentage is a much tighter leash on the structure that replaced it.
+
+    Because the window rides, the stop is the ONLY exit before the ceiling and
+    the handoff, so its width is the entire downside decision.
+    """
+    print("")
+    print("MORNING STOP WIDTH -- on the placement actually being traded")
+    print("")
+    base = PB.WINDOWS
+    for stop in (-15.0, -20.0, -30.0, -40.0, -50.0):
+        PB.WINDOWS = tuple(
+            replace(w, stop_loss_pct=stop) if w.name == "MORNING_DRIFT" else w for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        trades, per_day = _run_arm(sessions, dtime(9, 45))
+        _report_daily(f"stop {stop:+.0f}%" + (" (current)" if stop == -20 else ""), per_day)
+        m = [t for t in trades if t["strategy"] == "BULL_CALL_SPREAD"]
+        if m:
+            _report("    the morning trades", m, len(sessions))
+    PB.WINDOWS = base
+
+
+def sweep_worstdays(sessions: dict):
+    """What the losing sessions have in common, if anything.
+
+    Five exit-rule changes have now measured negative and none moved the worst
+    day by a cent, which says the tail is not made of trades held too long. So
+    look at the tail directly: which sessions, which trades, what the market
+    was doing, and whether anything observable BEFORE the entry separates them.
+    """
+    print("")
+    print("ANATOMY OF THE LOSING SESSIONS")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    _Account.equity = EQUITY
+    rows = []
+    for day, bars in sessions.items():
+        trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
+        session = bars[bars.index.map(lambda t: dtime(9, 30) <= t.time() <= dtime(15, 45))]
+        if session.empty:
+            continue
+        o = float(session["Close"].iloc[0]); c = float(session["Close"].iloc[-1])
+        rows.append({"day": day, "pnl": sum(t["pnl"] for t in trades), "trades": trades,
+                     "move": c - o, "range": float(session["High"].max()) - float(session["Low"].min())})
+
+    losers = sorted([r for r in rows if r["pnl"] < 0], key=lambda r: r["pnl"])
+    winners = [r for r in rows if r["pnl"] > 0]
+    print("  worst 8 sessions")
+    for r in losers[:8]:
+        print("    %s  %+9.2f  move %+6.2f  range %5.2f" % (r["day"], r["pnl"], r["move"], r["range"]))
+        for t in r["trades"]:
+            print("        %-18s %-12s %2dx  %+8.2f  %s" % (
+                t["strategy"], (t["playbook"] or "")[:12], t["qty"], t["pnl"], t["reason"]))
+
+    def avg(g, k):
+        return sum(abs(x[k]) for x in g) / len(g) if g else 0.0
+    print("")
+    print("  losing sessions : n=%d  avg |move| %.2f  avg range %.2f" % (
+        len(losers), avg(losers, "move"), avg(losers, "range")))
+    print("  winning sessions: n=%d  avg |move| %.2f  avg range %.2f" % (
+        len(winners), avg(winners, "move"), avg(winners, "range")))
+    reasons_l, reasons_w = {}, {}
+    for r in losers:
+        for t in r["trades"]:
+            reasons_l[t["reason"]] = reasons_l.get(t["reason"], 0) + 1
+    for r in winners:
+        for t in r["trades"]:
+            reasons_w[t["reason"]] = reasons_w.get(t["reason"], 0) + 1
+    print("  exits on losing days :", reasons_l)
+    print("  exits on winning days:", reasons_w)
+
+
+def sweep_taper(sessions: dict):
+    """Should the giveback shrink as a position approaches its maximum?
+
+    A flat 30% treats a peak of +20% and a peak of +90% identically. The first
+    still has most of its decay ahead and wants room; the second has almost
+    nothing left to gain and hands back 27 points before booking.
+    """
+    print("")
+    print("GIVEBACK TAPER -- ratchet tightens toward the structure's ceiling")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    base_on, base_floor = N.GIVEBACK_TAPER, N.GIVEBACK_TAPER_FLOOR
+    for on, floor, label in ((False, 0.0, "flat 30% (current)"),
+                             (True, 0.20, "taper to 20% at max"),
+                             (True, 0.10, "taper to 10% at max"),
+                             (True, 0.05, "taper to 5% at max")):
+        N.GIVEBACK_TAPER, N.GIVEBACK_TAPER_FLOOR = on, floor
+        trades, per_day = _run_arm(sessions, dtime(9, 45))
+        _report_daily(label, per_day)
+        reasons = {}
+        for t in trades:
+            reasons[t["reason"]] = reasons.get(t["reason"], 0) + 1
+        print(f"{'':36s} exits {reasons}")
+    N.GIVEBACK_TAPER, N.GIVEBACK_TAPER_FLOOR = base_on, base_floor
 
 
 def sweep_severity(sessions: dict):
@@ -1526,6 +1640,12 @@ def main():
         sweep_retries(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
+    if which in ("mstop", "all"):
+        sweep_mstop(sessions)
+    if which in ("worstdays", "all"):
+        sweep_worstdays(sessions)
+    if which in ("taper", "all"):
+        sweep_taper(sessions)
     if which in ("severity", "all"):
         sweep_severity(sessions)
     if which in ("badmorning", "all"):

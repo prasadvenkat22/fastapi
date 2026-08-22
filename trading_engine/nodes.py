@@ -260,6 +260,24 @@ except ValueError:
 # +90%. The number that stays constant across entries is the share.
 RIDE_CEILING_FRACTION = float(os.getenv("TRADING_RIDE_CEILING", "0.90"))
 
+# Tighten the ratchet as a position approaches the most it can ever be worth.
+#
+# The giveback is currently flat: 30% of the peak whether the peak is +20% or
+# +90%. Those are not the same situation. A credit spread up 20% of its credit
+# still has 80% of the decay ahead of it and wants room; one up 90% has almost
+# nothing left to gain and everything to protect, yet the flat rule lets it
+# hand back 27 points before booking.
+#
+# progress = peak return / the most this structure can return. The giveback
+# scales from the window's own value at zero progress down to
+# GIVEBACK_TAPER_FLOOR at full progress:
+#
+#     effective = base * (1 - progress) + floor * progress
+#
+# Zero disables it and the flat giveback applies throughout.
+GIVEBACK_TAPER = os.getenv("TRADING_GIVEBACK_TAPER", "false").lower() == "true"
+GIVEBACK_TAPER_FLOOR = float(os.getenv("TRADING_GIVEBACK_FLOOR", "0.10"))
+
 # Profit protection for a RIDING position: arm at this return, then close if
 # it hands back more than the giveback below.
 #
@@ -1246,10 +1264,25 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # protecting, whatever the engine-wide arm point says.
         peak_return = max(position.peak_return_pct, return_pct)
         ratchet_armed = peak_return >= min(RATCHET_ARM_PCT, tp_pct)
-        giveback = max(
-            peak_return * ratchet_giveback_for(position.playbook, TRAIL_GIVEBACK),
-            MIN_GIVEBACK_PCT,
-        )
+        base_giveback = ratchet_giveback_for(position.playbook, TRAIL_GIVEBACK)
+        if GIVEBACK_TAPER:
+            # The most this structure can return, as a percentage of what was
+            # put up: a credit spread tops out when the credit decays to zero,
+            # a debit one when it reaches its width.
+            width = abs(position.short_strike - position.long_strike)
+            if is_credit_pos:
+                max_possible = 100.0
+            else:
+                max_possible = (
+                    (width - position.entry_net_debit) / position.entry_net_debit * 100
+                    if position.entry_net_debit > 0 else 0.0
+                )
+            if max_possible > 0:
+                progress = min(max(peak_return / max_possible, 0.0), 1.0)
+                base_giveback = (
+                    base_giveback * (1.0 - progress) + GIVEBACK_TAPER_FLOOR * progress
+                )
+        giveback = max(peak_return * base_giveback, MIN_GIVEBACK_PCT)
         gave_back = peak_return > 0 and return_pct <= peak_return - giveback
 
         # Hand-over deadline for a window that does not ride. Checked with

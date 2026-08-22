@@ -308,6 +308,26 @@ knob usually still exists.
                                       92% of sessions against 48% at 10:15.
   A tighter credit stop near the bell  Worse at every setting, and the worst
                                       day did not improve by a cent.
+  A ratchet that tightens near the    Monotonically worse: +49.85 a day flat,
+  structure's ceiling                 +47.56 / +33.45 / +30.89 as it tightens.
+                                      Ratchet exits rise 16 -> 29 while target
+                                      exits fall 14 -> 8, so it books winners
+                                      that would have reached the target.
+  A wider (or tighter) morning stop   No width wins. Widening lifts the win
+                                      rate 36% -> 57% and cuts the worst day
+                                      -971 -> -648, but per-trade P&L sags and
+                                      recovers; tightening to -15% has the best
+                                      average and halves of +74.70 then +5.34.
+                                      Three columns, three answers, 24 trades.
+
+WHERE THE LOSSES ACTUALLY COME FROM. Every one of the eight worst sessions
+contains a MORNING_DRIFT stop-out, and four of them CLOSED UP (+9.04, +7.07,
++6.69, +3.99) -- entered, stopped on a pullback, and the day recovered without
+it. Losing sessions average a SMALLER move than winning ones, 4.34 against
+5.73, and stop-losses are 18 of 31 exits on losing days against 2 of 50 on
+winning days. The tail is chop stopping out a directional position, it lives
+in the morning window, and five separate exit-rule changes have failed to
+touch it. Size is the only lever that has moved it.
   Yields and crude as gates           No usable signal at decision time.
 
 Also open, and understood better than it was: a PUT DEBIT spread on

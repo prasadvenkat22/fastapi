@@ -366,7 +366,19 @@ WINDOWS = (
         # the least-sampled part of the engine is sizing a thin edge as though
         # it were the credit window's 76-trade one. 8% buys a second contract
         # on cheaper entries and stops there.
-        entry_fraction=0.08,
+        # None -- this window deploys the same share of capital as every
+        # other, set by TRADING_ENTRY_FRACTION. Chosen on 2026-08-22 to size
+        # the morning like the afternoon rather than at the third of it the
+        # sweep had settled on.
+        #
+        # The override it replaces was 0.08, and the evidence for it was
+        # real: 4% +66.65/day, 8% +70.54, 12% +80.01, 20% +80.12, against a
+        # worst day that ran -118, -231, -319, -495 across the same four. It
+        # was held to 8% because this window's record is 24 trades where the
+        # credit window's is 76, and because 12% bought 20% more return for
+        # nearly three times the worst day. That sweep also predates both the
+        # harness repairs and the placement change, so it is being re-run.
+        entry_fraction=None,
         risk_share=0.50,
         ride_to_close=True,
         # 13:25, five minutes before AFTERNOON_CREDIT opens, so the slot is

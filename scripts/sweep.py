@@ -12,6 +12,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
     python scripts/sweep.py events      # what scheduled macro days actually cost
+    python scripts/sweep.py hours       # when in the day does QQQ actually move?
     python scripts/sweep.py weekday     # is Monday or Friday a different market?
     python scripts/sweep.py macro       # do yields, crude and VIX predict our day?
     python scripts/sweep.py placement   # morning width x depth, judged per DAY
@@ -169,6 +170,12 @@ def _patch_engine():
     N.datetime = _FakeDatetime
     PB.datetime = _FakeDatetime
     broker_mod.datetime = _FakeDatetime
+    # macro_calendar asks the clock what day it is, so without this the
+    # blackout is evaluated against the real date and never fires in a
+    # replay -- three identical rows, the same tell as the two sweeps before
+    # it that were silently testing nothing.
+    import trading_engine.macro_calendar as CAL
+    CAL.datetime = _FakeDatetime
     N.blocked_direction = _Cooldown.blocked
     N.consecutive_losses_today = _Cooldown.streak
     N.current_equity = lambda *_: _Account.state()
@@ -497,6 +504,62 @@ def sweep_events(sessions: dict):
         total = sum(d["pnl"] for d in per)
         print(f"    {mode:10s} {total / len(per):+9.2f}/day   {total:+10.2f} total")
     CAL.EVENT_BLACKOUT = base_mode
+
+
+def sweep_hours(sessions: dict):
+    """Where the day's movement actually happens.
+
+    The claim worth testing is that 0DTE profit lives before noon. Half of
+    that is a fact about QQQ and needs no engine at all: how much of a
+    session's total travel occurs in each hour. The other half is what the
+    engine did with it, which is reported by the window that owns each hour.
+    """
+    print("")
+    print("WHEN QQQ MOVES -- share of the session's range and travel, by hour")
+    print("")
+    hours = [(dtime(9, 30), dtime(10, 30), "09:30-10:30"),
+             (dtime(10, 30), dtime(11, 30), "10:30-11:30"),
+             (dtime(11, 30), dtime(12, 30), "11:30-12:30"),
+             (dtime(12, 30), dtime(13, 30), "12:30-13:30"),
+             (dtime(13, 30), dtime(14, 30), "13:30-14:30"),
+             (dtime(14, 30), dtime(15, 45), "14:30-15:45")]
+    totals = {label: {"range": 0.0, "travel": 0.0, "n": 0} for _, _, label in hours}
+    day_range_sum = day_travel_sum = 0.0
+    for bars in sessions.values():
+        session = bars[bars.index.map(lambda t: dtime(9, 30) <= t.time() <= dtime(15, 45))]
+        if len(session) < 20:
+            continue
+        d_range = float(session["High"].max()) - float(session["Low"].min())
+        d_travel = float(session["Close"].diff().abs().sum())
+        if d_range <= 0 or d_travel <= 0:
+            continue
+        day_range_sum += d_range
+        day_travel_sum += d_travel
+        for start, end, label in hours:
+            seg = session[session.index.map(lambda t: start <= t.time() < end)]
+            if seg.empty:
+                continue
+            totals[label]["range"] += float(seg["High"].max()) - float(seg["Low"].min())
+            totals[label]["travel"] += float(seg["Close"].diff().abs().sum())
+            totals[label]["n"] += 1
+    print("  %-13s %10s %10s   %s" % ("hour", "of range", "of travel", "window that owns it"))
+    owners = {"09:30-10:30": "(warmup / MORNING_DRIFT from 10:15)",
+              "10:30-11:30": "MORNING_DRIFT",
+              "11:30-12:30": "morning position rides",
+              "12:30-13:30": "rides, hands over 13:25",
+              "13:30-14:30": "AFTERNOON_CREDIT",
+              "14:30-15:45": "AFTERNOON_CREDIT to 15:00, then force close"}
+    for _, _, label in hours:
+        t = totals[label]
+        if not t["n"]:
+            continue
+        print("  %-13s %9.1f%% %9.1f%%   %s" % (
+            label, t["range"] / day_range_sum * 100, t["travel"] / day_travel_sum * 100,
+            owners[label]))
+    print("")
+    print("  Range shares sum above 100%: each hour's own high-low is counted")
+    print("  against the whole session's, and the hours overlap in level.")
+    print("  Travel is the sum of absolute bar-to-bar moves and does partition.")
 
 
 def sweep_weekday(sessions: dict):
@@ -1355,6 +1418,8 @@ def main():
         sweep_retries(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
+    if which in ("hours", "all"):
+        sweep_hours(sessions)
     if which in ("weekday", "all"):
         sweep_weekday(sessions)
     if which in ("macro", "all"):

@@ -61,7 +61,14 @@ except ValueError:
 def is_event_day(when: "date | datetime | None" = None) -> bool:
     """Whether this session carries a scheduled macro event."""
     when = when or datetime.now(NY)
-    day = when.date() if isinstance(when, datetime) else when
+    # hasattr, not isinstance. A date has no .date() and a datetime does,
+    # which is the actual distinction being drawn -- and unlike isinstance it
+    # survives the name `datetime` being rebound, as any test with a frozen
+    # clock will do. With isinstance the check failed silently: a real
+    # datetime is not an instance of a datetime SUBCLASS, so `when` fell
+    # through unconverted and stringified as a full timestamp that matches no
+    # date in the list. The gate then measured as a no-op three runs in a row.
+    day = when.date() if hasattr(when, "date") else when
     return day.isoformat() in EVENT_DATES
 
 

@@ -275,8 +275,34 @@ WINDOWS = (
         # since depth follows width by default and depth is what measured
         # well. Untested at this width: the sweep in the block below covers
         # $3, $4 and $5, but the $5 row was run at a $2 depth, not $5.
-        start=time(10, 15), end=time(11, 30), placement=ITM, width=5.0,
-        long_depth=_env_float("TRADING_MORNING_LONG_DEPTH", None),
+        start=time(10, 15), end=time(11, 30), placement=ITM, width=6.0,
+        # $6 wide with the long leg $2 in the money, which is close to the
+        # ATM-long / OTM-short shape rather than the deep one this window
+        # carried before. Judged per DAY with the credit window live, which
+        # is the frame the decision belongs in -- the morning hands its slot
+        # over at 13:25, so a placement that stops out early frees that slot
+        # and one that rides does not:
+        #
+        #     $5 deep      +41.42/day   63% green   worst -646   halves +29.01/+53.83
+        #     $5 long $2   +43.98/day   60% green   worst -736   halves +33.22/+54.73
+        #     $6 long $2   +49.46/day   60% green   worst -775   halves +41.42/+57.49
+        #     $4 deep      +39.62/day   62% green   worst -692
+        #     $6 deep      +34.43/day   63% green   worst -669   halves +12.59/+56.27
+        #
+        # This reverses the deep placement that stood here, and the reversal
+        # came from repairing the measuring tool rather than from new data.
+        # Every earlier width and depth result was produced by a harness that
+        # computed indicators from a single session's bars, never reset the
+        # account between arms and charged no slippage. Fixing all three moved
+        # this cell from worst to best.
+        #
+        # What it costs is on the same rows and is not small: 42% wins against
+        # 52%, a worst day of -775 against -646, and three green days in five
+        # instead of nearly two in three. The average is better because the
+        # structure is uncapped $4 higher, so the sessions that trend pay for
+        # the ones that stop out. On 24 morning trades that is a thin basis --
+        # provisional, and the first thing to re-run when forward data grows.
+        long_depth=_env_float("TRADING_MORNING_LONG_DEPTH", 2.0),
         # -20, not the -30 this window carried while it ran the full exit
         # ladder. Once the take-profit is removed the stop is the ONLY exit
         # before the force close, so its width stops being a noise question

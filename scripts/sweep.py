@@ -11,6 +11,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py placement   # morning width x depth, judged per DAY
     python scripts/sweep.py condorvs    # both sides vs the one side we already sell
     python scripts/sweep.py trenddepth  # uncap the spread when the trend is strong?
     python scripts/sweep.py daytrend    # refuse longs once the session is down
@@ -347,7 +348,7 @@ def _report(label: str, trades: list, sessions: int):
 def sweep_morning(sessions: dict):
     print("\nMORNING_DRIFT -- width x long-leg depth, entries 10:15-11:30\n")
     base = PB.WINDOWS
-    for width in (3.0, 4.0, 5.0):
+    for width in (3.0, 4.0, 5.0, 6.0):
         for depth in (None, 2.0):
             PB.WINDOWS = tuple(
                 replace(w, width=width, long_depth=depth) if w.name == "MORNING_DRIFT" else w
@@ -455,6 +456,37 @@ def _run_one_side(bars, i: int, offset: float, wing: float, calls: bool = True):
     if pnl is None:
         return None
     return {"pnl": round(pnl, 2), "reason": reason, "pct": round((pnl / 100) / credit * 100, 2)}
+
+
+def sweep_placement(sessions: dict):
+    """Morning width and depth, judged on daily P&L with the credit window on.
+
+    The per-trade sweep leaves this genuinely ambiguous -- deep placements
+    win more often and lose less on their worst trade, shallow ones average
+    more with steadier halves, and the sample is 24 trades. Per-trade is also
+    the wrong frame for the decision: the morning window hands its slot to
+    the credit window at 13:25, so a placement that stops out early frees the
+    slot and one that rides does not.
+    """
+    print("")
+    print("MORNING PLACEMENT -- per day, credit window live")
+    print("")
+    base = PB.WINDOWS
+    for width, depth, label in (
+        (5.0, None, "$5 deep (live)"),
+        (5.0, 2.0, "$5 long $2 ITM"),
+        (6.0, 2.0, "$6 long $2 ITM"),
+        (4.0, None, "$4 deep"),
+        (6.0, None, "$6 deep"),
+    ):
+        PB.WINDOWS = tuple(
+            replace(w, width=width, long_depth=depth) if w.name == "MORNING_DRIFT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(9, 45))
+        _report_daily(label, per_day)
+    PB.WINDOWS = base
 
 
 def sweep_condorvs(sessions: dict):
@@ -933,7 +965,7 @@ def sweep_breach(sessions: dict):
 def sweep_credit(sessions: dict):
     print("\nAFTERNOON_CREDIT -- width, entries 13:30-15:00\n")
     base = PB.WINDOWS
-    for width in (2.0, 3.0, 4.0, 5.0):
+    for width in (1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
         PB.WINDOWS = tuple(
             replace(w, width=width) if w.name == "AFTERNOON_CREDIT" else w for w in base
         )
@@ -1113,6 +1145,8 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("placement", "all"):
+        sweep_placement(sessions)
     if which in ("condorvs", "all"):
         sweep_condorvs(sessions)
     if which in ("trenddepth", "all"):

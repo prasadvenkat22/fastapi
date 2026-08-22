@@ -28,21 +28,44 @@ async def _init_db(conn: asyncpg.Connection) -> None:
 
 
 async def store_headlines(headlines: List[str], embeddings: VoyageEmbeddings) -> None:
+    """Embed and store any headline not already held.
+
+    The dedupe is not tidiness. This runs once a cycle, the scrape returns
+    much the same front page minute after minute, and every repeat was being
+    re-embedded and re-inserted: 7,200 rows covering 605 distinct headlines
+    over four sessions, or about twelve embedding calls for every one that
+    carried new information.
+
+    It also degraded the thing the store exists for. query_similar_headlines
+    asks for the three nearest past headlines, and with each headline stored
+    a dozen times the three nearest were usually three copies of one
+    headline -- so the model was handed the same sentence three times and
+    told it was context.
+    """
     if not headlines:
         return
 
-    vectors = embeddings.embed_documents(headlines)
     db_url = os.getenv("DATABASE_URL")
     conn = await asyncpg.connect(db_url)
     await register_vector(conn)
     try:
         await _init_db(conn)
+        known = await conn.fetch(
+            "SELECT headline_text FROM market_news_vectors WHERE headline_text = ANY($1::text[])",
+            list(set(headlines)),
+        )
+        seen = {r["headline_text"] for r in known}
+        fresh = [h for h in dict.fromkeys(headlines) if h not in seen]
+        if not fresh:
+            return
+
+        vectors = embeddings.embed_documents(fresh)
         await conn.executemany(
             """
             INSERT INTO market_news_vectors (id, headline_text, text_embedding)
             VALUES ($1, $2, $3)
             """,
-            [(str(uuid.uuid4()), headline, vector) for headline, vector in zip(headlines, vectors)],
+            [(str(uuid.uuid4()), headline, vector) for headline, vector in zip(fresh, vectors)],
         )
     finally:
         await conn.close()

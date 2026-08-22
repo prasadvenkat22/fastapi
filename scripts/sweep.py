@@ -11,6 +11,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py macro       # do yields, crude and VIX predict our day?
     python scripts/sweep.py placement   # morning width x depth, judged per DAY
     python scripts/sweep.py condorvs    # both sides vs the one side we already sell
     python scripts/sweep.py trenddepth  # uncap the spread when the trend is strong?
@@ -456,6 +457,109 @@ def _run_one_side(bars, i: int, offset: float, wing: float, calls: bool = True):
     if pnl is None:
         return None
     return {"pnl": round(pnl, 2), "reason": reason, "pct": round((pnl / 100) / credit * 100, 2)}
+
+
+def sweep_macro(sessions: dict):
+    """Do yields, crude and the VIX predict the engine's day?
+
+    The engine fetches all three every cycle and logs them without gating on
+    any of them -- deliberately, since nothing had measured whether they
+    carry information. This buckets the engine's own daily P&L by each, which
+    is the only question that matters: not whether crude moves QQQ, but
+    whether knowing crude's move would have changed what we should trade.
+    """
+    print("")
+    print("MACRO INPUTS -- engine P&L per day, bucketed by each input's terciles")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    _, per_day = _run_arm(sessions, dtime(9, 45))
+    pnl_by_day = {d["day"]: d["pnl"] for d in per_day}
+
+    # Intraday first, because the daily version is lookahead. Bucketing a
+    # session by its FULL-DAY yield change scores the engine on information
+    # that did not exist when it entered at 10:15, and the effect it shows --
+    # falling yields +171.57 a day against rising yields -22.78 -- is mostly
+    # a restatement of "QQQ went up today", which is not tradeable in
+    # advance. What is observable at the decision is the move so far.
+    print("  observable at the decision (session open to the entry bar):")
+    for sym, label in (("^TNX", "10Y yield"), ("CL=F", "crude"), ("^VIX", "VIX")):
+        try:
+            intra = yf.Ticker(sym).history(period="60d", interval="5m")
+            if intra.empty:
+                print(f"    {label}: no intraday bars")
+                continue
+            intra = intra.tz_convert(NY)
+        except Exception as e:
+            print(f"    {label}: intraday fetch failed ({e})")
+            continue
+        for cutoff, when in ((dtime(10, 15), "by 10:15"), (dtime(13, 30), "by 13:30")):
+            rows = []
+            for day, pnl in pnl_by_day.items():
+                bars = intra[intra.index.map(lambda t: t.date() == day)]
+                bars = bars[bars.index.map(lambda t: t.time() <= cutoff)]
+                if len(bars) < 3:
+                    continue
+                first, last = float(bars["Close"].iloc[0]), float(bars["Close"].iloc[-1])
+                if first == 0:
+                    continue
+                rows.append({"chg": (last - first) / first * 100.0, "pnl": pnl})
+            if len(rows) < 9:
+                continue
+            rows.sort(key=lambda r: r["chg"])
+            third = len(rows) // 3
+            out = []
+            for name, g in (("down", rows[:third]), ("flat", rows[third:2 * third]),
+                            ("up  ", rows[2 * third:])):
+                avg = sum(r["pnl"] for r in g) / len(g)
+                green = len([r for r in g if r["pnl"] > 0]) / len(g) * 100
+                out.append(f"{name} [{g[0]['chg']:+.2f}..{g[-1]['chg']:+.2f}] {avg:+7.2f}/day {green:3.0f}%")
+            print(f"    {label:10s} {when:9s} n={len(rows):2d}  " + "   ".join(out))
+    print("")
+    print("  full-day change, for contrast -- NOT usable, it contains the future:")
+
+    series = {}
+    for sym, label in (("^TNX", "10Y yield"), ("CL=F", "crude"), ("^VIX", "VIX")):
+        try:
+            hist = yf.Ticker(sym).history(period="6mo", interval="1d")
+            if hist.empty:
+                continue
+            series[label] = hist
+        except Exception as e:
+            print(f"  {label}: fetch failed ({e})")
+
+    qqq_daily = yf.Ticker("QQQ").history(period="6mo", interval="1d")
+
+    for label, hist in series.items():
+        rows = []
+        closes = hist["Close"]
+        for day, pnl in pnl_by_day.items():
+            same = [i for i, ts in enumerate(closes.index) if ts.date() == day]
+            if not same or same[0] == 0:
+                continue
+            i = same[0]
+            prev, now = float(closes.iloc[i - 1]), float(closes.iloc[i])
+            if prev == 0:
+                continue
+            rows.append({"day": day, "chg": (now - prev) / prev * 100.0,
+                         "level": now, "pnl": pnl})
+        if len(rows) < 9:
+            print(f"  {label}: only {len(rows)} sessions matched, skipping")
+            continue
+        for key, kind in (("chg", "change vs prior close"), ("level", "level")):
+            rows.sort(key=lambda r: r[key])
+            third = len(rows) // 3
+            groups = (("low ", rows[:third]), ("mid ", rows[third:2 * third]),
+                      ("high", rows[2 * third:]))
+            out = []
+            for name, g in groups:
+                avg = sum(r["pnl"] for r in g) / len(g)
+                green = len([r for r in g if r["pnl"] > 0]) / len(g) * 100
+                span = f"{g[0][key]:.2f}..{g[-1][key]:.2f}"
+                out.append(f"{name} [{span}] {avg:+7.2f}/day {green:3.0f}% green")
+            print(f"  {label:10s} {kind:22s} " + "   ".join(out))
+    print("")
+    print("  For reference, QQQ's own next-day move is the thing all three are")
+    print("  supposed to anticipate; the engine's P&L is what it actually needs.")
 
 
 def sweep_placement(sessions: dict):
@@ -1145,6 +1249,8 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("macro", "all"):
+        sweep_macro(sessions)
     if which in ("placement", "all"):
         sweep_placement(sessions)
     if which in ("condorvs", "all"):

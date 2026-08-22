@@ -9,6 +9,7 @@ above into a final trading decision.
 
 import logging
 import os
+from dataclasses import replace as _dc_replace
 from datetime import datetime
 from typing import List
 from zoneinfo import ZoneInfo
@@ -305,6 +306,24 @@ CREDIT_SHORT_DELTA = float(os.getenv("TRADING_CREDIT_SHORT_DELTA", "0.20"))
 # Every other bucket is positive: -0.75..-0.25 +6.54, flat +70.26, up +68.54,
 # hard up +130.37.
 DAY_TREND_MAX_DROP_PCT = float(os.getenv("TRADING_DAY_TREND_MAX_DROP", "0"))
+
+# On a STRONG trend, place the long leg this many dollars in the money
+# instead of the window's usual depth. Zero disables it.
+#
+# A deep spread caps early by construction. On 2026-08-21 the morning trade
+# was long 707 / short 712 with QQQ at 711.88; price ran to 714.82 and every
+# cent above 712 paid nothing, because the structure was already at maximum
+# intrinsic. Trading the same day with the long leg $2 in the money would
+# have put the short strike at 714 and left room for the rest of the move.
+#
+# The reason it is not simply done that way is measured: a $2-deep long leg
+# wins 31% of the time against 56% for the full-width placement, and the $5
+# shallow variant lost money outright. This asks the narrower question --
+# whether a shallow placement pays when ADX says the trend is real, which is
+# the only condition under which its lower hit rate could be worth the higher
+# ceiling.
+TRENDING_LONG_DEPTH = float(os.getenv("TRADING_TRENDING_LONG_DEPTH", "0"))
+TRENDING_ADX_MIN = float(os.getenv("TRADING_TRENDING_ADX_MIN", "25"))
 
 # Most of equity ONE position may put at structural risk -- not at stop risk.
 #
@@ -1688,7 +1707,19 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         )
                 else:
                     strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
-                    long_strike, short_strike = strikes_for(window, atm_strike, bullish)
+                    placement = window
+                    if (
+                        TRENDING_LONG_DEPTH > 0
+                        and float(state.get("adx") or 0.0) >= TRENDING_ADX_MIN
+                    ):
+                        placement = _dc_replace(window, long_depth=TRENDING_LONG_DEPTH)
+                        logger.info(
+                            "ADX %.1f — placing the long leg $%.0f ITM instead of $%.0f, "
+                            "so the short strike leaves room above.",
+                            float(state.get("adx") or 0.0), TRENDING_LONG_DEPTH,
+                            window.long_depth if window.long_depth is not None else window.width,
+                        )
+                    long_strike, short_strike = strikes_for(placement, atm_strike, bullish)
 
                 # Price the entry with the same model that reprices it next
                 # cycle. Sizing uses that price too, or the position costs

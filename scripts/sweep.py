@@ -11,6 +11,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py trenddepth  # uncap the spread when the trend is strong?
     python scripts/sweep.py daytrend    # refuse longs once the session is down
     python scripts/sweep.py daytype     # what the engine earns by market regime
     python scripts/sweep.py squeeze     # does a volatility squeeze make a morning safe to sell?
@@ -176,6 +177,12 @@ def _patch_engine():
     # use, which is precisely why a premium-selling window cannot be validated
     # by one.
     N.fetch_option_chain = lambda *a, **k: {}
+    # The shadow condor reaches for the chain through data_feed directly, so
+    # patching the nodes reference alone left a live HTTP call in every cycle
+    # of every sweep -- one per 30-second cache window, plus a warning line
+    # per session on any day the market is shut.
+    import trading_engine.data_feed as DF
+    DF.fetch_option_chain = lambda *a, **k: {}
 
 
 def _session_vwap(bars_slice: pd.DataFrame) -> float:
@@ -413,6 +420,20 @@ def _report_daily(label: str, per_day: list):
     print(f"  {label:34s} {days:2d} days  {trades / days:4.2f} tr/day  "
           f"{total / days:+8.2f}/day  {total:+9.2f} tot  {green / days * 100:3.0f}% green days  "
           f"worst {min(d['pnl'] for d in per_day):+8.2f}  halves {h1:+7.2f}/{h2:+7.2f}")
+
+
+def sweep_trenddepth(sessions: dict):
+    """Should a strong trend get a shallower long leg, and a higher ceiling?"""
+    print("")
+    print("TREND-CONDITIONAL PLACEMENT -- shallow long leg when ADX confirms")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    for depth, adx in ((0.0, 0), (2.0, 22), (2.0, 28), (3.0, 22), (3.0, 28)):
+        N.TRENDING_LONG_DEPTH, N.TRENDING_ADX_MIN = depth, adx
+        _, per_day = _run_arm(sessions, dtime(9, 45))
+        label = "deep always (current)" if depth == 0 else f"long ${depth:.0f} ITM when ADX>={adx}"
+        _report_daily(label, per_day)
+    N.TRENDING_LONG_DEPTH = 0.0
 
 
 def sweep_daytrend(sessions: dict):
@@ -1025,6 +1046,8 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("trenddepth", "all"):
+        sweep_trenddepth(sessions)
     if which in ("daytrend", "all"):
         sweep_daytrend(sessions)
     if which in ("daytype", "all"):

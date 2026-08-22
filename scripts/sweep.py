@@ -58,6 +58,19 @@ from trading_engine.equity import EquityState
 NY = ZoneInfo("America/New_York")
 EQUITY = 10000.0
 
+# Round-trip cost of crossing the spread, in premium terms, per contract.
+#
+# Measured on real QQQ quotes on 2026-08-21: a two-leg vertical's natural
+# bid/ask gap was 0.15 on the morning debit spread (3.88/4.03) and 0.02 on
+# the afternoon credit spread (0.59/0.61) -- call it 0.10 a contract as a
+# round trip, or $10.
+#
+# Charging it matters for more than realism. Every variant that trades more
+# often pays it more often, and a sweep that ignores it systematically
+# flatters the busiest configuration -- which is precisely the axis several
+# of these sweeps are deciding.
+SLIPPAGE_ROUNDTRIP = 0.10
+
 
 class _Clock:
     """The simulated 'now', shared by every patched time function."""
@@ -271,10 +284,31 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
     return trades
 
 
+
+def _run_arm(sessions: dict, start: dtime, end: dtime = dtime(15, 45)):
+    """One configuration across every session, from a clean account.
+
+    Every sweep arm goes through here. The alternative -- each sweep looping
+    over sessions itself -- is how several arms ended up inheriting the
+    previous arm's compounded equity, which made a parameter look responsible
+    for P&L that was really just a larger starting balance. The giveback
+    sweep reported +32.50 to +58.58 a trade across four arms whose exit mixes
+    were identical to the trade, which is what gave it away.
+    """
+    _Account.equity = EQUITY
+    trades, per_day = [], []
+    for day, bars in sessions.items():
+        day_trades = replay_session(bars, start, end)
+        trades += day_trades
+        per_day.append({"day": day, "pnl": sum(t["pnl"] for t in day_trades),
+                        "trades": len(day_trades)})
+    return trades, per_day
+
 def _close(entry: dict, position, spot: float, ts, reason: str) -> dict:
     exit_value = _mark(position, spot)
     per = ((entry["debit"] - exit_value) if is_credit(entry["strategy"])
            else (exit_value - entry["debit"]))
+    per -= SLIPPAGE_ROUNDTRIP
     return {**entry, "exit_ts": ts, "exit_value": exit_value,
             "pnl": round(per * entry["qty"] * 100, 2),
             "pct": round(per / entry["debit"] * 100, 2) if entry["debit"] else 0.0,
@@ -310,9 +344,7 @@ def sweep_morning(sessions: dict):
                 for w in base
             )
             PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
-            trades = []
-            for bars in sessions.values():
-                trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
+            trades, _ = _run_arm(sessions, dtime(10, 15))
             depth_label = "deep (long = width)" if depth is None else f"long ${depth:.0f} ITM"
             _report(f"${width:.0f} wide, {depth_label}", trades, len(sessions))
     PB.WINDOWS = base
@@ -334,9 +366,7 @@ def sweep_windows(sessions: dict):
     base = PB.WINDOWS
     for w in base:
         PB.ENABLED_WINDOWS = frozenset({w.name})
-        trades = []
-        for bars in sessions.values():
-            trades += replay_session(bars, w.start, dtime(15, 45))
+        trades, _ = _run_arm(sessions, w.start)
         flag = "  [MODEL-PRICED, see docstring]" if w.placement == "CREDIT" else ""
         _report(f"{w.name} ${w.width:.0f} {w.placement}{flag}", trades, len(sessions))
     PB.WINDOWS = base
@@ -360,9 +390,7 @@ def sweep_retries(sessions: dict):
             replace(w, end=end) if w.name == "MORNING_DRIFT" else w for w in base
         )
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
-        trades = []
-        for bars in sessions.values():
-            trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
+        trades, _ = _run_arm(sessions, dtime(10, 15))
         _report(f"entries until {end.strftime('%H:%M')}", trades, len(sessions))
     PB.WINDOWS = base
 
@@ -453,9 +481,7 @@ def sweep_bearside(sessions: dict):
         )
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
         _Account.equity = EQUITY
-        trades = []
-        for bars in sessions.values():
-            trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
+        trades, _ = _run_arm(sessions, dtime(10, 15))
         _report("long only (current)" if bull_only else "both directions", trades, len(sessions))
         longs = [t for t in trades if t["strategy"] == "BULL_CALL_SPREAD"]
         shorts = [t for t in trades if t["strategy"] == "BEAR_PUT_SPREAD"]
@@ -497,12 +523,7 @@ def sweep_ratchetstyle(sessions: dict):
             for w in base_windows
         )
         N.TRAIL_GIVEBACK, N.MIN_GIVEBACK_PCT = share, floor
-        _Account.equity = EQUITY
-        per_day = []
-        for day, bars in sessions.items():
-            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
-            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
-                            "trades": len(trades)})
+        _, per_day = _run_arm(sessions, dtime(9, 45))
         _report_daily(label, per_day)
     N.TRAIL_GIVEBACK, N.MIN_GIVEBACK_PCT = base_share, base_floor
     PB.WINDOWS = base_windows
@@ -524,12 +545,7 @@ def sweep_cooldown(sessions: dict):
     PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
     for minutes in (0.0, 15.0, 30.0, 60.0, 120.0):
         _Cooldown.minutes = minutes
-        _Account.equity = EQUITY
-        per_day = []
-        for day, bars in sessions.items():
-            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
-            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
-                            "trades": len(trades)})
+        _, per_day = _run_arm(sessions, dtime(9, 45))
         _report_daily(f"{minutes:.0f} min" + (" (current)" if minutes == 30 else ""),
                       per_day)
     _Cooldown.minutes = 30.0
@@ -544,12 +560,7 @@ def sweep_cooldown(sessions: dict):
             for w in base
         )
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
-        _Account.equity = EQUITY
-        per_day = []
-        for day, bars in sessions.items():
-            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
-            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
-                            "trades": len(trades)})
+        _, per_day = _run_arm(sessions, dtime(9, 45))
         _report_daily(f"morning fraction {fraction:.0%}" + (" (current)" if fraction == 0.04 else ""),
                       per_day)
     PB.WINDOWS = base
@@ -577,11 +588,7 @@ def sweep_daily(sessions: dict):
     ]
     for label, names in combos:
         PB.ENABLED_WINDOWS = frozenset(names)
-        per_day = []
-        for day, bars in sessions.items():
-            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
-            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
-                            "trades": len(trades)})
+        _, per_day = _run_arm(sessions, dtime(9, 45))
         _report_daily(label, per_day)
 
 
@@ -603,12 +610,7 @@ def sweep_size(sessions: dict):
             replace(w, risk_share=share) if w.name == "AFTERNOON_CREDIT" else w for w in base
         )
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
-        _Account.equity = EQUITY
-        per_day = []
-        for day, bars in sessions.items():
-            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
-            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
-                            "trades": len(trades)})
+        _, per_day = _run_arm(sessions, dtime(9, 45))
         _report_daily(f"credit share {share:.0%}" + (" (current)" if share == 0.20 else ""),
                       per_day)
         print(f"{'':36s} ending equity ${_Account.equity:,.2f}")
@@ -628,12 +630,7 @@ def sweep_size(sessions: dict):
     for fraction in (0.10, 0.15, 0.20, 0.30):
         N.ENTRY_FRACTION = fraction
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
-        _Account.equity = EQUITY
-        per_day = []
-        for day, bars in sessions.items():
-            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
-            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
-                            "trades": len(trades)})
+        _, per_day = _run_arm(sessions, dtime(9, 45))
         _report_daily(f"entry fraction {fraction:.0%}" + (" (current)" if fraction == 0.10 else ""),
                       per_day)
         print(f"{'':36s} ending equity ${_Account.equity:,.2f}")
@@ -659,14 +656,21 @@ def sweep_creditexit(sessions: dict):
     print("")
     PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
     base_give, base_min = N.TRAIL_GIVEBACK, N.MIN_GIVEBACK_PCT
+    base_w = PB.WINDOWS
     for give in (0.15, 0.20, 0.30, 0.50):
+        # The window pins its own giveback, so setting the global alone tests
+        # nothing -- which is exactly what this sweep reported once the
+        # account bug was fixed: four identical rows, to the cent.
+        PB.WINDOWS = tuple(
+            replace(w, ratchet_giveback=give) if w.name == "AFTERNOON_CREDIT" else w
+            for w in base_w
+        )
         N.TRAIL_GIVEBACK = give
-        trades = []
-        for bars in sessions.values():
-            trades += replay_session(bars, dtime(13, 30), dtime(15, 45))
+        trades, _ = _run_arm(sessions, dtime(13, 30))
         _report(f"giveback {give:.0%}" + (" (current)" if give == 0.20 else ""),
                 trades, len(sessions))
     N.TRAIL_GIVEBACK = base_give
+    PB.WINDOWS = base_w
 
     print("")
     print("CREDIT WINDOW LENGTH -- how late a NEW credit entry may open")
@@ -677,9 +681,7 @@ def sweep_creditexit(sessions: dict):
             replace(w, end=end) if w.name == "AFTERNOON_CREDIT" else w for w in base_windows
         )
         PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
-        trades = []
-        for bars in sessions.values():
-            trades += replay_session(bars, dtime(13, 30), dtime(15, 45))
+        trades, _ = _run_arm(sessions, dtime(13, 30))
         _report(f"entries until {end.strftime('%H:%M')}" + (" (current)" if end == dtime(15, 0) else ""),
                 trades, len(sessions))
     PB.WINDOWS = base_windows
@@ -699,9 +701,7 @@ def sweep_creditgate(sessions: dict):
     PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
     for loose in (False, True):
         N.CREDIT_LOOSE_GATE = loose
-        trades = []
-        for bars in sessions.values():
-            trades += replay_session(bars, dtime(13, 30), dtime(15, 45))
+        trades, _ = _run_arm(sessions, dtime(13, 30))
         if trades:
             mins = [t["ts"].hour * 60 + t["ts"].minute for t in trades]
             avg = sum(mins) / len(mins)
@@ -730,9 +730,7 @@ def sweep_rideratchet(sessions: dict):
     PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
     for arm in (0.0, 12.0, 18.0, 25.0, 32.0):
         N.RIDE_RATCHET_ARM_PCT = arm
-        trades = []
-        for bars in sessions.values():
-            trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
+        trades, _ = _run_arm(sessions, dtime(10, 15))
         label = "off (current)" if arm == 0 else f"arm at +{arm:.0f}%"
         _report(label, trades, len(sessions))
     N.RIDE_RATCHET_ARM_PCT = 0.0
@@ -783,9 +781,7 @@ def sweep_credit(sessions: dict):
             replace(w, width=width) if w.name == "AFTERNOON_CREDIT" else w for w in base
         )
         PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
-        trades = []
-        for bars in sessions.values():
-            trades += replay_session(bars, dtime(13, 30), dtime(15, 45))
+        trades, _ = _run_arm(sessions, dtime(13, 30))
         _report(f"${width:.0f} wide", trades, len(sessions))
     PB.WINDOWS = base
 

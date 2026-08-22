@@ -11,6 +11,8 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py events      # what scheduled macro days actually cost
+    python scripts/sweep.py weekday     # is Monday or Friday a different market?
     python scripts/sweep.py macro       # do yields, crude and VIX predict our day?
     python scripts/sweep.py placement   # morning width x depth, judged per DAY
     python scripts/sweep.py condorvs    # both sides vs the one side we already sell
@@ -457,6 +459,108 @@ def _run_one_side(bars, i: int, offset: float, wing: float, calls: bool = True):
     if pnl is None:
         return None
     return {"pnl": round(pnl, 2), "reason": reason, "pct": round((pnl / 100) / credit * 100, 2)}
+
+
+def sweep_events(sessions: dict):
+    """What the engine earns on scheduled macro days, and what a blackout costs.
+
+    Standing aside is not free -- eight FOMC days a year at the engine's
+    average is real money forgone -- so the blackout ships off until these
+    sessions are shown to be worse than ordinary ones.
+    """
+    import trading_engine.macro_calendar as CAL
+    print("")
+    print("SCHEDULED MACRO DAYS -- FOMC statement days in the sample")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    _, per_day = _run_arm(sessions, dtime(9, 45))
+    event, ordinary = [], []
+    for d in per_day:
+        (event if CAL.is_event_day(d["day"]) else ordinary).append(d)
+    for label, group in (("event days", event), ("every other day", ordinary)):
+        if not group:
+            print(f"  {label:18s} none in sample")
+            continue
+        total = sum(d["pnl"] for d in group)
+        green = len([d for d in group if d["pnl"] > 0])
+        print(f"  {label:18s} n={len(group):2d}  {total / len(group):+9.2f}/day  "
+              f"{green}/{len(group)} green  worst {min(d['pnl'] for d in group):+9.2f}")
+    for d in event:
+        print(f"      {d['day']}  {d['pnl']:+9.2f}  {d['trades']} trade(s)")
+
+    print("")
+    print("  blackout variants:")
+    base_mode = CAL.EVENT_BLACKOUT
+    for mode in ("off", "afternoon", "day"):
+        CAL.EVENT_BLACKOUT = mode
+        _, per = _run_arm(sessions, dtime(9, 45))
+        total = sum(d["pnl"] for d in per)
+        print(f"    {mode:10s} {total / len(per):+9.2f}/day   {total:+10.2f} total")
+    CAL.EVENT_BLACKOUT = base_mode
+
+
+def sweep_weekday(sessions: dict):
+    """Does the day of the week change the market we are trading?
+
+    The claim worth testing is specific: if Mondays and Fridays are more
+    volatile, a strategy that sells premium should behave differently on them
+    -- more credit, but more breaches. Range and survival are facts in the
+    bars and need no pricing model; the engine's own P&L is the third column
+    and the one that decides anything.
+    """
+    print("")
+    print("BY WEEKDAY -- range and strike survival are model-free; P&L is the engine's")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    _, per_day = _run_arm(sessions, dtime(9, 45))
+    pnl_by_day = {d["day"]: d for d in per_day}
+
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    buckets = {n: [] for n in names}
+    for day, bars in sessions.items():
+        idx = names[day.weekday()] if day.weekday() < 5 else None
+        if idx is None:
+            continue
+        session = bars[bars.index.map(lambda t: dtime(9, 30) <= t.time() <= dtime(16, 0))]
+        if session.empty:
+            continue
+        hi, lo = float(session["High"].max()), float(session["Low"].min())
+        open_px = float(session["Close"].iloc[0])
+        close_px = float(session["Close"].iloc[-1])
+        row = {"range_pct": (hi - lo) / open_px * 100.0,
+               "move_pct": abs(close_px - open_px) / open_px * 100.0,
+               "pnl": pnl_by_day.get(day, {}).get("pnl", 0.0),
+               "trades": pnl_by_day.get(day, {}).get("trades", 0)}
+        # Condor survival from 13:30, both wing distances, from the bars alone.
+        for off in (3.0, 4.0):
+            hits = [i for i, ts in enumerate(bars.index) if ts.time() == dtime(13, 30)]
+            if hits:
+                i = hits[0]
+                spot = float(bars["Close"].iloc[i])
+                rest = bars.iloc[i + 1:]
+                rest = rest[rest.index.map(lambda t: t.time() <= dtime(15, 45))]
+                if not rest.empty:
+                    held = (float(rest["High"].max()) < spot + off
+                            and float(rest["Low"].min()) > spot - off)
+                    row["hold_%d" % int(off)] = held
+        buckets[idx].append(row)
+
+    print("  %-10s %3s  %8s %8s   %9s %9s   %9s %7s" % (
+        "day", "n", "range%", "|move|%", "cndr $3", "cndr $4", "P&L/day", "green"))
+    for name in names:
+        g = buckets[name]
+        if not g:
+            continue
+        def hold(key):
+            vals = [r[key] for r in g if key in r]
+            return ("%3.0f%%" % (sum(vals) / len(vals) * 100)) if vals else "  -"
+        avg_pnl = sum(r["pnl"] for r in g) / len(g)
+        green = len([r for r in g if r["pnl"] > 0]) / len(g) * 100
+        print("  %-10s %3d  %7.2f%% %7.2f%%   %8s %9s   %+9.2f %6.0f%%" % (
+            name, len(g),
+            sum(r["range_pct"] for r in g) / len(g),
+            sum(r["move_pct"] for r in g) / len(g),
+            hold("hold_3"), hold("hold_4"), avg_pnl, green))
 
 
 def sweep_macro(sessions: dict):
@@ -1249,6 +1353,10 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("events", "all"):
+        sweep_events(sessions)
+    if which in ("weekday", "all"):
+        sweep_weekday(sessions)
     if which in ("macro", "all"):
         sweep_macro(sessions)
     if which in ("placement", "all"):

@@ -626,4 +626,13 @@ def chain_condor_value(call_short: float, call_long: float, put_short: float,
             round(legs["call_short"].delta, 3) if legs["call_short"].delta is not None else None,
             round(legs["put_short"].delta, 3) if legs["put_short"].delta is not None else None,
         ],
+        # Implied vol on the strikes actually being sold. A premium seller is
+        # harvesting the gap between what the market implies and what it goes
+        # on to realise, and neither number was being recorded -- so "sell
+        # when volatility is low" and "sell when it is high" have both been
+        # arguable here purely because nothing measured either.
+        "short_ivs": [
+            round(legs["call_short"].iv, 4) if legs["call_short"].iv is not None else None,
+            round(legs["put_short"].iv, 4) if legs["put_short"].iv is not None else None,
+        ],
     }

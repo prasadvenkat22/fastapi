@@ -23,6 +23,7 @@ from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
+from .macro_calendar import blackout_active as event_blackout_active, describe as describe_event
 from .playbook import (
     CREDIT, credit_strikes_for, final_take_profit_for, ratchet_giveback_for,
     ride_deadline, rides_to_close, risk_share_for, strikes_for, thresholds_for,
@@ -815,6 +816,11 @@ def shadow_condor_marks(bars, spot: float) -> dict:
                 "market_natural_cost": market["natural"] if market else None,
                 "market_spread_width": market["spread_width"] if market else None,
                 "market_short_deltas": market["short_deltas"] if market else None,
+                # Implied vol at entry, against which the session's realised
+                # move can be compared afterwards. That comparison -- not the
+                # level of either one alone -- is what a premium seller is
+                # actually paid for.
+                "market_short_ivs": market["short_ivs"] if market else None,
                 "return_pct_market": (
                     round((credit - market["mid"]) / credit * 100.0, 2)
                     if market and credit else None
@@ -1586,6 +1592,18 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         elif TREND_ENTRIES_ENABLED and (trend_bull or trend_bear):
             tier, bullish = "TREND", trend_bull
         else:
+            tier, bullish = None, False
+
+        # A scheduled macro event. The VIX gate is a level and a Fed day with
+        # the VIX at 18 sails through it; the sentiment verdict gates bullish
+        # entries only, so a credit spread could open in either direction
+        # minutes before a rate decision. Logged on every event day whether or
+        # not the blackout is armed.
+        event_note = describe_event()
+        if event_note:
+            logger.info("%s", event_note)
+        if tier is not None and event_blackout_active():
+            logger.info("Scheduled macro event — refusing the %s entry.", tier)
             tier, bullish = None, False
 
         # A session already this far down is not a place to be long, whatever

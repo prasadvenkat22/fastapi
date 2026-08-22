@@ -11,6 +11,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py condorvs    # both sides vs the one side we already sell
     python scripts/sweep.py trenddepth  # uncap the spread when the trend is strong?
     python scripts/sweep.py daytrend    # refuse longs once the session is down
     python scripts/sweep.py daytype     # what the engine earns by market regime
@@ -420,6 +421,72 @@ def _report_daily(label: str, per_day: list):
     print(f"  {label:34s} {days:2d} days  {trades / days:4.2f} tr/day  "
           f"{total / days:+8.2f}/day  {total:+9.2f} tot  {green / days * 100:3.0f}% green days  "
           f"worst {min(d['pnl'] for d in per_day):+8.2f}  halves {h1:+7.2f}/{h2:+7.2f}")
+
+
+def _run_one_side(bars, i: int, offset: float, wing: float, calls: bool = True):
+    """One credit vertical, priced and exited exactly like _run_condor's."""
+    spot = float(bars["Close"].iloc[i])
+    atm = round_to_strike(spot)
+    if calls:
+        short, long_ = atm + offset, atm + offset + wing
+        strat = CALL_CREDIT_SPREAD
+    else:
+        short, long_ = atm - offset, atm - offset - wing
+        strat = PUT_CREDIT_SPREAD
+    mins = broker_mod.minutes_to_expiry(bars.index[i].to_pydatetime())
+    credit = fill_price(estimate_credit_value(strat, short, long_, spot, mins), "sell")
+    if credit <= 0.02:
+        return None
+    pnl, reason = None, None
+    for j in range(i + 1, len(bars)):
+        ts = bars.index[j]
+        if ts.time() > dtime(15, 45):
+            break
+        sp = float(bars["Close"].iloc[j])
+        m = broker_mod.minutes_to_expiry(ts.to_pydatetime())
+        cost = fill_price(estimate_credit_value(strat, short, long_, sp, m), "buy")
+        pnl, reason = (credit - cost) * 100, "FORCE_CLOSE"
+        if cost <= credit * 0.10:
+            reason = "TARGET"
+            break
+        if cost >= credit * 2.0:
+            reason = "STOP"
+            break
+    if pnl is None:
+        return None
+    return {"pnl": round(pnl, 2), "reason": reason, "pct": round((pnl / 100) / credit * 100, 2)}
+
+
+def sweep_condorvs(sessions: dict):
+    """Both sides against the one side the engine already sells.
+
+    Same entry bar, same wings, same exits, same model -- so the model's
+    overstatement of far-OTM premium is common to both arms and cancels in
+    the comparison. What does not cancel is the structural trade: a condor
+    collects roughly twice the credit and needs BOTH strikes to hold, and the
+    survival table already prices that at 92% against 75% for a four-dollar
+    offset at 13:30.
+    """
+    print("")
+    print("CONDOR vs ONE SIDE -- same entry, same wings, same exits, per contract")
+    print("")
+    for entry in (dtime(13, 30), dtime(14, 30)):
+        for offset in (3.0, 4.0, 5.0):
+            arms = {"call side only": [], "put side only": [], "condor (both)": []}
+            for bars in sessions.values():
+                hits = [i for i, ts in enumerate(bars.index) if ts.time() == entry]
+                if not hits:
+                    continue
+                i = hits[0]
+                for label, fn in (("call side only", lambda: _run_one_side(bars, i, offset, 3.0, True)),
+                                  ("put side only", lambda: _run_one_side(bars, i, offset, 3.0, False)),
+                                  ("condor (both)", lambda: _run_condor(bars, i, offset))):
+                    r = fn()
+                    if r:
+                        arms[label].append(r)
+            print(f"  {entry.strftime('%H:%M')} entry, ${offset:.0f} out:")
+            for label, res in arms.items():
+                _report("    " + label, res, len(sessions))
 
 
 def sweep_trenddepth(sessions: dict):
@@ -1046,6 +1113,8 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("condorvs", "all"):
+        sweep_condorvs(sessions)
     if which in ("trenddepth", "all"):
         sweep_trenddepth(sessions)
     if which in ("daytrend", "all"):

@@ -11,6 +11,9 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py squeeze     # does a volatility squeeze make a morning safe to sell?
+    python scripts/sweep.py bearside    # may the morning trade the short side too?
+    python scripts/sweep.py ratchetstyle # dollar-offset ratchet vs share-of-peak
     python scripts/sweep.py cooldown    # how long to stand down after a loss
     python scripts/sweep.py size        # fewer, larger trades vs more, smaller ones
     python scripts/sweep.py daily       # does trading MORE per day earn more per day?
@@ -182,12 +185,31 @@ def _session_state(bars_slice: pd.DataFrame) -> dict:
     return state
 
 
+# The full 5-minute series, and how much of it each cycle may see.
+#
+# The live engine calls fetch_qqq_bars(period="5d"), so a 20-period band or a
+# 50 EMA at 10:15 is computed over the previous days as well as this one. The
+# first version of this harness handed each session only its OWN bars, which
+# left every indicator reading off nine bars at the morning entry and none of
+# them warmed up at all -- a squeeze test written against it returned no rows,
+# which is how it was noticed.
+_HISTORY = None
+_LOOKBACK_BARS = 390          # 5 sessions x 78 five-minute bars, as live
+
+
 def _load_sessions(period: str = "60d") -> dict:
+    global _HISTORY
     bars = yf.Ticker("QQQ").history(period=period, interval="5m")
     if bars.empty:
         raise SystemExit("yfinance returned no bars")
     bars = bars.tz_convert(NY)
+    _HISTORY = bars
     return {d: g for d, g in bars.groupby(bars.index.date) if len(g) > 40}
+
+
+def _seen_at(ts) -> pd.DataFrame:
+    """Everything the engine would have had at `ts`, warmed up like the live feed."""
+    return _HISTORY.loc[:ts].tail(_LOOKBACK_BARS)
 
 
 def _mark(position, spot: float) -> float:
@@ -210,7 +232,7 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
         if not (start <= ts.time() <= end):
             continue
         _Clock.now = ts.to_pydatetime()
-        seen = day_bars.iloc[: i + 1]
+        seen = _seen_at(ts)
         spot = float(seen["Close"].iloc[-1])
         N.fetch_qqq_spot = lambda s=spot: s
 
@@ -361,6 +383,130 @@ def _report_daily(label: str, per_day: list):
     print(f"  {label:34s} {days:2d} days  {trades / days:4.2f} tr/day  "
           f"{total / days:+8.2f}/day  {total:+9.2f} tot  {green / days * 100:3.0f}% green days  "
           f"worst {min(d['pnl'] for d in per_day):+8.2f}  halves {h1:+7.2f}/{h2:+7.2f}")
+
+
+def sweep_squeeze(sessions: dict):
+    """Does a Bollinger squeeze mark a morning where short strikes survive?
+
+    The claim behind a "neutral day iron condor" is that contracting bands,
+    flat moving averages and a mid-range RSI identify a session that will go
+    nowhere. That is a testable prediction about price, not about premium, so
+    it needs no pricing model: split the sessions by how tight the bands are
+    at the entry bar and compare how often each group's short strikes hold.
+    """
+    print("")
+    print("VOLATILITY SQUEEZE -- share of sessions where the strike is never touched")
+    print("   split by 20-period band width at the entry bar (tightest third vs rest)")
+    print("")
+    for entry in (dtime(9, 45), dtime(10, 15)):
+        rows = []
+        for bars in sessions.values():
+            hits = [i for i, ts in enumerate(bars.index) if ts.time() == entry]
+            if not hits:
+                continue
+            i = hits[0]
+            close = _seen_at(bars.index[i])["Close"]
+            if len(close) < 20:
+                continue
+            sd = float(close.rolling(20).std().iloc[-1])
+            spot = float(close.iloc[-1])
+            rest = bars.iloc[i + 1:]
+            rest = rest[rest.index.map(lambda t: t.time() <= dtime(15, 45))]
+            if rest.empty or sd != sd:
+                continue
+            rows.append({"sd": sd, "spot": spot,
+                         "high": float(rest["High"].max()), "low": float(rest["Low"].min())})
+        if not rows:
+            continue
+        rows.sort(key=lambda r: r["sd"])
+        cut = max(len(rows) // 3, 1)
+        groups = (("squeezed (tightest 3rd)", rows[:cut]), ("everything else", rows[cut:]))
+        print(f"  {entry.strftime('%H:%M')} entry")
+        for label, group in groups:
+            out = []
+            for offset in (3.0, 4.0, 5.0, 6.0):
+                held = sum(1 for r in group
+                           if r["high"] < r["spot"] + offset and r["low"] > r["spot"] - offset)
+                out.append(f"${offset:.0f}: {held / len(group) * 100:3.0f}%")
+            band = sum(r["sd"] for r in group) / len(group)
+            print(f"    {label:26s} n={len(group):2d}  avg 20-bar sd {band:4.2f}   "
+                  + "   ".join(out))
+
+
+def sweep_bearside(sessions: dict):
+    """May the morning window trade its short side?
+
+    It is forbidden today on a measurement taken before this harness existed:
+    16 bearish-stack mornings, ITM put spreads at -15.52 a trade, and a sign
+    that moved when the judging bar moved. The window has changed since --
+    $5 wide, deeper long leg, chain pricing, a different exit ladder -- so
+    the prohibition deserves re-testing against the engine that exists now.
+    """
+    print("")
+    print("MORNING SHORT SIDE -- long-only against both directions")
+    print("")
+    base = PB.WINDOWS
+    for bull_only in (True, False):
+        PB.WINDOWS = tuple(
+            replace(w, bullish_only=bull_only) if w.name == "MORNING_DRIFT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+        _Account.equity = EQUITY
+        trades = []
+        for bars in sessions.values():
+            trades += replay_session(bars, dtime(10, 15), dtime(15, 45))
+        _report("long only (current)" if bull_only else "both directions", trades, len(sessions))
+        longs = [t for t in trades if t["strategy"] == "BULL_CALL_SPREAD"]
+        shorts = [t for t in trades if t["strategy"] == "BEAR_PUT_SPREAD"]
+        if shorts:
+            _report("   ...of which long", longs, len(sessions))
+            _report("   ...of which short", shorts, len(sessions))
+    PB.WINDOWS = base
+    _Account.equity = EQUITY
+
+
+def sweep_ratchetstyle(sessions: dict):
+    """A fixed offset from the peak, against a share of it.
+
+    The engine gives back max(peak x share, floor) in RETURN POINTS. A fixed
+    dollar offset is the same rule with the share switched off -- $0.25 on a
+    $3.30 entry is 7.6 points, and it stays 7.6 points whether the trade has
+    made 10% or 200%. That is the whole difference: a share widens as the
+    position wins, a fixed offset does not.
+    """
+    print("")
+    print("RATCHET STYLE -- fixed points from peak (a dollar offset) vs share of peak")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    base_share, base_floor = N.TRAIL_GIVEBACK, N.MIN_GIVEBACK_PCT
+    base_windows = PB.WINDOWS
+    for share, floor, label in (
+        (0.30, base_floor, "30% of peak (current)"),
+        (0.0, 5.0, "fixed 5 points"),
+        (0.0, 7.6, "fixed 7.6 pts (= $0.25 on $3.30)"),
+        (0.0, 10.0, "fixed 10 points"),
+        (0.0, 20.0, "fixed 20 points"),
+        (0.0, 30.0, "fixed 30 points"),
+    ):
+        # The credit window pins its own giveback, so the global alone would
+        # change nothing -- which is exactly what the first run of this sweep
+        # reported, five identical rows.
+        PB.WINDOWS = tuple(
+            replace(w, ratchet_giveback=share) if w.name == "AFTERNOON_CREDIT" else w
+            for w in base_windows
+        )
+        N.TRAIL_GIVEBACK, N.MIN_GIVEBACK_PCT = share, floor
+        _Account.equity = EQUITY
+        per_day = []
+        for day, bars in sessions.items():
+            trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
+            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in trades),
+                            "trades": len(trades)})
+        _report_daily(label, per_day)
+    N.TRAIL_GIVEBACK, N.MIN_GIVEBACK_PCT = base_share, base_floor
+    PB.WINDOWS = base_windows
+    _Account.equity = EQUITY
 
 
 def sweep_cooldown(sessions: dict):
@@ -679,7 +825,7 @@ def sweep_condor(sessions: dict):
                         continue
                     i = hits[0]
                     if adx_max is not None:
-                        adx = _adx(bars.iloc[: i + 1])
+                        adx = _adx(_seen_at(bars.index[i]))
                         if adx is None or adx >= adx_max:
                             continue
                     result = _run_condor(bars, i, offset)
@@ -814,6 +960,12 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("squeeze", "all"):
+        sweep_squeeze(sessions)
+    if which in ("bearside", "all"):
+        sweep_bearside(sessions)
+    if which in ("ratchetstyle", "all"):
+        sweep_ratchetstyle(sessions)
     if which in ("cooldown", "all"):
         sweep_cooldown(sessions)
     if which in ("size", "all"):

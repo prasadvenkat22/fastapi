@@ -375,13 +375,18 @@ WINDOWS = (
         # final_take_profit_pct above. -100% is the classic credit stop: buy
         # it back for twice what you sold it for.
         take_profit_pct=50.0, final_take_profit_pct=90.0, stop_loss_pct=-100.0, risk_off_pct=-60.0,
-        # 0.35, not 0.20. Swept over 60 sessions with equity compounding and
-        # the daily cap live, the slice binds up to 35% and stops mattering
-        # above it -- +59.14 a day at 20%, +71.53 at 35%, and identical at 50%
-        # and 80% because the capital fraction takes over as the constraint.
-        # 0.35 is therefore the point where this window stops being throttled
-        # by a share it was never the reason for.
-        risk_share=0.35, ratchet_giveback=0.30,
+        # 0.50. Swept over 60 sessions with equity compounding, the daily cap
+        # live and indicators warmed over five sessions as the live feed warms
+        # them: +57.98 a day at 20%, +104.27 at 35%, +108.30 at 50%, and
+        # identical at 80% because the capital fraction takes over there. The
+        # worst day is -606.28 at every share, because the daily cap is what
+        # bounds it rather than the slice.
+        #
+        # An earlier run of this sweep put the plateau at 35%. It was reading
+        # indicators computed from a single session's bars, so the morning
+        # window traded 9 times across 60 sessions instead of 23 and the
+        # credit window saw a different set of days entirely.
+        risk_share=0.50, ratchet_giveback=0.30,
         exempt_from_streak_halt=True,
         note="Theta is steepest in the last two hours and a debit spread is on "
              "the wrong side of it — it needs a move and there is little day "

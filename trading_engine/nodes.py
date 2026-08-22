@@ -48,7 +48,7 @@ NY = ZoneInfo("America/New_York")
 from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_qqq_session_vwap,
                         fetch_oil, fetch_qqq_spot, fetch_tnx, fetch_vix,
                         chain_condor_value, chain_vertical, fetch_option_chain,
-                        log_price_divergence, strike_for_delta)
+                        log_price_divergence, strike_for_delta, _regular_session_open)
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -288,6 +288,23 @@ MIN_CREDIT = float(os.getenv("TRADING_MIN_CREDIT", "0.05"))
 # enough that it expires worthless most days, close enough to be worth
 # selling. Sigma placement remains the fallback when the chain is missing.
 CREDIT_SHORT_DELTA = float(os.getenv("TRADING_CREDIT_SHORT_DELTA", "0.20"))
+
+# Refuse BULLISH entries once the session itself is down this far, in percent
+# from the regular-hours open. Zero disables the filter.
+#
+# Every trend reading the engine had was intraday and short -- a 20 and 50 EMA
+# over five-minute bars, a VWAP, a nine-period EMA. On a day that opens bad
+# and keeps going, an ordinary bounce lifts price above all of them while the
+# session is still deeply red, and the tier ladder reads that as a clean
+# bullish stack.
+#
+# Measured across 60 sessions bucketed by the 09:45-to-close move, hard-down
+# days (worse than -0.75%) are the engine's only losing regime at -47.46 a
+# day, and the trades it took there include put credit spreads and a call
+# debit spread -- bullish structures, sold into a decline that continued.
+# Every other bucket is positive: -0.75..-0.25 +6.54, flat +70.26, up +68.54,
+# hard up +130.37.
+DAY_TREND_MAX_DROP_PCT = float(os.getenv("TRADING_DAY_TREND_MAX_DROP", "0"))
 
 # Most of equity ONE position may put at structural risk -- not at stop risk.
 #
@@ -570,8 +587,22 @@ def sma_agent(state: TradingState) -> dict:
         else ("TRENDING" if adx >= ADX_TREND_THRESHOLD else "CHOPPY")
     )
 
+    # Where the session stands, as distinct from where the last few bars do.
+    # The EMAs this function returns are intraday and short: on a day that
+    # falls all morning, an ordinary bounce lifts price above both of them
+    # while the session is still deeply red. That is how bullish entries were
+    # reaching hard-down days -- see DAY_TREND_MAX_DROP_PCT below.
+    try:
+        session_open = _regular_session_open(bars)
+        session_move_pct = (
+            (float(last_close) - session_open) / session_open * 100.0 if session_open else 0.0
+        )
+    except Exception:
+        session_move_pct = 0.0
+
     return {"sma_trend": trend, "ema9_side": ema9_side, "ema_cross": ema_cross,
             "vwap_side": vwap_side, "ema50_reject": ema50_reject,
+            "session_move_pct": round(session_move_pct, 3),
             "adx": round(adx, 2) if adx_ok else 0.0, "adx_zone": adx_zone}
 
 
@@ -1525,6 +1556,19 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         elif TREND_ENTRIES_ENABLED and (trend_bull or trend_bear):
             tier, bullish = "TREND", trend_bull
         else:
+            tier, bullish = None, False
+
+        # A session already this far down is not a place to be long, whatever
+        # the five-minute averages say about the last twenty minutes.
+        if (
+            tier is not None and bullish and DAY_TREND_MAX_DROP_PCT > 0
+            and state.get("session_move_pct") is not None
+            and float(state.get("session_move_pct") or 0.0) <= -DAY_TREND_MAX_DROP_PCT
+        ):
+            logger.info(
+                "Session is %.2f%% off the open — refusing the bullish %s entry.",
+                float(state.get("session_move_pct") or 0.0), tier,
+            )
             tier, bullish = None, False
 
         # No tier, but a credit window is open: sell premium on the side the

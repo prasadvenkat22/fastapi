@@ -11,6 +11,8 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py morning     # widths x long-leg depth
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
+    python scripts/sweep.py daytrend    # refuse longs once the session is down
+    python scripts/sweep.py daytype     # what the engine earns by market regime
     python scripts/sweep.py squeeze     # does a volatility squeeze make a morning safe to sell?
     python scripts/sweep.py bearside    # may the morning trade the short side too?
     python scripts/sweep.py ratchetstyle # dollar-offset ratchet vs share-of-peak
@@ -411,6 +413,73 @@ def _report_daily(label: str, per_day: list):
     print(f"  {label:34s} {days:2d} days  {trades / days:4.2f} tr/day  "
           f"{total / days:+8.2f}/day  {total:+9.2f} tot  {green / days * 100:3.0f}% green days  "
           f"worst {min(d['pnl'] for d in per_day):+8.2f}  halves {h1:+7.2f}/{h2:+7.2f}")
+
+
+def sweep_daytrend(sessions: dict):
+    """How far down a session may be before longs are refused."""
+    print("")
+    print("SESSION TREND FILTER -- refuse bullish entries below this drop from the open")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    for drop in (0.0, 0.25, 0.5, 0.75, 1.0):
+        N.DAY_TREND_MAX_DROP_PCT = drop
+        _, per_day = _run_arm(sessions, dtime(9, 45))
+        _report_daily("off (current)" if drop == 0 else f"refuse longs below -{drop:.2f}%",
+                      per_day)
+    N.DAY_TREND_MAX_DROP_PCT = 0.0
+
+
+def sweep_daytype(sessions: dict):
+    """What the engine earns on days that go down, sideways and up.
+
+    A backtest average hides regime. If the whole result comes from up days,
+    a week of selling tells you nothing until it arrives -- and the question
+    of whether anything covers a session that opens bad and keeps going is
+    answered by looking at those sessions specifically, not at the mean.
+
+    Buckets are the move from the 09:45 bar to the close, which is the span
+    the engine can actually trade.
+    """
+    print("")
+    print("BY DAY TYPE -- 09:45 to close, engine P&L per session")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    _Account.equity = EQUITY
+    rows = []
+    for day, bars in sessions.items():
+        opens = [i for i, ts in enumerate(bars.index) if ts.time() >= dtime(9, 45)]
+        if not opens:
+            continue
+        start_px = float(bars["Close"].iloc[opens[0]])
+        end_px = float(bars["Close"].iloc[-1])
+        move = end_px - start_px
+        trades = replay_session(bars, dtime(9, 45), dtime(15, 45))
+        rows.append({"move": move, "pct": move / start_px * 100,
+                     "pnl": sum(t["pnl"] for t in trades), "trades": trades,
+                     "n": len(trades)})
+
+    buckets = [
+        ("hard down  (< -0.75%)", lambda r: r["pct"] < -0.75),
+        ("down       (-0.75..-0.25)", lambda r: -0.75 <= r["pct"] < -0.25),
+        ("flat       (-0.25..+0.25)", lambda r: -0.25 <= r["pct"] <= 0.25),
+        ("up         (+0.25..+0.75)", lambda r: 0.25 < r["pct"] <= 0.75),
+        ("hard up    (> +0.75%)", lambda r: r["pct"] > 0.75),
+    ]
+    for label, test in buckets:
+        group = [r for r in rows if test(r)]
+        if not group:
+            print(f"  {label:26s} no sessions")
+            continue
+        total = sum(r["pnl"] for r in group)
+        green = len([r for r in group if r["pnl"] > 0])
+        flat_days = len([r for r in group if r["n"] == 0])
+        kinds = {}
+        for r in group:
+            for t in r["trades"]:
+                kinds[t["strategy"]] = kinds.get(t["strategy"], 0) + 1
+        print(f"  {label:26s} n={len(group):2d}  {total / len(group):+8.2f}/day  "
+              f"{total:+9.2f} tot  {green}/{len(group)} green  "
+              f"{flat_days} untraded  {kinds}")
 
 
 def sweep_squeeze(sessions: dict):
@@ -956,6 +1025,10 @@ def main():
         sweep_windows(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("daytrend", "all"):
+        sweep_daytrend(sessions)
+    if which in ("daytype", "all"):
+        sweep_daytype(sessions)
     if which in ("squeeze", "all"):
         sweep_squeeze(sessions)
     if which in ("bearside", "all"):

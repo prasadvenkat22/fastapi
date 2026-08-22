@@ -1,369 +1,355 @@
 ================================================================================
-QQQ 0DTE TRADING ENGINE — STRATEGY NOTES
+QQQ 0DTE TRADING ENGINE - STRATEGY NOTES
 ================================================================================
-Last updated: 2026-08-17
-Code: trading_engine/   Config: .env.production.example (all TRADING_* vars)
 
-Everything here is MOCKED. The broker places no real orders. Read the
-"Known limits" section before treating any P&L number as meaningful.
+Current as of 2026-08-22. Every number here is read from the deployed
+configuration, not from intent.
 
+This file describes WHAT the engine does. The WHY lives beside each parameter
+in trading_engine/playbook.py and trading_engine/nodes.py, where the sweep
+that chose it is quoted in full. Nothing here is a preference: every value was
+measured with scripts/sweep.py over 60 sessions, and several were measured
+more than once because the tool producing the evidence turned out to be wrong.
 
-================================================================================
+--------------------------------------------------------------------------------
 1. WHAT THE ENGINE TRADES
-================================================================================
+--------------------------------------------------------------------------------
 
-Defined-risk debit vertical spreads on QQQ, expiring same day (0DTE).
-Long the in-the-money leg, short the at-the-money leg, $3 wide.
+QQQ options expiring the same day. Vertical spreads only - never a naked leg,
+never a single long option. One position at a time, held in a single
+trading_open_positions row.
 
-  Bullish -> BULL_CALL_SPREAD   long (ATM-3) call, short ATM call
-  Bearish -> BEAR_PUT_SPREAD    long (ATM+3) put,  short ATM put
+Two structures:
 
-Both directions exist. It is not a call-only strategy.
+  DEBIT VERTICAL (morning). Buy the nearer strike, sell the further one. Pays
+  if QQQ moves the right way; loses the premium paid if it does not.
 
-Why a spread and not a naked long option: max loss is capped at the net debit
-paid. A naked long can lose everything with no floor and needs a larger move
-to overcome its premium.
+  CREDIT VERTICAL (afternoon). Sell the nearer strike, buy the further one for
+  protection. Pays if the short strike holds, whichever way price wanders
+  below it. Risks width-minus-credit.
 
-Why long ITM / short ATM specifically:
-  - The long ITM leg carries little extrinsic value, so there is little time
-    premium to lose.
-  - The short ATM leg carries the MOST extrinsic value of any strike, and you
-    are short it, so its decay works in your favour.
-  - Net result is positive theta while price holds above the short strike:
-    the position gains value simply by time passing. That is the entire
-    reason to buy ITM rather than ATM or OTM.
+Two windows are live. Two more are defined and switched off - they stay in the
+code so a position opened under one can still be priced and exited if it is
+ever re-enabled.
 
-Max value of the spread is its width ($3.00). Max loss is the debit paid.
-
-
-================================================================================
+--------------------------------------------------------------------------------
 2. THE TRADING DAY
-================================================================================
-
-  09:30           Bell. Scheduler starts ticking (5 min cycles).
-  09:30 - 09:45   WARMUP. No new entries.
-                  Opening-auction whipsaws are not a trend, but MACD/EMA/
-                  Bollinger/RSI will all read a direction from them and
-                  nothing downstream can tell that apart from a real signal.
-                  Position MANAGEMENT still runs — stops and take-profits
-                  fire from the first cycle. A stop that ignores the first
-                  15 minutes is worse than no stop.
-  09:45 - 14:00   ENTRY WINDOW. New positions may open here.
-  14:00           Entry cutoff. No new positions, no scale-ins.
-                  A 0DTE spread opened later has too little day left to work.
-  15:45           FORCE CLOSE. Everything flattened regardless of P&L.
-                  These expire at today's close: the short leg carries
-                  assignment/pin risk and an OTM long leg expires worthless.
-  16:00           Expiration.
-
-Config: TRADING_WARMUP_MINUTES (15)
-
-
-================================================================================
-3. HOW AN ENTRY IS DECIDED
-================================================================================
-
-Five agents run in parallel each cycle, then a deterministic rule engine
-decides. Four are technical, one is macro.
-
-  MACD        12/26/9 histogram   BULLISH >0.01 / BEARISH <-0.01 / NEUTRAL
-  Trend       EMA 20 and EMA 50   ABOVE_SMA if price clears both
-                                  (field name is legacy — it IS an EMA)
-  Bollinger   20-period, 2 sigma  UPPER_BAND / LOWER_BAND / NORMAL
-  RSI         Wilder 14           OVERBOUGHT >=70 / OVERSOLD <=30 / NEUTRAL
-  Macro       breadth + VIX + Claude on headlines -> GOOD or BAD
-
-An entry needs ALL FOUR technicals in one specific arrangement, PLUS macro
-GOOD. Four such arrangements exist:
-
-  BULL FADE          MACD BULLISH, ABOVE, LOWER_BAND, OVERSOLD
-                     Stretched down but momentum turning up — drop exhausted.
-  BULL CONTINUATION  MACD BULLISH, ABOVE, UPPER_BAND, OVERBOUGHT
-                     Everything agrees up — breakout in progress.
-  BEAR FADE          MACD BEARISH, BELOW, UPPER_BAND, OVERBOUGHT
-                     Stretched up but momentum turning down — rally exhausted.
-  BEAR CONTINUATION  MACD BEARISH, BELOW, LOWER_BAND, OVERSOLD
-                     Everything agrees down — breakdown in progress.
-
-CONSEQUENCE: entries are RARE. Five conditions must align. Most sessions
-produce no entry at all. This is by design, but it means a morning of
-watching usually shows nothing but HOLD, and testing changes to the exit
-logic requires seeding a position manually.
-
-
-================================================================================
-4. THE MACRO GATE
-================================================================================
-
-Sentiment is GOOD only if ALL of these hold. Any one flips it to BAD.
-
-  Breadth positive       addq > 0                    (level)
-  Breadth not collapsing >= -0.40 vs 30-min peak     (VELOCITY)
-  VIX level              < 22.0                      (level)
-  VIX session move       < +10% from 09:30 open      (VELOCITY)
-  10Y yield move         < +8bp from 09:30 open      (VELOCITY)
-  Claude verdict         GOOD
-
-THREE of the five terms measure velocity rather than level, because a level
-check alone cannot tell a market that IS bad from one that is BECOMING bad.
-VIX at 18 but +30% on the day, with breadth bled from +45 to +3 and the 10Y
-up 10bp, reads as perfectly calm on levels alone.
-
-Breadth velocity uses a ROLLING 30-minute peak, not the session peak. A
-session-peak anchor reads an ordinary all-day drift as an emergency and then
-stays latched for the rest of the day. Verified: a +48 -> +20 bleed over five
-hours never trips; the same drop compressed into 15 minutes trips five times.
-
-The 10-year yield (^TNX) is the third velocity term and the only macro input
-that is NOT about fear. QQQ is the longest-duration equity index there is, so
-its multiple moves inversely with real rates — a yield spike is a direct
-headwind that neither VIX nor breadth necessarily shows. Judged purely on
-intraday change: 4.3% tells you nothing, +8bp inside a session does.
-
-One-sided on purpose. Rising yields hurt QQQ; falling yields are broadly
-supportive, and the flight-to-quality case where yields collapse in a crash
-arrives with a VIX spike the gate already catches.
-
-NOT from Tradier. Confirmed against the quotes endpoint that it carries none
-of TNX, $TNX, ^TNX, TNX.X or US10Y — only bond ETFs like IEF and TLT, which
-track price rather than yield. Sourced from yfinance instead, same as VIX.
-
-Both ^VIX and ^TNX return the EXTENDED session from yfinance (VIX from ~03:15
-ET, TNX from ~08:20 ET), so both anchor on the first regular-hours bar. Using
-bar zero would measure the move since the middle of the night: measured live,
-+3.0bp naive versus +1.8bp correctly anchored.
-
-Config: TRADING_VIX_LEVEL_MAX, TRADING_VIX_SPIKE_PCT, TRADING_TNX_SPIKE_BPS,
-        TRADING_BREADTH_COLLAPSE_RATIO, TRADING_BREADTH_WINDOW_MINUTES
-
-
-================================================================================
-5. HOW A POSITION EXITS
-================================================================================
-
-Five rules, strict priority order. First match wins. The ORDER is the design.
-
-  1. FORCE CLOSE   after 15:45          Overrides P&L entirely.
-  2. TAKE PROFIT   >= +30%              Close.
-  3. SCALE IN      <= -10%, macro GOOD  Double the position, if affordable,
-                                        before 14:00, max 3 times.
-  4. STOP LOSS     <= -10%              Scale-in conditions not met — take it.
-  5. RISK-OFF CUT  <= -5% AND macro BAD Cut at half the normal stop.
-
-Rule 5 sits LAST despite having the widest threshold. Checking it first would
-swallow every losing exit and label them all RISK_OFF. Below rule 4 it owns
-only the band between -5% and -10%, so a position that genuinely breached the
-full stop is still recorded as STOP_LOSS. Those labels feed the trade-setup
-vector store, so keeping them distinct is what makes the record worth
-learning from later.
-
-WHY 30% AND NOT 50%:
-A debit spread can never be worth more than its width. Max possible gain is
-(width - entry debit) / entry debit, and the entry debit RISES through the
-day as time value drains — which lowers the ceiling as the session runs on.
-Measured on a $3-wide spread:
-
-    entered 09:30   debit 1.85   max gain 61.8%
-    entered 11:00   debit 1.90   max gain 57.8%
-    entered 13:00   debit 2.01   max gain 49.1%
-    entered 14:00   debit 2.12   max gain 41.7%
-
-A 50% target is structurally impossible for anything entered after midday;
-40% is impossible after ~13:00. Those positions would simply ride to the
-force-close. 30% is reachable at any entry time.
-
-Config: TRADING_TAKE_PROFIT_PCT (30), TRADING_STOP_LOSS_PCT (-10),
-        TRADING_RISK_OFF_STOP_LOSS_PCT (-5)
-
-
-================================================================================
-6. CAPITAL AND SIZING
-================================================================================
-
-TRADING_POSITION_BUDGET is TOTAL CAPITAL, not per-trade. Only one position is
-open at a time, and the worst case on a force-closed loser is the entire
-amount deployed.
-
-TRADING_ENTRY_FRACTION (0.4) is the share the opening trade may use. The rest
-is held back to fund scale-ins. This MUST stay below 1.0 — with the full
-budget deployed there is no cash left, and the scale-in rule can never fire
-at any budget.
-
-Because each scale-in DOUBLES the position, how many actually fit is
-capital-bound, not governed by TRADING_MAX_SCALE_INS:
-
-    fraction 0.40  ->  1 scale-in
-    fraction 0.25  ->  2 scale-ins
-    fraction 0.125 ->  3 scale-ins
-
-FLOOR: a spread costs roughly $200. If budget x fraction is below that, the
-engine buys zero contracts and silently never trades. No error is raised.
-
-NOTE: doubling is a martingale. Three scale-ins would take 5 contracts to 40,
-on a 0DTE position already down 10% with hours to expiry. Exposure is now
-capped by capital, but the shape of the strategy is unchanged — consider
-fixed-size adds instead if that risk profile is not intended.
-
-
-================================================================================
-7. NAMED STRATEGIES � WHAT TRADES WHEN, AND HOW TO RETIRE ONE
-================================================================================
-
-Defined in trading_engine/playbook.py. Strike placement is chosen by time of
-day, and every entry records WHICH strategy opened it so their results can be
-judged separately.
-
-  ATM_MOMENTUM    09:45-10:15  ATM   long ATM,   short ATM+3
-      Opening range resolved. Pay for leverage while a real directional leg
-      is most likely. THIS is the window that can capture a big day.
-
-  MORNING_DRIFT   10:15-11:30  ITM   long ATM-3, short ATM
-      No clear regime. Conservative. First candidate for removal if it does
-      not earn its place.
-
-  ITM_GRINDER     11:30-13:30  ITM   long ATM-3, short ATM
-      Midday lull. Positive theta pays while price sits still.
-
-  AFTERNOON_ITM   13:30-14:00  ITM   long ATM-3, short ATM
-      Stand-in until OTM credit spreads exist (see section 8).
-
-Outside every window there is NO ENTRY � that covers the warmup, everything
-after 14:00, and any gap left by retiring a strategy.
-
-WHY PLACEMENT MATTERS MORE THAN WIDTH
-A debit spread can never be worth more than its width, so where the strikes
-sit decides how much of a move you capture. Same $3 width, QQQ +9 by expiry:
-
-    deep ITM  +5%      ITM  +58%      ATM  +173%      OTM  +556%
-
-A $9 day and a $3 day pay an ITM spread the SAME 58%. And widening does not
-fix it � a $9-wide ITM spread costs proportionally more and returns 18%:
-
-    width 1 -> 83%    width 3 -> 58%    width 5 -> 40%    width 9 -> 18%
-
-Capturing a bigger move means moving the strikes TOWARD the money, not making
-them wider. The tradeoff is real, and it is not free: at the same contract
-count ITM risks ~$190 to make ~$110, ATM risks ~$113 to make ~$187. ITM wins
-often and small; ATM wins less often and large. Both lose 100% if wrong.
-
-Live comparison, same +$9 day:
-    ATM_MOMENTUM   debit 1.13 -> 3.00   +165%
-    ITM_GRINDER    debit 1.98 -> 3.00    +52%
-
-HOW TO SEE WHAT IS WORKING
-
-    GET /trading/playbook-performance
-
-Per strategy: trade count, win rate, total P&L, average/best/worst percent,
-and a breakdown of close reasons. Strategies with no closed trades still
-appear with zeroes, so an untested one reads as untested rather than missing.
-
-HOW TO RETIRE A STRATEGY
-Delete its entry from WINDOWS in trading_engine/playbook.py. That is all. The
-window becomes a no-entry period, historical trades keep their attribution,
-and the endpoint will still show its record with active=false.
-
-
-================================================================================
-8. WHY CREDIT SPREADS MIGHT MAKE SENSE (NOT IMPLEMENTED)
-================================================================================
-
-The engine only sells premium indirectly, via the short ATM leg of a debit
-spread. It has no credit spread capability at all. Whether to add one:
-
-THE CASE FOR
-  - Three ways to win instead of one. A debit spread needs the market to
-    move your way. An OTM credit spread profits if the market moves your way,
-    stays completely flat, OR moves moderately against you — anything that
-    finishes below the short strike.
-  - Theta works unconditionally. A debit spread only has positive theta when
-    it is ITM. An OTM credit spread decays in your favour always, and on 0DTE
-    that decay is enormous.
-  - IT FILLS A REAL GAP. The engine currently has NO expression for a flat
-    market. Its entry conditions require MACD/Bollinger/RSI alignment, which
-    consolidation does not produce, so a quiet tape simply produces HOLD all
-    day. Credit spreads are how a flat market becomes tradeable.
-  - Selling inflated premium. A brief afternoon short-covering spike inflates
-    OTM call premium; selling it right before afternoon decay is a genuinely
-    good entry.
-
-THE CASE AGAINST
-  - The payoff ratio is poor. A $1-wide spread sold for $0.25 risks $0.75 to
-    make $0.25. You need better than a 75% win rate just to break even, and a
-    single max loss erases three wins.
-  - Gamma risk near expiry is severe. A small adverse move late in the day
-    can flip a comfortable winner into a maximum loser very quickly. This is
-    the same hyper-gamma risk that justifies the existing 14:00 cutoff, but
-    it hurts a short position far more than a long one.
-  - It is NOT a small code change. Credit received rather than debit paid,
-    P&L inverted (you profit as the spread's value FALLS), max loss larger
-    than the credit collected, sizing against margin/buying power rather than
-    premium, and every exit rule reversed. MockSpreadPosition.return_pct as
-    written produces nonsense for a credit spread.
-
-WHEN THEY MAKE MOST SENSE
-  - Flat or slowly bleeding tape, midday (11:00-13:30), when theta
-    accelerates and direction is genuinely unclear.
-  - Elevated IV — you are selling something expensive.
-  - A clear technical level (VWAP, 20 SMA, prior day high) sitting above the
-    short strike to insulate it.
-
-VERDICT
-Worth adding, but as its own piece of work with its own testing, not bolted
-onto the debit path. The honest sequencing is: get the debit strategy
-producing real trades and real recorded outcomes first, so there is something
-to compare a credit strategy against.
-
-Also note: OTM DEBIT spreads should never be used. They need a large
-directional move just to reach breakeven, and on 0DTE you can be completely
-right about direction and still lose 100%.
-
-
-================================================================================
-9. KNOWN LIMITS — READ BEFORE TRUSTING ANY NUMBER
-================================================================================
-
-  - THE BROKER IS MOCKED. No orders are placed anywhere. Every fill is
-    simulated.
-  - NO OPTION CHAIN FEED. Spread values come from a model
-    (broker.estimate_spread_value): width scaled by a normal CDF centred on
-    the midpoint between the strikes, with its spread shrinking as expiry
-    nears. It converges to the true expiry payoff and reproduces the right
-    theta behaviour, but it is a model, not a quote. TRADING_DAILY_VOL_PCT
-    (1.0) is its one free parameter and the main knob on how fast P&L moves.
-  - NO SLIPPAGE, NO COMMISSIONS, NO BID/ASK SPREAD. Real fills are worse.
-  - $TICKQ IS NOT USED. Tradier does not carry it and there is no honest free
-    approximation. The Institutional Divergence Filter that depended on it is
-    dropped.
-  - BREADTH IS A PROXY. Self-computed from a static 63-stock Nasdaq-100
-    basket, not the real index membership, which changes over time.
-  - TRADE SETUP VECTORS ARE LOGGING ONLY. query_similar_setups() works but
-    nothing consumes it — there are not enough closed trades to learn from.
-  - THE PLAYBOOK IS UNTESTED. The windows in section 7 are reasoned, not
-    measured. Judge them on /trading/playbook-performance after real trades,
-    and delete the ones that do not earn their place.
-
-
-================================================================================
-10. OPERATING IT
-================================================================================
-
-  GET  /trading/status               everything at once
-  POST /trading/scheduler/start      begin the loop (interval_minutes 1-60)
-  POST /trading/scheduler/stop       halt it
-  POST /trading/run-daily-cycle      run exactly one cycle by hand
-  GET  /trading/position             open spread, repriced
-  GET  /trading/history              closed trades and realized P&L
-  GET  /trading/playbook-performance per-strategy scoreboard
-  POST /trading/kill-switch/toggle   ACTIVATE / DEACTIVATE
-
-The scheduler does NOT auto-start. After a deploy it sits idle until
-scheduler/start is called — a restart must never silently resume trading.
-
-The kill switch is a KILL_SWITCH.txt file, checked by both the rule engine
-and the scheduler before every tick.
-
-TESTING TIP: because entries are rare, the fastest way to exercise the exit
-logic is to insert an OpenPosition row priced at roughly -6% and run one
-cycle. If macro is GOOD and you need it BAD, set TRADING_VIX_SPIKE_PCT=0
-temporarily to force risk-off.
+--------------------------------------------------------------------------------
+
+  09:30  Market opens. No entries for 15 minutes - the opening auction
+         produces whipsaws the indicators read as trend.
+  09:45  Warmup ends. Short entries become possible (long entries are not
+         restricted by this).
+  10:15  MORNING_DRIFT opens.
+  11:30  MORNING_DRIFT closes to new entries. A position already open keeps
+         running.
+  13:25  Handoff. Any morning position is closed so the slot is free.
+  13:30  AFTERNOON_CREDIT opens.
+  14:00  Debit cutoff - no new DEBIT entries after this hour. Credit windows
+         are exempt: a credit spread wants less time left, not more.
+  15:00  AFTERNOON_CREDIT closes to new entries.
+  15:45  Force close. Everything is flattened regardless of P&L. Expiry is
+         16:15; this leaves half an hour of contract life so the exit is
+         priced with real time value rather than marked to intrinsic.
+
+A cron job runs one cycle a minute (scripts/run_cycle.py). It owns the
+market-hours check itself, in America/New_York, because a UTC crontab window
+would be wrong for half the year.
+
+--------------------------------------------------------------------------------
+3. INDICATORS - EXACTLY WHAT IS COMPUTED
+--------------------------------------------------------------------------------
+
+All are computed over 5-minute QQQ bars, with five days of history so the
+longer averages are warmed up. (A backtest that used only the current
+session's bars produced materially different results - see section 11.)
+
+  MACD          12/26/9 EMAs. Histogram > 0.01 is BULLISH, < -0.01 BEARISH,
+                otherwise NEUTRAL.
+
+  Trend         EMA(20) and EMA(50), not simple averages. ABOVE_SMA requires
+  (sma_trend)   the close above BOTH. EMA rather than SMA so this filter reacts
+                on the same timescale as MACD - a laggy SMA confirms a trend
+                after most of a 0DTE day's move is gone.
+
+  9 EMA         Trailing reference only, never an entry filter. ABOVE_EMA9 /
+                BELOW_EMA9.
+
+  EMA cross     EMA(9) against EMA(20) - velocity rather than position.
+
+  50 EMA        The bar's HIGH pierces the 50 EMA but the CLOSE finishes below
+  rejection     it. Recorded; used only by the REJECT tier.
+
+  VWAP          Session VWAP. Falls back to an unweighted typical price when
+                the bar volume disagrees with Tradier's session volume, which
+                it frequently does.
+
+  RSI           14-period, Wilder smoothing. OVERBOUGHT >= 70, OVERSOLD <= 30.
+                Separately, a BAND reading: BULL_BAND is RSI 50-65 and rising,
+                BEAR_BAND is 35-48 and falling. The band, not the extreme, is
+                what the CLEAN tier uses.
+
+  Bollinger     20-period, 2 standard deviations. Zone is UPPER_BAND /
+                LOWER_BAND / NORMAL; a midline cross is recorded as CROSS_UP /
+                CROSS_DOWN. The 20-period standard deviation is published as
+                bollinger_sd and is the fallback for credit strike placement.
+
+  ADX           Wilder ADX(14). TRENDING >= 22, otherwise CHOPPY. Recorded on
+                every cycle and gates nothing - it was tested as a gate and did
+                not earn one.
+
+  Session move  Close against the regular-hours open, in percent. Published so
+                a session-level trend filter could be tested; that filter is
+                off (section 10).
+
+--------------------------------------------------------------------------------
+4. HOW AN ENTRY IS DECIDED
+--------------------------------------------------------------------------------
+
+An entry needs, in order: no kill switch, no daily-loss halt, no loss-streak
+halt, a window open, a tier that fires, that window accepting that tier, the
+direction allowed, the cooldown clear, and size greater than zero.
+
+The tier ladder, most selective first. Only the first match applies.
+
+  CLEAN     (enabled)  Four conditions agreeing. Bull: above the 20/50 EMAs,
+                       EMA9 above EMA20, above VWAP, RSI in the bull band, and
+                       macro GOOD. Bear: the mirror, without the macro
+                       requirement.
+  STRICT    (enabled)  MACD, trend, a Bollinger pierce AND an RSI extreme.
+  RELAXED   (enabled)  STRICT without the RSI requirement.
+  REJECT    (enabled)  A 50 EMA rejection with trend and VWAP already down.
+                       Bearish only.
+  MOMENTUM  (off)
+  TREND     (off)
+
+MORNING_DRIFT accepts CLEAN only, and long only. Its bear side was measured at
+27% wins and -50.62 a trade, negative in both sample halves.
+
+AFTERNOON_CREDIT accepts any tier, either direction: a bullish read sells puts
+below spot, a bearish read sells calls above.
+
+Entries are refused for 30 minutes on the side that just lost, and the whole
+session stands down after 3 consecutive losses (AFTERNOON_CREDIT is exempt
+from the streak halt; the dollar caps still bind it).
+
+--------------------------------------------------------------------------------
+5. THE MACRO GATE
+--------------------------------------------------------------------------------
+
+Once a cycle, market_signals_agent builds a verdict from four inputs and asks
+Claude for GOOD or BAD, plus a confidence and a written reason. Both are
+logged so a flip can be explained afterwards rather than guessed at.
+
+  - Advance/decline breadth across the Nasdaq-100, self-computed from Tradier
+    quotes. Index breadth rather than full-market breadth, because QQQ tracks
+    the index.
+  - The VIX. At or above 22.0 the engine halts new entries in both directions -
+    disorder is not directional.
+  - Freshly scraped headlines.
+  - The three nearest past headlines from pgvector (market_news_vectors,
+    Voyage-4 embeddings, cosine distance).
+
+market_sentiment GOOD is required for BULLISH entries only. A bearish setup
+does not need it: the conditions that make being long uncomfortable are the
+conditions a short position profits from.
+
+Crude oil and the 10-year yield are fetched and logged every cycle and gate
+nothing. Measured against the engine's own daily P&L, neither carries a usable
+signal at decision time - both extremes beat the middle, in opposite
+directions, which is the shape of noise. See section 10.
+
+--------------------------------------------------------------------------------
+6. HOW A POSITION EXITS
+--------------------------------------------------------------------------------
+
+Checked in this order, every cycle:
+
+  FORCE CLOSE   15:45, regardless of P&L.
+
+  If the window RIDES (MORNING_DRIFT):
+    Ride ceiling  90% of the structure's maximum profit. A spread cannot be
+                  worth more than its width, and inside the last tenth there is
+                  no move left to ride - only convergence, held through the
+                  widest quotes of the day. Expressed as a share of max profit
+                  rather than a return, because the two differ per entry.
+    Stop loss     -20% of premium paid.
+    Handoff       13:25. The slot goes to the credit window.
+    Otherwise     Hold. There is no take-profit and no ratchet on a ride;
+                  both were tested and both cost money (section 10).
+
+  Otherwise (AFTERNOON_CREDIT):
+    Target        Above 50% of the credit collected the trail ARMS rather than
+                  selling. Above 90% it books outright - the last tenth is the
+                  worst-paid, since buying a spread back at 0.04 costs the same
+                  two-legged spread as buying it at 0.20.
+    Trail break   The 9 EMA turning against the structure, but ONLY when spot
+                  is within $2 of the short strike. Direction alone does not
+                  threaten short premium; distance to the strike does.
+    Ratchet       Hands back more than 30% of its peak (minimum 10 points).
+                  This is the exit that fires most often.
+    Stop loss     -100% of the credit - the classic buy-it-back-at-twice rule.
+    Risk-off      A tighter -13% stop for LONG positions while macro is BAD.
+                  Never applied to shorts.
+
+--------------------------------------------------------------------------------
+7. PRICING - WHERE THE NUMBERS COME FROM
+--------------------------------------------------------------------------------
+
+Entries and marks come from Tradier's live option chain, with greeks. The
+normal-CDF model in broker.py is the fallback when the chain is missing a
+strike.
+
+  Entry marks at the NATURAL price: a vertical sold fills at its bid, one
+  bought fills at its ask.
+  An open position marks at the MID - what it is worth, as opposed to what a
+  fill costs.
+
+This replaced model pricing on 2026-08-21 after one session of logging both
+side by side. The model priced an open credit spread at 0.20-0.34 all
+afternoon while the market quoted 0.01-0.04, an 88-97% overstatement of what
+closing it cost, and the exit rules read that number.
+
+Every cycle still logs both, as a "Chain vs model" line, so the gap stays
+visible.
+
+--------------------------------------------------------------------------------
+8. SIZING AND RISK
+--------------------------------------------------------------------------------
+
+Position size is the smallest of four independent limits.
+
+  1. Entry fraction     15% of equity, per trade (MORNING_DRIFT overrides to
+                        8%). This is capital deployed.
+  2. Risk share         A window's share of the day's loss budget. Both live
+                        windows: 50%. Sized so ONE stop-out cannot exceed it.
+                        Post-loss re-entries use 30% and are halved.
+  3. Tail cap           15% of equity at STRUCTURAL risk - premium paid for a
+                        debit, width-minus-credit for a credit. This is the
+                        only limit that governs what the market can impose
+                        rather than what the rules intend, and it is usually
+                        what binds.
+  4. Minimum credit     A credit spread priced below $0.05 is refused outright.
+
+Session-level circuit breakers:
+
+  Daily loss cap        6% of the equity the session started with. Past it, no
+                        new entries; open positions are still managed, because
+                        refusing to manage what you hold is not risk control.
+  Loss streak           3 consecutive losses stands the session down.
+  Kill switch           KILL_SWITCH.txt halts everything.
+
+Equity is realised: starting budget plus every closed trade. Size follows the
+account down after losses and up after wins.
+
+--------------------------------------------------------------------------------
+9. THE TWO LIVE WINDOWS
+--------------------------------------------------------------------------------
+
+MORNING_DRIFT - 10:15 to 11:30, rides to 13:25
+  Structure     $6 wide, long leg $2 in the money, short leg $4 out. Bullish
+                only, CLEAN tier only.
+  Sizing        8% entry fraction, 50% risk share.
+  Exits         -20% stop, 90%-of-max ceiling, 13:25 handoff. No take-profit.
+  Evidence      Judged per day with the credit window live: +49.46/day against
+                +41.42 for the $5 deep placement it replaced, both sample
+                halves higher. It wins 42% of the time against 52% for the
+                deep version - the average is better because the structure
+                stays uncapped $4 higher, so trending sessions pay for the ones
+                that stop out. 24 trades: provisional.
+
+AFTERNOON_CREDIT - 13:30 to 15:00
+  Structure     $4 wide. Short strike chosen by DELTA, targeting 0.20, from the
+                live chain; volatility placement (3 standard deviations) is the
+                fallback. Either direction.
+  Sizing        15% entry fraction (global), 50% risk share.
+  Exits         Arm at 50% of credit, book at 90%, 30% ratchet, -100% stop.
+  Evidence      $4 is the only width whose sample halves are both positive:
+                $1 -83.85/trade, $2 -13.17, $3 +26.88, $4 +32.50, $5 +17.16,
+                $6 +11.25. Delta placement replaced sigma placement after the
+                latter chose a 7-delta strike the market valued at $0.02.
+
+--------------------------------------------------------------------------------
+10. TESTED AND REJECTED - DO NOT RE-PROPOSE WITHOUT NEW EVIDENCE
+--------------------------------------------------------------------------------
+
+Each of these was built, measured over 60 sessions, and left switched off. The
+knob usually still exists.
+
+  Put debit spreads on down days      27% wins, -50.62/trade, negative in both
+                                      halves. Down moves reverse faster than
+                                      they continue.
+  Morning iron condors                Short strikes touched on 74-80% of
+                                      sessions at $4 out. A volatility squeeze
+                                      does not identify a quiet morning: the
+                                      calmest third holds 26% against 18%.
+  More trades per day                 2.3 trades/day earns half of what 1.3
+                                      earns, and multiplies the worst day by
+                                      eleven.
+  A longer morning window             Entries to 13:25 take +21.58/trade down
+                                      to +1.74.
+  Trend-only credit entries           Enters 17 minutes earlier and collects
+                                      more decay; 89% wins becomes 76%.
+  A ratchet on the morning ride       Worse at every arm level from +12% to
+                                      +32%.
+  A fixed-dollar ratchet offset       The $0.25 equivalent is the worst variant
+                                      tested. A share of peak widens as the
+                                      position wins; a fixed offset does not.
+  Refusing longs on a down session    Costs 7-9 dollars a day and does not
+                                      improve the worst day by a cent.
+  Uncapping on strong ADX             Worse at every threshold tested.
+  Yields and crude as gates           No usable signal at decision time.
+
+Still open, with forward evidence accumulating: an iron condor at 13:30. It
+beats either single side in every model-priced cell, but a condor sells four
+far-OTM legs where a single spread sells two, so the model's known
+overstatement flatters it roughly twice as much, and the four-leg bid-ask is
+$9-11 against $2-15. The shadow condor logs market-priced marks at 09:45,
+10:15 and 13:30, at two wing distances each, precisely to settle this.
+
+Also open: VIX direction into 13:30 is the one macro input with a monotonic
+relationship to the engine's P&L - falling +110.78/day at 68% green days,
+rising -8.51 at 40%. Untested as a gate.
+
+--------------------------------------------------------------------------------
+11. HOW TO CHANGE SOMETHING
+--------------------------------------------------------------------------------
+
+Run the sweep. scripts/sweep.py replays past sessions through the engine's own
+agents and its own execution_risk_agent, with the clock, the data feed and the
+database swapped out, so a result is what the deployed code would have done.
+
+  python scripts/sweep.py windows      every window traded solo
+  python scripts/sweep.py daily        trades per day against dollars per day
+  python scripts/sweep.py size         risk share and entry fraction
+  python scripts/sweep.py placement    morning width and depth, per day
+  python scripts/sweep.py credit       credit widths
+  python scripts/sweep.py breach       model-free strike survival rates
+  python scripts/sweep.py condorvs     both sides against one side
+  python scripts/sweep.py macro        yields, crude and VIX against P&L
+  python scripts/sweep.py daytype      P&L by market regime
+
+Read the module docstring before trusting a number. What the sweep cannot see:
+macro sentiment (assumed GOOD on every session), real fills, and any session
+containing a gap through a short strike - the 60-day sample has none, which is
+exactly the risk the tail cap exists to bound.
+
+A parameter is worth changing when the winning cell wins in BOTH sample halves.
+An average that reverses between halves is a result about the sample, not about
+the parameter. Four of the last five ideas tested failed that bar.
+
+--------------------------------------------------------------------------------
+12. KNOWN LIMITS
+--------------------------------------------------------------------------------
+
+  - No orders are routed anywhere. The broker is a mock; fills are assumed.
+    A resting stop at the exchange does not exist, so a gap through a short
+    strike is bounded by the tail cap and by nothing else.
+  - The credit window earns most of the P&L and cannot be validated by
+    backtest: there are no historical option chains, and the model that would
+    price them is the one being corrected. Its forward record, chain-priced
+    since 2026-08-21, is the evidence that counts.
+  - trade_setup_vectors stores every closed trade's setup and outcome and is
+    not consulted by anything. It waits for enough trades that "three similar
+    setups all lost" is signal rather than noise.
+  - The morning window's entire record is 24 backtested trades.

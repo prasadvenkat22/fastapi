@@ -1100,6 +1100,15 @@ async def market_signals_agent(state: TradingState) -> dict:
     return {
         "market_sentiment": sentiment,
         "macro_halt": halt,
+        # The breadth that just gated this decision, as numbers rather than as
+        # a sentence. Both gates below read these, and neither could be
+        # re-examined afterwards while the values were discarded.
+        "breadth_addq": float(breadth.addq),
+        "breadth_advancers": int(breadth.advancers),
+        "breadth_decliners": int(breadth.decliners),
+        "breadth_net_ratio": round(breadth_trend.net_ratio, 4),
+        "breadth_drawdown": round(breadth_trend.drawdown_from_recent_peak, 4),
+        "breadth_collapsing": bool(breadth_is_collapsing),
         # 3. Previously generated and discarded every cycle. Logged now so a
         # sentiment flip can be explained after the fact instead of guessed at.
         "macro_confidence": llm_confidence,
@@ -1694,6 +1703,22 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 )
                 window = None
                 action = "TIER_NOT_ALLOWED"
+
+            # Severity gate. A window may demand that the session already be
+            # down before it takes the short side -- the difference between a
+            # bearish signal and a bearish day.
+            if (
+                window is not None and not bullish
+                and window.min_session_drop_pct is not None
+                and float(state.get("session_move_pct") or 0.0) > -window.min_session_drop_pct
+            ):
+                logger.info(
+                    "%s wants the session down %.2f%% before selling into it; it is %.2f%% — no entry.",
+                    window.name, window.min_session_drop_pct,
+                    float(state.get("session_move_pct") or 0.0),
+                )
+                window = None
+                action = "SESSION_NOT_WEAK_ENOUGH"
 
             # Direction gate. The tier ladder is symmetric but the measured
             # edge is not: on bearish-stack mornings the bear put spread

@@ -26,6 +26,22 @@ class TradingState(TypedDict):
     bollinger_sd: float        # 20-period stdev — sizes the credit-spread strike distance
     bollinger_cross: str       # 'CROSS_UP', 'CROSS_DOWN', or 'NONE' — 20-period midline cross        # 'UPPER_BAND', 'LOWER_BAND', or 'NORMAL'
     rsi_zone: str              # 'OVERBOUGHT' (>=70), 'OVERSOLD' (<=30), or 'NEUTRAL'
+    # Self-computed Nasdaq-100 breadth. Recorded because it GATES -- a level
+    # check and a collapse check both read it -- and until now it left no
+    # number behind: the value drove the decision and survived only inside the
+    # model's prose reason, which cannot be bucketed, correlated or swept.
+    #
+    # Scale matters when reading these against outside commentary. The real
+    # $ADDQ spans roughly 3,000 Nasdaq issues, so the -600 and -1000 prints
+    # quoted as institutional distribution are about -20% and -33% of that
+    # universe. This basket is ~100 names, so the same distribution reads
+    # about -20 and -33 here.
+    breadth_addq: float        # advancers minus decliners, ~100-name basket
+    breadth_advancers: int
+    breadth_decliners: int
+    breadth_net_ratio: float   # addq / basket size
+    breadth_drawdown: float    # net ratio, down from the recent window's peak
+    breadth_collapsing: bool   # drawdown past the collapse threshold
     market_sentiment: str      # 'GOOD' or 'BAD'
     macro_halt: bool           # VIX at/above its ceiling — no entries in either direction
     macro_confidence: float    # model's confidence in the macro verdict

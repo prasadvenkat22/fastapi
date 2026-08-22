@@ -150,6 +150,43 @@ class PlaybookWindow:
     # structure that sells calls above a falling market, which is a different
     # trade from buying puts into one.
     bearish_only: bool = False
+    # Require the session to be down at least this far, in percent from the
+    # regular-hours open, before a SHORT entry is allowed.
+    #
+    # The distinction it draws is between a bearish signal and a bearish day.
+    # Both morning short structures failed when they fired on any bearish
+    # read: a put debit spread at 27% wins, a bear call spread at 38%. But the
+    # sessions that actually fell hard mostly kept falling -- of the eight
+    # that closed $9 or more down, six were still falling after 10:15. The
+    # losses came from the many mild bearish mornings that stalled and
+    # bounced, not from the severe ones.
+    min_session_drop_pct: "float | None" = None
+    #
+    # Swept over 60 sessions on both morning short structures. The gate works
+    # -- it separates a bearish signal from a bearish day -- and the two
+    # structures answer it very differently:
+    #
+    #     BEAR CALL      any read  32 tr  38% win   -57.64/tr
+    #                    -0.25%    20 tr  45% win   -57.04/tr
+    #                    -0.50%    14 tr  50% win   -62.52/tr
+    #                    -0.75%     9 tr  22% win   -89.22/tr
+    #
+    #     PUT DEBIT      any read  22 tr  32% win   -41.48/tr
+    #                    -0.25%    14 tr  29% win  -122.59/tr
+    #                    -0.50%     9 tr  33% win   -78.32/tr
+    #                    -0.75%     6 tr  50% win  +166.52/tr   halves +395/-62
+    #
+    # Severity lifts the bear call's hit rate from 38% to 50% and never its
+    # economics, because its winners cap at the credit while its losers run to
+    # width-minus-credit. The put debit spread is the structure that scales
+    # with the move, so it is the one that responds -- and at -0.75% it turns
+    # positive and lifts the engine from +49.85 a day to +69.51.
+    #
+    # Not enabled: six trades, and the halves are +395.19 then -62.14. The
+    # whole result sits in the first half. Left here because the DIRECTION is
+    # now understood -- on a severe decline the move usually continues, and
+    # only a debit structure can monetise that -- so this is the cell to
+    # re-examine once more severe sessions accumulate.
     # Share of the DAY's risk budget one trade from this window may spend.
     #
     # The entry fraction says how much capital a trade deploys and nothing

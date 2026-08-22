@@ -310,6 +310,15 @@ knob usually still exists.
                                       day did not improve by a cent.
   Yields and crude as gates           No usable signal at decision time.
 
+Also open, and understood better than it was: a PUT DEBIT spread on
+severely weak mornings only. Gating the short side on the session already
+being down 0.75% takes it from -41.48 a trade to +166.52 and the engine from
++49.85 a day to +69.51 -- on six trades, with halves of +395.19 then -62.14.
+Not enabled. The direction is what matters: on a severe decline the move
+usually continues, so a debit structure monetises it while a bear call spread
+caps at its credit no matter how far price falls. Severity lifts the bear
+call's hit rate from 38% to 50% and never its economics.
+
 Still open, with forward evidence accumulating: an iron condor at 13:30. It
 beats either single side in every model-priced cell, but a condor sells four
 far-OTM legs where a single spread sells two, so the model's known

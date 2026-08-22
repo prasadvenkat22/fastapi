@@ -277,11 +277,20 @@ def _regular_session_open(bars: pd.DataFrame) -> float:
 
     Pre-market cycles have no regular-hours bar yet; fall back to the first
     bar available rather than failing, since the engine doesn't trade then.
+
+    THIS session, not the first one in the series. The VIX and yield callers
+    pass a one-day series so the distinction never arose, and then a caller
+    passed the FIVE-day QQQ series: "first bar at or after 09:30" was then the
+    open of a session a week earlier, and every session-move reading built on
+    it measured the move since last Monday. Narrow the frame to the latest
+    date present before looking for the opening print.
     """
     try:
+        ny_index = bars.index.tz_convert(NY)
+        bars = bars[ny_index.date == ny_index.date.max()]
         ny_times = bars.index.tz_convert(NY).time
         regular_hours = bars[ny_times >= MARKET_OPEN_ET]
-    except TypeError:  # tz-naive index — shouldn't happen for intraday data
+    except (TypeError, AttributeError):  # tz-naive index — not expected intraday
         regular_hours = bars
     session_bars = regular_hours if not regular_hours.empty else bars
     return float(session_bars["Open"].iloc[0])

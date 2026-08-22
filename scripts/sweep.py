@@ -12,6 +12,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
     python scripts/sweep.py events      # what scheduled macro days actually cost
+    python scripts/sweep.py severity   # trade only SEVERE bad mornings, not any bearish read
     python scripts/sweep.py badmorning # does a bearish credit window fill the gap?
     python scripts/sweep.py latestop   # tighter credit stop into peak gamma?
     python scripts/sweep.py hours       # when in the day does QQQ actually move?
@@ -506,6 +507,53 @@ def sweep_events(sessions: dict):
         total = sum(d["pnl"] for d in per)
         print(f"    {mode:10s} {total / len(per):+9.2f}/day   {total:+10.2f} total")
     CAL.EVENT_BLACKOUT = base_mode
+
+
+def sweep_severity(sessions: dict):
+    """Does gating the short side on a genuinely weak session rescue it?
+
+    Both morning short structures failed firing on any bearish read. But the
+    sample's severe days mostly kept falling -- six of the eight that closed
+    $9+ down were still falling after 10:15 -- so the losses plausibly came
+    from mild bearish mornings that stalled, not from the ones that meant it.
+
+    Both structures are tested, because on a decline that continues they are
+    not equivalent: a bear call spread caps at its credit, roughly $59 a
+    contract, while a put debit spread pays up to width-minus-debit, roughly
+    $340. If severity is the missing filter, the debit structure should
+    benefit far more.
+    """
+    print("")
+    print("SEVERITY GATE -- how far down the session must be before selling into it")
+    print("")
+    base = PB.WINDOWS
+    for drop in (None, 0.25, 0.50, 0.75):
+        lab = "any bearish read" if drop is None else f"session down {drop:.2f}%+"
+        # (a) bear call spread in the morning
+        PB.WINDOWS = tuple(
+            replace(w, min_session_drop_pct=drop) if w.name == "MORNING_CREDIT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "MORNING_CREDIT", "AFTERNOON_CREDIT"})
+        trades, per_day = _run_arm(sessions, dtime(9, 45))
+        mc = [t for t in trades if (t["playbook"] or "").startswith("MORNING_CREDIT")]
+        _report_daily(f"bear CALL, {lab}", per_day)
+        if mc:
+            _report("    the short trades", mc, len(sessions))
+
+        # (b) put debit spread: the morning window's own bear side
+        PB.WINDOWS = tuple(
+            replace(w, bullish_only=False, min_session_drop_pct=drop)
+            if w.name == "MORNING_DRIFT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        trades, per_day = _run_arm(sessions, dtime(9, 45))
+        bp = [t for t in trades if t["strategy"] == "BEAR_PUT_SPREAD"]
+        _report_daily(f"put DEBIT, {lab}", per_day)
+        if bp:
+            _report("    the short trades", bp, len(sessions))
+    PB.WINDOWS = base
 
 
 def sweep_badmorning(sessions: dict):
@@ -1478,6 +1526,8 @@ def main():
         sweep_retries(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
+    if which in ("severity", "all"):
+        sweep_severity(sessions)
     if which in ("badmorning", "all"):
         sweep_badmorning(sessions)
     if which in ("latestop", "all"):

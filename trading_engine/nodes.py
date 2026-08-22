@@ -704,6 +704,15 @@ SHADOW_CONDOR_ENTRIES = ((9, 45), (10, 15), (13, 30))
 # $4 is the closest match to its 0.15-delta short strike and was the best
 # of the distances measured.
 SHADOW_CONDOR_OFFSET = float(os.getenv("TRADING_SHADOW_CONDOR_OFFSET", "4.0"))
+# A second, closer offset, marked alongside it.
+#
+# Comparing a condor against the single side the engine already sells, the
+# closest strikes won at every entry time: +39.00 a contract at $3 out
+# against +29.71 at $4 and +17.10 at $5, entering at 13:30. That is a
+# model-priced result on a structure whose premium the model overstates, so
+# the forward record has to cover the cell the sweep likes rather than only
+# the one the shadow happened to start with.
+SHADOW_CONDOR_OFFSET_ALT = float(os.getenv("TRADING_SHADOW_CONDOR_OFFSET_ALT", "3.0"))
 CONDOR_WIDTH = float(os.getenv("TRADING_SHADOW_CONDOR_WIDTH", "3.0"))
 
 
@@ -725,8 +734,10 @@ def shadow_condor_marks(bars, spot: float) -> dict:
         closes = bars["Close"]
         sd20 = closes.rolling(20).std()
 
-        for hour, minute in SHADOW_CONDOR_ENTRIES:
-            key = "condor_%02d%02d" % (hour, minute)
+        pairs = [(h, m, off) for (h, m) in SHADOW_CONDOR_ENTRIES
+                 for off in (SHADOW_CONDOR_OFFSET, SHADOW_CONDOR_OFFSET_ALT)]
+        for hour, minute, offset in pairs:
+            key = "condor_%02d%02d_o%d" % (hour, minute, int(offset))
             hits = [
                 i for i, ts in enumerate(idx)
                 if ts.date() == today and (ts.hour, ts.minute) == (hour, minute)
@@ -736,7 +747,6 @@ def shadow_condor_marks(bars, spot: float) -> dict:
             pos = hits[0]
             entry_spot = float(closes.iloc[pos])
             sd = sd20.iloc[pos]
-            offset = SHADOW_CONDOR_OFFSET
             atm = round_to_strike(entry_spot)
             call_short, call_long = atm + offset, atm + offset + CONDOR_WIDTH
             put_short, put_long = atm - offset, atm - offset - CONDOR_WIDTH
@@ -791,6 +801,7 @@ def shadow_condor_marks(bars, spot: float) -> dict:
                 "entry_spot": round(entry_spot, 2),
                 "entry_sd20": round(float(sd), 4) if sd == sd else None,
                 "call_short": call_short, "put_short": put_short,
+                "offset": offset,
                 "width": CONDOR_WIDTH,
                 "credit": round(credit, 4),
                 "value_now": round(cost, 4),

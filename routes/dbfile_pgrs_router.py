@@ -19,12 +19,17 @@ router = APIRouter(
     tags = ['Data Loading']
 )
  
-try:
-    models.Base.metadata.create_all(bind=engine)
-except Exception as e:
-    # Do not fail import if Postgres is unavailable during static analysis or tests
-    import logging
-    logging.getLogger(__name__).warning("Postgres create_all failed on import: %s", e)
+# create_all deliberately NOT called here. It used to run at import time, and
+# on 2026-08-23 that took the API down: the container starts with
+# "alembic upgrade head && uvicorn", and merely IMPORTING this module -- which
+# `python -c "import main"` does, as a pre-deploy check -- created a table that
+# the pending migration was about to create. Alembic then failed on
+# DuplicateTable, the && meant uvicorn never started, and the app stayed down
+# until the table was dropped by hand.
+#
+# main.py's lifespan still calls create_all, which is the right place: it runs
+# after alembic has finished, so alembic owns the schema and create_all only
+# ever covers a database that has never been migrated.
 def get_db():
     db= SessionLocal()
     try:

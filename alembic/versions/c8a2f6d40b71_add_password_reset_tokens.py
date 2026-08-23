@@ -14,10 +14,18 @@ collision would hand one person another's reset.
 
 ondelete CASCADE: deleting a user must not leave live reset tokens pointing
 at a vanished row.
+
+GUARDED WITH IF NOT EXISTS, like every other table migration here. The first
+version of this file was not, and it took the API down: the container starts
+with "alembic upgrade head && uvicorn", something had already created the
+table through a Base.metadata.create_all(), alembic died on DuplicateTable,
+and the && meant uvicorn never started. The import-time create_all that
+caused it is gone now, but main.py still has one in its startup hook, and
+every neighbouring migration guards against precisely this. Being the one
+that does not is how it happens again.
 """
 from typing import Sequence, Union
 
-import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c8a2f6d40b71"
@@ -27,28 +35,26 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "password_reset_tokens",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("token_hash", sa.String(), nullable=False),
-        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True),
-                  server_default=sa.text("now()"), nullable=True),
-        sa.Column("requested_ip", sa.String(), nullable=True),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_password_reset_tokens_user_id",
-                    "password_reset_tokens", ["user_id"])
-    op.create_index("ix_password_reset_tokens_token_hash",
-                    "password_reset_tokens", ["token_hash"], unique=True)
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+            token_hash VARCHAR NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            used_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            requested_ip VARCHAR
+        )
+    """)
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_password_reset_tokens_token_hash
+        ON password_reset_tokens (token_hash)
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_password_reset_tokens_user_id
+        ON password_reset_tokens (user_id)
+    """)
 
 
 def downgrade() -> None:
-    op.drop_index("ix_password_reset_tokens_token_hash",
-                  table_name="password_reset_tokens")
-    op.drop_index("ix_password_reset_tokens_user_id",
-                  table_name="password_reset_tokens")
-    op.drop_table("password_reset_tokens")
+    op.execute("DROP TABLE IF EXISTS password_reset_tokens")

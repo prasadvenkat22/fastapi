@@ -1,9 +1,9 @@
 ================================================================================
 AUTHENTICATION — LOGIN, PASSWORDS, AND ROLES
 ================================================================================
-Last updated: 2026-08-17
+Last updated: 2026-08-23
 Code: routes/auth_router.py, helpers/jwt_tokens.py, helpers/auth_deps.py
-Script: scripts/set_password.py
+Scripts: scripts/add_user.py, scripts/set_password.py
 
 
 ================================================================================
@@ -45,12 +45,32 @@ It prompts twice, hidden. Minimum 12 characters. The password is never
 echoed, never passed as a command argument (where `ps` would expose it), and
 never logged — only the bcrypt hash is written to the database.
 
-The same command CHANGES a password. There is no separate reset flow; run it
-again with the same email.
+DO NOT ADD -T. The flag is in most of the compose commands in
+deployment_notes.txt and it removes the TTY that getpass needs to hide
+typing. With -T the password is printed to the terminal and into your
+shell's scrollback. If that happens, set a different password.
 
-Seeded admin accounts:
+The same command CHANGES a password. There is no separate reset flow; run it
+again with the same email. There is no reset EMAIL either, because nothing
+in this codebase sends mail — for a handful of admins who all have server
+access, an admin re-running this command is the recovery path.
+
+A NEW account does not exist to set a password on. Create it first:
+
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml         exec app python scripts/add_user.py someone@example.com admin
+
+add_user.py deliberately does not set a password. The two steps are separate
+because creating the row is safe to do over SSH and choosing the password is
+not: a password invented on the server has to be transmitted to its owner
+somehow, and every way of doing that is worse than the account not having
+one yet. An account with no password CANNOT log in — login checks for a null
+hash and rejects — so creating the row early is harmless.
+
+Admin accounts (all four, none with a password set as of 2026-08-23):
     venkatangirala@gmail.com
     prasadvenkat@hotmail.com
+    eshwartangirala11@gmail.com
+    venkattangirala@yahoo.com
 
 
 ================================================================================
@@ -108,10 +128,16 @@ A user with role_id = NULL has NO role, which must be read as NO PERMISSIONS,
 not as a default grant. Every account created before roles existed has NULL,
 so the opposite reading would silently promote all of them.
 
-To assign a role:
+To assign or change a role, re-run add_user.py with the new role. It
+changes the role and leaves the password alone, which is how a promotion or
+demotion happens:
 
-    UPDATE users SET role_id = (SELECT id FROM roles WHERE role = 'trader')
-    WHERE email = 'someone@example.com';
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml         exec app python scripts/add_user.py someone@example.com trader
+
+Hand-written UPDATE statements were how this used to be done and are how a
+role_id ends up pointing at nothing, or an email differs from the login by a
+capital letter. add_user.py validates the role exists and lowercases the
+email, because login compares it exactly.
 
 
 ================================================================================
@@ -167,7 +193,52 @@ Config: JWT_ALGORITHM (RS256), ACCESS_TOKEN_EXPIRES_IN (15 minutes),
 
 
 ================================================================================
-5. REMAINING WORK BEFORE AUTH ACTUALLY PROTECTS ANYTHING
+5. WHY USERS ARE CREATED FROM A SCRIPT AND NOT THE API
+================================================================================
+
+There ARE web endpoints for this already, and they are not usable for
+creating an admin:
+
+    POST   /CRUD/register/        create a user with a password
+    POST   /CRUD/users/           identical to /register/, different status
+    GET    /CRUD/users/           list users
+    GET    /CRUD/users/{id}       one user
+    DELETE /CRUD/users/{id}       delete a user
+
+Two problems, and the second is the one that matters.
+
+FIRST: NEITHER CREATE ENDPOINT CAN ASSIGN A ROLE. UserCreate carries name,
+email and password only, so every account made over HTTP lands with
+role_id = NULL, which reads as no permissions. There is no endpoint anywhere
+that sets role_id. That is the actual reason admins are made with
+add_user.py — the API cannot do it, not merely that a script is tidier.
+
+SECOND: EVERY ONE OF THEM IS UNAUTHENTICATED. Anyone who can reach the host
+can create an account, list every user, or DELETE ANY USER, including all
+four admins. `DELETE /CRUD/users/{id}` behind no auth at all is the sharpest
+edge in the API today. Nothing has been lost to it because the host is not
+widely known, which is luck rather than a control.
+
+Two smaller inconsistencies worth closing at the same time: /register/
+enforces a 6-character minimum where set_password.py enforces 12, so the
+weaker path is the public one; and it hashes with the same bcrypt helper, so
+a password chosen there is fine — it is the 6 that is wrong.
+
+UserResponse does NOT expose password_hash. That was checked rather than
+assumed.
+
+BEFORE MOVING USER MANAGEMENT TO THE API, ENFORCEMENT HAS TO LAND FIRST.
+An endpoint that assigns the admin role, on an API where nothing checks who
+is calling, is a public admin-maker. The order is forced, and there is a
+second ordering constraint inside it: enforcement cannot be switched on
+until at least one admin has a password, or every protected route becomes
+unreachable and the only way back is a script on the server. Set the
+passwords first (section 1), then enforce, then move user management to
+the API if it is still wanted.
+
+
+================================================================================
+6. REMAINING WORK BEFORE AUTH ACTUALLY PROTECTS ANYTHING
 ================================================================================
 
   1. Apply the dependencies to routes. Suggested order, safest first:
@@ -193,7 +264,7 @@ Config: JWT_ALGORITHM (RS256), ACCESS_TOKEN_EXPIRES_IN (15 minutes),
 
 
 ================================================================================
-6. TROUBLESHOOTING
+7. TROUBLESHOOTING
 ================================================================================
 
 401 "Incorrect email or password"

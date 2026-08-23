@@ -142,61 +142,26 @@ ENV FILE RULES
 =======================================
 USERS, ROLES AND PASSWORDS
 =======================================
-Two commands, in this order. They are separate on purpose: creating the
-account is safe to do over SSH, choosing the password is not.
+auth_notes.txt is the authoritative reference — roles, tokens, what
+enforcement does and does not cover, and why users are created from a
+script rather than the API. Only the commands are repeated here.
 
   ssh root@<DROPLET_IP>
   cd /opt/fastapi
 
-  # 1. create the account and give it a role
+  # create the account and give it a role (admin | trader | user)
   docker compose -f docker-compose.yml -f docker-compose.prod.yml       exec app python scripts/add_user.py someone@example.com admin
 
-  # 2. set their password -- NOTE: no -T (see troubleshooting)
+  # set their password -- NOTE: no -T, see troubleshooting below
   docker compose -f docker-compose.yml -f docker-compose.prod.yml       exec app python scripts/set_password.py someone@example.com
 
-Roles, from the roles table:
+Re-run add_user.py with a different role to change it; the password is left
+alone. Re-run set_password.py to change or reset a password — that is the
+whole recovery story, there is no reset email.
 
-  admin    full access: business records, users, GenAI, trading engine
-  trader   trading routes only
-  user     read access to business records
-
-Re-running add_user.py with a different role changes the role and leaves
-the password alone. That is how a promotion or demotion happens. A NULL
-role means no permissions, not a default grant.
-
-PASSWORDS
-- Nobody sets a password but its owner. add_user.py deliberately does not
-  invent one: a password created on the server has to be transmitted
-  somehow, and every way of doing that is worse than the account simply
-  not having one yet.
-- set_password.py prompts twice, hidden, minimum 12 characters, and stores
-  a bcrypt hash. The password is never echoed, never passed as an argument
-  (where `ps` would expose it), and never logged.
-- An account with no password CANNOT log in. Login checks for a null hash
-  and rejects, so creating the row early is harmless.
-
-FORGOTTEN PASSWORD
-Re-run set_password.py. That is the whole recovery story.
-
-There is no self-service reset, no reset email and no token flow, because
-nothing in this codebase sends mail. For a handful of admins who all have
-server access, an admin re-running one command is the recovery path. If
-that stops being true, a real reset flow needs an email provider wired up
-first -- do not fake it with a password chosen on the server.
-
-WHAT AUTHENTICATION DOES AND DOES NOT DO YET
-/auth/login issues real JWTs and /auth/me reads them. NOTHING ELSE IS
-PROTECTED. helpers/auth_deps.py defines require_admin() and
-require_trading(), but no router uses them -- every include_router() in
-main.py is bare, including the trading routes. Logging in currently proves
-who you are and grants nothing extra, and NOT logging in is not blocked.
-
-Turning enforcement on is a deliberate separate change, because it changes
-who can call what. Until it happens, treat the API as open and keep it
-behind the firewall.
-
-Emails are compared exactly at login. add_user.py lowercases what it
-stores, so log in in lowercase.
+The API is currently OPEN: /auth/login issues tokens but no route requires
+one, and POST/DELETE /CRUD/users/ answer unauthenticated. Keep the host
+behind a firewall until section 6 of auth_notes.txt is done.
 
 =======================================
 TESTED ENDPOINTS

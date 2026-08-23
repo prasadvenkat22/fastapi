@@ -19,7 +19,16 @@ or in production:
 """
 
 import getpass
+import os
 import sys
+
+# The repository root, so these scripts run the same way from anywhere.
+# Python puts the SCRIPT's directory on sys.path, not the working directory,
+# so `python scripts/x.py` from /app cannot import config or models_pgdb. The
+# cron job hides this by exporting PYTHONPATH=/app in its own invocation,
+# which means the usage documented above -- a human at a shell -- was the one
+# path nobody had run.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.db_pgrs import SessionLocal
 from helpers.pwd import Hasher

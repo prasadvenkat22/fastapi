@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session
 
 import models_pgdb.models as models
 from config.db_pgrs import SessionLocal
-from helpers.jwt_tokens import ACCESS_TOKEN, TokenError, decode_token
+from helpers.jwt_tokens import (
+    ACCESS_TOKEN,
+    ACCESS_TOKEN_EXPIRES_IN,
+    TokenError,
+    decode_token,
+)
 
 ROLE_ADMIN = "admin"
 ROLE_TRADER = "trader"
@@ -44,26 +49,54 @@ def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     db: Annotated[Session, Depends(get_db)],
 ) -> models.User:
-    unauthorized = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Not authenticated",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    # Each failure says which failure it was. These are diagnostics about a
+    # token the caller is already holding, not a way to learn anything about
+    # another account, so being specific gives up nothing -- and the previous
+    # single "Not authenticated" for all five made a wrong header
+    # indistinguishable from an expired token from a refresh token used in
+    # the wrong place.
+    def _401(detail: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     if credentials is None:
-        raise unauthorized
+        raise _401(
+            "No bearer token. Send the access_token from POST /auth/login as "
+            "'Authorization: Bearer <token>'. In Swagger /docs, click Authorize "
+            "and paste the token alone, without the word Bearer."
+        )
 
     try:
         payload = decode_token(credentials.credentials, expected_type=ACCESS_TOKEN)
-    except TokenError:
-        raise unauthorized from None
+    except TokenError as e:
+        if e.code == "expired":
+            raise _401(
+                f"Access token has expired (they last {ACCESS_TOKEN_EXPIRES_IN} "
+                "minutes). POST /auth/refresh with your refresh_token for a new one."
+            ) from None
+        if e.code == "wrong_type":
+            raise _401(
+                "That is a refresh token, not an access token. POST /auth/login "
+                "returns both -- use access_token here; refresh_token only "
+                "buys a new one at /auth/refresh."
+            ) from None
+        raise _401(
+            "Token could not be verified. Most often it was truncated on copy, "
+            "or the word 'Bearer' was pasted into it twice."
+        ) from None
 
     user = db.query(models.User).filter(models.User.id == int(payload["sub"])).first()
 
     # Re-read the user rather than trusting the token's claims: a token stays
     # validly signed until it expires, so a user disabled or deleted a minute
     # ago would still present a perfectly good one.
-    if user is None or user.disabled:
-        raise unauthorized
+    if user is None:
+        raise _401("The account this token was issued for no longer exists.")
+    if user.disabled:
+        raise _401("This account is disabled.")
     return user
 
 

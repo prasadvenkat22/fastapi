@@ -19,7 +19,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from jose import JWTError, jwt
+from jose import ExpiredSignatureError, JWTError, jwt
 
 ALGORITHM = os.getenv("JWT_ALGORITHM", "RS256")
 
@@ -32,7 +32,18 @@ REFRESH_TOKEN = "refresh"
 
 
 class TokenError(Exception):
-    """Raised when a token is malformed, expired, or the wrong type."""
+    """Raised when a token is malformed, expired, or the wrong type.
+
+    `code` exists so callers can tell those apart. get_current_user used to
+    collapse every one of them into "Not authenticated", which is true and
+    useless: an expired token, a refresh token sent where an access token
+    belongs, and a header that never arrived all read identically, and the
+    only way to find out which you had was to guess.
+    """
+
+    def __init__(self, message: str, code: str = "invalid"):
+        super().__init__(message)
+        self.code = code
 
 
 def _decode_key(var_name: str) -> str:
@@ -79,9 +90,14 @@ def decode_token(token: str, expected_type: str = ACCESS_TOKEN) -> dict:
     """
     try:
         payload = jwt.decode(token, _PUBLIC_KEY, algorithms=[ALGORITHM])
+    except ExpiredSignatureError as e:
+        raise TokenError(str(e), code="expired") from e
     except JWTError as e:
-        raise TokenError(str(e)) from e
+        raise TokenError(str(e), code="invalid") from e
 
     if payload.get("type") != expected_type:
-        raise TokenError(f"Expected a {expected_type} token, got {payload.get('type')!r}.")
+        raise TokenError(
+            f"Expected a {expected_type} token, got {payload.get('type')!r}.",
+            code="wrong_type",
+        )
     return payload

@@ -96,8 +96,14 @@ def get_current_user(
                     "Swagger and curl add that word themselves")
         elif raw[:1] in ('"', "'") or raw[-1:] in ('"', "'"):
             hint = "the value is wrapped in quotes — copy the token without them"
-        elif segments != 3:
-            hint = ("a JWT is three dot-separated segments and this is not one; "
+        elif segments > 3:
+            hint = ("this is MORE than one token — a selection dragged across "
+                    "the login response picks up access_token, the JSON "
+                    "between, and refresh_token. Copy only the access_token "
+                    "value, from inside its opening quote to inside its "
+                    "closing quote")
+        elif segments < 3:
+            hint = ("a JWT is three dot-separated segments and this has fewer; "
                     "select the whole value")
         elif len(raw) < 400:
             hint = (f"truncated on copy — this service issues tokens of about "

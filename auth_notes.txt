@@ -247,8 +247,37 @@ break; removing them is worth doing.
 6. EMAIL, AND FORGOTTEN PASSWORDS
 ================================================================================
 
-SETTING IT UP (Gmail). SMTP_PASSWORD must be a 16-character App Password,
-never the account password:
+SETTING IT UP. NOT GMAIL -- DigitalOcean blocks outbound 25, 465 and 587 at
+the network level, and Gmail offers no other port. Verified 2026-08-23: the
+host itself times out on all three, ufw's OUTPUT policy is ACCEPT with no
+SMTP rules, so it is upstream and nothing on the droplet can change it. The
+failure is "OSError: [Errno 101] Network is unreachable", never an auth
+error, so it looks nothing like a wrong password.
+
+Port 2525 IS open, and SendGrid, Brevo and Mailgun all offer it for exactly
+this reason -- each verified with a full EHLO + STARTTLS handshake. Sign up
+with one, create an API key, and set:
+
+       SMTP_HOST=smtp.sendgrid.net     (or smtp-relay.brevo.com, smtp.mailgun.org)
+       SMTP_PORT=2525
+       SMTP_USER=apikey                (SendGrid's literal username; others differ)
+       SMTP_PASSWORD=<the API key>
+       MAIL_FROM=you@yourdomain
+       APP_BASE_URL=https://dataiqsystems.com
+
+No code change is needed for any of them: mailer.py is plain SMTP precisely
+so the provider is a configuration choice.
+
+AND NOTE HOW ENV CHANGES TAKE EFFECT. `docker restart app` does NOT re-read
+env_file -- variables are fixed when a container is CREATED. Use:
+
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml         --env-file .env.production up -d app
+
+Rebuild FIRST if code changed since the image was built, or the recreate can
+drop you back to a stale image.
+
+The Gmail instructions below are kept only because they apply if this ever
+runs somewhere without the block:
 
   1. Turn on 2-Step Verification at myaccount.google.com/security — the
      App Passwords page does not exist until you do.

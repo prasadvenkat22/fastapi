@@ -28,7 +28,7 @@ curls /docs, so protecting it breaks the health check; /docs does advertise
 every endpoint to anyone who can reach the host.
 
 STILL PLAIN HTTP. There is no TLS, so tokens and passwords cross the wire in
-clear text. This is now the largest remaining hole and is section 6 item 1.
+clear text. This is now the largest remaining hole and is section 7 item 1.
 
 
 ================================================================================
@@ -57,10 +57,9 @@ deployment_notes.txt and it removes the TTY that getpass needs to hide
 typing. With -T the password is printed to the terminal and into your
 shell's scrollback. If that happens, set a different password.
 
-The same command CHANGES a password. There is no separate reset flow; run it
-again with the same email. There is no reset EMAIL either, because nothing
-in this codebase sends mail — for a handful of admins who all have server
-access, an admin re-running this command is the recovery path.
+The same command CHANGES a password, and is the way back when nobody can
+log in at all. For an ordinary forgotten password there are now two better
+routes that do not need SSH — see section 6.
 
 A NEW account does not exist to set a password on. Create it first:
 
@@ -211,7 +210,9 @@ All of these require an admin token. Get one from POST /auth/login.
     POST   /users                       create WITH a role
     PATCH  /users/{id}                  change role, disable, rename
     DELETE /users/{id}
-    POST   /users/{id}/reset-password   for a password nobody remembers
+    POST   /users/{id}/reset-password   issue a temporary password, shown
+                                        once, when someone cannot use the
+                                        self-service reset in section 6
 
 Create an admin:
 
@@ -243,7 +244,70 @@ break; removing them is worth doing.
 
 
 ================================================================================
-6. REMAINING WORK BEFORE AUTH ACTUALLY PROTECTS ANYTHING
+6. EMAIL, AND FORGOTTEN PASSWORDS
+================================================================================
+
+SETTING IT UP (Gmail). SMTP_PASSWORD must be a 16-character App Password,
+never the account password:
+
+  1. Turn on 2-Step Verification at myaccount.google.com/security — the
+     App Passwords page does not exist until you do.
+  2. Create one at myaccount.google.com/apppasswords. It is shown once.
+  3. On the droplet, in /opt/fastapi/.env.production:
+
+       SMTP_HOST=smtp.gmail.com
+       SMTP_PORT=587
+       SMTP_USER=you@gmail.com
+       SMTP_PASSWORD=<the 16 characters, no spaces>
+       MAIL_FROM=you@gmail.com
+       MAIL_FROM_NAME=DataIQ Systems
+       APP_BASE_URL=https://dataiqsystems.com
+
+  4. docker restart app
+
+UNCONFIGURED IS SUPPORTED. With SMTP_HOST unset nothing is sent, the
+endpoints still work, and the log says "Email NOT sent to ... SMTP is not
+configured". Failures never reach the caller either: a password that
+changed must not report failure because a mail server blinked.
+
+WHAT GETS SENT
+  password changed      after a self-service change AND after an admin
+                        reset. Sent even when expected — it is not for the
+                        person who did it, it is for the case where it
+                        was not them.
+  account created       when an admin creates a user at POST /users.
+  reset link            in response to /auth/forgot-password.
+
+THE FORGOTTEN-PASSWORD FLOW
+  POST /auth/forgot-password   {"email": "..."}   → always 204
+  GET  /auth/reset-password?token=...             → the page from the email
+  POST /auth/reset-password    {"token","new_password"} → 204
+
+ALWAYS 204, account or not. Anything else makes the one endpoint that must
+be public into a way to test which emails are registered. The send happens
+in a background task for the same reason — replying only after a successful
+send would leak by timing what the status code refuses to say.
+
+Tokens are 32 random bytes, stored as sha256 (not bcrypt: there is nothing
+to guess in 32 random bytes, so the slow hash would buy only a slow
+endpoint), single-use, and expire in PASSWORD_RESET_MINUTES (30). Spending
+one kills every other live link for that account — otherwise an attacker who
+triggered a reset earlier still holds a working one after the owner has
+recovered. PASSWORD_RESET_MAX_LIVE (3) caps how many an account may hold, so
+the public endpoint cannot be used to flood a mailbox.
+
+Verified on 2026-08-23: 204 for both a real and a nonexistent address, a
+64-character hash written, second use of a token refused with "already been
+used", the other outstanding token marked spent by the first one's use, and
+login with the new password returning 200.
+
+A reset link is a credential for the 30 minutes it lives, and this is still
+plain HTTP. Until TLS is in place the link can be read in transit by anyone
+watching — see section 7 item 1.
+
+
+================================================================================
+7. REMAINING WORK BEFORE AUTH ACTUALLY PROTECTS ANYTHING
 ================================================================================
 
   DONE 2026-08-23: dependencies applied in main.py, and POST /CRUD/register/
@@ -275,7 +339,7 @@ break; removing them is worth doing.
 
 
 ================================================================================
-7. TROUBLESHOOTING
+8. TROUBLESHOOTING
 ================================================================================
 
 401 "Incorrect email or password"

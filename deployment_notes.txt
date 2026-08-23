@@ -156,8 +156,10 @@ script rather than the API. Only the commands are repeated here.
   docker compose -f docker-compose.yml -f docker-compose.prod.yml       exec app python scripts/set_password.py someone@example.com
 
 Re-run add_user.py with a different role to change it; the password is left
-alone. Re-run set_password.py to change or reset a password — that is the
-whole recovery story, there is no reset email.
+alone. Re-run set_password.py to change or reset a password. The scripts are
+the way back when NOBODY can log in — for an ordinary forgotten password,
+POST /auth/forgot-password emails a reset link instead (section 6 of
+auth_notes.txt, and it needs SMTP configured to send anything).
 
 Admins can also do all of this over HTTP without SSH -- POST /users with an
 admin token creates a user WITH a role, and POST /users/{id}/reset-password

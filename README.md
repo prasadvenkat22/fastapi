@@ -5,7 +5,8 @@ See deployment_notes.txt for the stack and strategy_notes.txt for the trading en
 
 Accounts: admins manage users at `/users` (create with a role, change role, disable,
 delete, reset a forgotten password) using a token from `POST /auth/login`. Users
-change their own password at `POST /auth/change-password`. `scripts/add_user.py` and
+change their own password at `POST /auth/change-password`, or recover a
+forgotten one at `POST /auth/forgot-password` (needs SMTP configured). `scripts/add_user.py` and
 `scripts/set_password.py` do the same against the database directly, and are the way
 back when nobody can log in. See auth_notes.txt.
 

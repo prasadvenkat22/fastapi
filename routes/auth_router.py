@@ -10,7 +10,7 @@ import logging
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 import models_pgdb.models as models
@@ -23,7 +23,7 @@ from helpers.jwt_tokens import (
     create_refresh_token,
     decode_token,
 )
-from helpers.pwd import Hasher
+from helpers.pwd import MIN_PASSWORD_LENGTH, Hasher, password_problem
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,11 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in_minutes: int
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=MIN_PASSWORD_LENGTH)
 
 
 class MeResponse(BaseModel):
@@ -121,3 +126,35 @@ async def me(user: CurrentUser):
         email=user.email,
         role=user.role.role if user.role is not None else None,
     )
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(body: ChangePasswordRequest, db: db_dependency, user: CurrentUser):
+    """Change your own password, proving you know the current one.
+
+    The self-service half of recovery. It covers everything except a password
+    genuinely forgotten, which needs POST /users/{id}/reset-password from an
+    admin because nothing here can send an email.
+
+    Requiring the current password is what stops a borrowed session from
+    becoming a permanent takeover: an attacker with a stolen access token has
+    at most its remaining lifetime, and cannot extend that into ownership of
+    the account without also knowing the password.
+    """
+    if not user.password_hash or not Hasher.verify_password(body.current_password, user.password_hash):
+        # 403 rather than 401: the caller IS authenticated, and a 401 would
+        # tell a client its token had expired and send it to re-login.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Current password is incorrect")
+
+    problem = password_problem(body.new_password)
+    if problem:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=problem)
+    if body.new_password == body.current_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="New password must differ from the current one")
+
+    user.password_hash = Hasher.get_password_hash(body.new_password)
+    db.commit()
+    # Deliberately no password material, not even its length.
+    logger.info("Password changed by user id=%s", user.id)

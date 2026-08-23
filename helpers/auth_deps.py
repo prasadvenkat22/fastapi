@@ -97,10 +97,14 @@ def get_current_user(
         elif raw[:1] in ('"', "'") or raw[-1:] in ('"', "'"):
             hint = "the value is wrapped in quotes — copy the token without them"
         elif segments != 3:
-            hint = ("truncated on copy — a JWT is three dot-separated segments "
-                    "and around 800 characters; select the whole value")
+            hint = ("a JWT is three dot-separated segments and this is not one; "
+                    "select the whole value")
+        elif len(raw) < 400:
+            hint = (f"truncated on copy — this service issues tokens of about "
+                    f"800 characters and this is {len(raw)}; select the whole value")
         else:
-            hint = f"well-formed but rejected: {e}"
+            hint = (f"well-formed and the right length, so this is not a copy "
+                    f"problem: {e}")
         raise _401(f"Token could not be verified ({shape}): {hint}.") from None
 
     user = db.query(models.User).filter(models.User.id == int(payload["sub"])).first()

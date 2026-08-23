@@ -19,14 +19,15 @@ cause it and all four check first.
 
 import logging
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 import models_pgdb.models as models
+from helpers import mailer
 from helpers.auth_deps import CurrentUser, get_db, require_admin
 from helpers.pwd import MIN_PASSWORD_LENGTH, Hasher, password_problem
 
@@ -147,7 +148,8 @@ async def get_user(user_id: int, db: db_dependency):
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def create_user(body: CreateUserRequest, db: db_dependency, caller: CurrentUser):
+async def create_user(body: CreateUserRequest, db: db_dependency,
+                      caller: CurrentUser, background: BackgroundTasks):
     # Lowercased because login compares the email exactly; without this,
     # Someone@example.com and someone@example.com are two accounts and only
     # one of them can ever log in.
@@ -168,6 +170,8 @@ async def create_user(body: CreateUserRequest, db: db_dependency, caller: Curren
     db.add(user)
     db.commit()
     db.refresh(user)
+    background.add_task(mailer.send_account_created, user.email, role.role,
+                        hashed is not None)
     logger.info("User %s created %s (id=%s) with role %s, password %s.",
                 caller.email, email, user.id, role.role,
                 "set" if hashed else "not set")
@@ -217,7 +221,8 @@ async def delete_user(user_id: int, db: db_dependency, caller: CurrentUser):
 
 
 @router.post("/{user_id}/reset-password", response_model=TempPasswordResult)
-async def reset_password(user_id: int, db: db_dependency, caller: CurrentUser):
+async def reset_password(user_id: int, db: db_dependency, caller: CurrentUser,
+                         background: BackgroundTasks):
     """Issue a new random password for someone who has forgotten theirs.
 
     This is the recovery path, and it is admin-driven because there is no
@@ -234,6 +239,9 @@ async def reset_password(user_id: int, db: db_dependency, caller: CurrentUser):
     temp = secrets.token_urlsafe(15)
     user.password_hash = Hasher.get_password_hash(temp)
     db.commit()
+    background.add_task(
+        mailer.send_password_changed, user.email,
+        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"), True)
     logger.info("User %s reset the password for %s (id=%s).",
                 caller.email, user.email, user.id)
     return TempPasswordResult(

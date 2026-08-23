@@ -172,3 +172,34 @@ class Registraion(Base):
     address = Column(String, default='Test Address')
     demodate = Column(DateTime, default=func.now())
     createdate = Column(DateTime, default=func.now())
+
+
+class PasswordResetToken(Base):
+    """A one-time, short-lived permission to choose a new password.
+
+    HASHED, like a password, because that is exactly what it is for the
+    minutes it lives: anyone holding the raw value can take the account. The
+    column stores sha256 of the token, so a copy of this table is not a set of
+    working reset links.
+
+    sha256 rather than bcrypt here on purpose. bcrypt is slow BY DESIGN to
+    make guessing a human-chosen password expensive; these are 32 bytes of
+    secrets.token_urlsafe, so there is nothing to guess and the cost would buy
+    nothing but a slow endpoint.
+
+    Rows are kept after use rather than deleted, so "this link was already
+    used" is answerable and a second click gets a real explanation.
+    """
+    __tablename__ = "password_reset_tokens"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    # What asked for it. Not enforcement -- just enough to see a pattern if
+    # the endpoint is ever abused, since it is public by necessity.
+    requested_ip = Column(String, nullable=True)
+
+    user = relationship("User")

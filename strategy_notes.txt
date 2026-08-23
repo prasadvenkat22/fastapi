@@ -397,6 +397,16 @@ macro sentiment (assumed GOOD on every session), real fills, and any session
 containing a gap through a short strike - the 60-day sample has none, which is
 exactly the risk the tail cap exists to bound.
 
+What it DOES charge: 0.10 a contract of slippage and 0.014 of commission, both
+per round trip. Commission is Tradier's $0.35 per contract per LEG, confirmed
+against the account by scaling a preview order - a vertical is four legs a
+round trip, so $1.40 a contract. It costs the deployed configuration about
+$7.43 a day, roughly 15% of the measured edge, and it falls unevenly: about
+17% of the credit window's per-trade result against almost nothing on the
+morning window's. Charging it moves the engine from +49.85 a day to +42.42 and
+turns the credit window's FIRST HALF negative standing alone, though the
+combined configuration's halves stay level at +42.36/+42.48.
+
 A parameter is worth changing when the winning cell wins in BOTH sample halves.
 An average that reverses between halves is a result about the sample, not about
 the parameter. Four of the last five ideas tested failed that bar.

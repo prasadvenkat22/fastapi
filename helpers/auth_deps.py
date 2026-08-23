@@ -83,10 +83,25 @@ def get_current_user(
                 "returns both -- use access_token here; refresh_token only "
                 "buys a new one at /auth/refresh."
             ) from None
-        raise _401(
-            "Token could not be verified. Most often it was truncated on copy, "
-            "or the word 'Bearer' was pasted into it twice."
-        ) from None
+        # The shape of what arrived, which separates a copy/paste problem from
+        # a server one without echoing any of the token back. A JWT is three
+        # dot-separated segments; anything else never reached the signature
+        # check at all, and "signature verification failed" on a well-formed
+        # three-segment token means the key changed, not the clipboard.
+        raw = credentials.credentials
+        segments = raw.count(".") + 1
+        shape = f"{len(raw)} chars, {segments} of 3 segments"
+        if raw.startswith("Bearer ") or raw.startswith("bearer "):
+            hint = ("the value starts with 'Bearer' — paste the token ALONE; "
+                    "Swagger and curl add that word themselves")
+        elif raw[:1] in ('"', "'") or raw[-1:] in ('"', "'"):
+            hint = "the value is wrapped in quotes — copy the token without them"
+        elif segments != 3:
+            hint = ("truncated on copy — a JWT is three dot-separated segments "
+                    "and around 800 characters; select the whole value")
+        else:
+            hint = f"well-formed but rejected: {e}"
+        raise _401(f"Token could not be verified ({shape}): {hint}.") from None
 
     user = db.query(models.User).filter(models.User.id == int(payload["sub"])).first()
 

@@ -202,8 +202,14 @@ class WeeklyShadow(Base):
     opened_at = Column(DateTime(timezone=True), default=func.now())
     expiration = Column(String, nullable=False)        # YYYY-MM-DD
     strategy = Column(String, nullable=False)          # CALL_CREDIT_SPREAD
-    short_strike = Column(Float, nullable=False)
-    long_strike = Column(Float, nullable=False)
+    # Call side: short/long. Put side: put_short/put_long. A CALL variant
+    # leaves the puts null, a PUT variant leaves the calls null, and a CONDOR
+    # carries all four -- one table for three structures, because the only
+    # thing that differs between them is which legs exist.
+    short_strike = Column(Float, nullable=True)
+    long_strike = Column(Float, nullable=True)
+    put_short_strike = Column(Float, nullable=True)
+    put_long_strike = Column(Float, nullable=True)
     width = Column(Float, nullable=False)
 
     spot_at_entry = Column(Float, nullable=False)

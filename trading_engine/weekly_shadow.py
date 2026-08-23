@@ -51,6 +51,26 @@ except ValueError:
 ENTRY_WEEKDAY = int(os.getenv("TRADING_WEEKLY_ENTRY_WEEKDAY", "4"))   # 4 = Friday
 
 SHORT_DELTA = float(os.getenv("TRADING_WEEKLY_SHORT_DELTA", "0.12"))
+
+# Which structures to mark. All three by default, because the measurement that
+# motivated this cannot separate them:
+#
+#   CALL   the strategy as proposed. Measured against 5 years of 5-day
+#          outcomes, the 0.12-delta call finished in the money 20.9% of the
+#          time while the market charged 11.7% for it -- delta is priced
+#          driftless and QQQ drifts up, so a call seller is short the index's
+#          own direction. Crude EV -11.00 a contract.
+#   PUT    the same structure facing the same drift from the other side:
+#          12.3% realised against 11.4% priced, crude EV +8.14.
+#   CONDOR both at once. Its EV is not the sum, which is why it is marked
+#          rather than reasoned about: on the 0DTE side a condor beat either
+#          leg alone in every cell, because the package exit lets one side's
+#          decay pay for the other side's move.
+VARIANTS = tuple(
+    v.strip().upper()
+    for v in os.getenv("TRADING_WEEKLY_VARIANTS", "CALL,PUT,CONDOR").split(",")
+    if v.strip()
+)
 WIDTH = float(os.getenv("TRADING_WEEKLY_WIDTH", "5.0"))
 TARGET_PCT = float(os.getenv("TRADING_WEEKLY_TARGET_PCT", "25.0"))
 MIN_CREDIT = float(os.getenv("TRADING_WEEKLY_MIN_CREDIT", "0.10"))
@@ -64,12 +84,12 @@ def _next_weekly_expiry(today: date) -> str:
     return (today + timedelta(days=ahead or 7)).isoformat()
 
 
-def _open_row(db):
+def _open_rows(db):
     return (
         db.query(WeeklyShadow)
         .filter(WeeklyShadow.expiry_return_pct.is_(None))
         .order_by(WeeklyShadow.opened_at.desc())
-        .first()
+        .all()
     )
 
 
@@ -82,11 +102,53 @@ def observe(db, now: "datetime | None" = None) -> None:
     if not ENABLED:
         return
     now = now or datetime.now(NY)
-    row = _open_row(db)
-    if row is None:
+    rows = _open_rows(db)
+    if not rows:
         _maybe_open(db, now)
-    else:
+        return
+    for row in rows:
         _mark(db, row, now)
+
+
+def _legs(chain, variant):
+    """Strikes for one variant, or None when the chain cannot supply them.
+
+    Returns (call_short, call_long, put_short, put_long) with None where a
+    side is not used.
+    """
+    cs = cl = ps = pl = None
+    if variant in ("CALL", "CONDOR"):
+        cs = strike_for_delta(chain, "call", SHORT_DELTA)
+        if cs is None:
+            return None
+        cl = cs + WIDTH
+    if variant in ("PUT", "CONDOR"):
+        ps = strike_for_delta(chain, "put", SHORT_DELTA)
+        if ps is None:
+            return None
+        pl = ps - WIDTH
+    return cs, cl, ps, pl
+
+
+def _price(chain, cs, cl, ps, pl):
+    """Cost to BUY the structure back: mid, natural, and the spread to cross.
+
+    chain_vertical prices the vertical you would buy to close a credit spread,
+    so these are already the right way round and must not be negated -- the
+    mid is the buy-back cost and the bid is what selling collects.
+    """
+    mid = nat_buy = nat_sell = cross = 0.0
+    for short, long_, kind in ((cs, cl, "call"), (ps, pl, "put")):
+        if short is None:
+            continue
+        q = chain_vertical(chain, kind, short, long_)
+        if q is None:
+            return None
+        mid += q["mid"]
+        nat_buy += q["ask"]
+        nat_sell += q["bid"]
+        cross += q["ask"] - q["bid"]
+    return {"mid": mid, "natural_buy": nat_buy, "natural_sell": nat_sell, "cross": cross}
 
 
 def _maybe_open(db, now: datetime) -> None:
@@ -98,55 +160,48 @@ def _maybe_open(db, now: datetime) -> None:
     if not chain:
         logger.info("Weekly shadow: no chain for %s yet.", expiry)
         return
-
-    short = strike_for_delta(chain, "call", SHORT_DELTA)
-    if short is None:
-        logger.info("Weekly shadow: no strike near %.2f delta on %s.", SHORT_DELTA, expiry)
-        return
-    long_ = short + WIDTH
-    quote = chain_vertical(chain, "call", short, long_)
-    if quote is None:
-        logger.info("Weekly shadow: %s chain missing %.0f/%.0f.", expiry, short, long_)
-        return
-
-    # chain_vertical(buy=short, sell=long_) prices the vertical you would buy
-    # to CLOSE this spread, so its numbers are already the right way round and
-    # must not be negated: its mid is the buy-back cost, and its BID is what
-    # selling it collects, since opening the credit means selling that same
-    # vertical and crossing to the bid.
-    sell_mid = quote["mid"]
-    sell_natural = quote["bid"]
-    if sell_mid < MIN_CREDIT:
-        logger.info(
-            "Weekly shadow: %.0f/%.0f collects only %.3f, below the %.2f floor — not marked.",
-            short, long_, sell_mid, MIN_CREDIT,
-        )
-        return
-
-    leg = chain.get(("call", float(short)))
     spot = fetch_qqq_spot()
-    db.add(WeeklyShadow(
-        expiration=expiry, strategy="CALL_CREDIT_SPREAD",
-        short_strike=short, long_strike=long_, width=WIDTH,
-        spot_at_entry=round(spot, 2),
-        short_delta=round(leg.delta, 4) if leg and leg.delta is not None else None,
-        short_iv=round(leg.iv, 4) if leg and leg.iv is not None else None,
-        entry_credit_mid=round(sell_mid, 4),
-        entry_credit_natural=round(max(sell_natural, 0.0), 4),
-        entry_spread_width=round(quote["ask"] - quote["bid"], 4),
-        peak_return_pct=0.0, worst_return_pct=0.0,
-    ))
+
+    for variant in VARIANTS:
+        legs = _legs(chain, variant)
+        if legs is None:
+            logger.info("Weekly shadow %s: no strike near %.2f delta on %s.",
+                        variant, SHORT_DELTA, expiry)
+            continue
+        cs, cl, ps, pl = legs
+        priced = _price(chain, cs, cl, ps, pl)
+        if priced is None:
+            logger.info("Weekly shadow %s: %s chain missing a leg.", variant, expiry)
+            continue
+        if priced["mid"] < MIN_CREDIT:
+            logger.info("Weekly shadow %s: collects only %.3f, below the %.2f floor.",
+                        variant, priced["mid"], MIN_CREDIT)
+            continue
+
+        short_leg = chain.get(("call", float(cs))) if cs else chain.get(("put", float(ps)))
+        db.add(WeeklyShadow(
+            expiration=expiry, strategy=f"WEEKLY_{variant}",
+            short_strike=cs, long_strike=cl,
+            put_short_strike=ps, put_long_strike=pl,
+            width=WIDTH, spot_at_entry=round(spot, 2),
+            short_delta=round(short_leg.delta, 4) if short_leg and short_leg.delta is not None else None,
+            short_iv=round(short_leg.iv, 4) if short_leg and short_leg.iv is not None else None,
+            entry_credit_mid=round(priced["mid"], 4),
+            entry_credit_natural=round(max(priced["natural_sell"], 0.0), 4),
+            entry_spread_width=round(priced["cross"], 4),
+            peak_return_pct=0.0, worst_return_pct=0.0,
+        ))
+        logger.info(
+            "Weekly shadow OPENED %s %s — calls %s/%s puts %s/%s, credit %.3f mid / %.3f natural, "
+            "%.3f to cross, spot %.2f.",
+            variant, expiry, cs, cl, ps, pl,
+            priced["mid"], max(priced["natural_sell"], 0.0), priced["cross"], spot,
+        )
     db.commit()
-    logger.info(
-        "Weekly shadow OPENED %s %.0f/%.0f — credit %.3f mid / %.3f natural, "
-        "short delta %s, spot %.2f, %.2f to cross.",
-        expiry, short, long_, sell_mid, max(sell_natural, 0.0),
-        leg.delta if leg else None, spot, quote["ask"] - quote["bid"],
-    )
 
 
 def _mark(db, row: WeeklyShadow, now: datetime) -> None:
-    """Reprice the open shadow and record both outcomes as they arrive."""
+    """Reprice one open shadow and record both outcomes as they arrive."""
     if now.date().isoformat() > row.expiration:
         _settle(db, row, now)
         return
@@ -154,11 +209,12 @@ def _mark(db, row: WeeklyShadow, now: datetime) -> None:
     chain = fetch_option_chain(row.expiration)
     if not chain:
         return
-    quote = chain_vertical(chain, "call", row.short_strike, row.long_strike)
-    if quote is None:
+    priced = _price(chain, row.short_strike, row.long_strike,
+                    row.put_short_strike, row.put_long_strike)
+    if priced is None:
         return
 
-    cost = max(quote["mid"], 0.0)          # what buying it back costs
+    cost = max(priced["mid"], 0.0)
     credit = row.entry_credit_mid
     ret = ((credit - cost) / credit * 100.0) if credit else 0.0
     spot = fetch_qqq_spot()
@@ -168,19 +224,20 @@ def _mark(db, row: WeeklyShadow, now: datetime) -> None:
     row.last_return_pct = round(ret, 2)
     row.peak_return_pct = round(max(row.peak_return_pct or 0.0, ret), 2)
     row.worst_return_pct = round(min(row.worst_return_pct or 0.0, ret), 2)
-    if spot >= row.short_strike and not row.breached:
+
+    breached = ((row.short_strike is not None and spot >= row.short_strike)
+                or (row.put_short_strike is not None and spot <= row.put_short_strike))
+    if breached and not row.breached:
         row.breached = now.isoformat()
-        logger.warning(
-            "Weekly shadow BREACHED: spot %.2f is at or through the %.0f short strike.",
-            spot, row.short_strike,
-        )
+        logger.warning("Weekly shadow %s BREACHED: spot %.2f.", row.strategy, spot)
+
     if ret >= TARGET_PCT and row.target_hit_at is None:
         row.target_hit_at = now
         row.target_return_pct = round(ret, 2)
         logger.info(
-            "Weekly shadow hit the %.0f%% target at %+.2f%% — the Monday rule would book here. "
-            "Still marking to expiry to see whether holding beat it.",
-            TARGET_PCT, ret,
+            "Weekly shadow %s hit the %.0f%% target at %+.2f%% — the Monday rule would book "
+            "here. Still marking to expiry to see whether holding beat it.",
+            row.strategy, TARGET_PCT, ret,
         )
     db.commit()
 
@@ -196,9 +253,9 @@ def _settle(db, row: WeeklyShadow, now: datetime) -> None:
     row.expiry_return_pct = round(((credit - cost) / credit * 100.0) if credit else 0.0, 2)
     db.commit()
     logger.info(
-        "Weekly shadow SETTLED %s %.0f/%.0f: %+.2f%% held to expiry, target %s, "
+        "Weekly shadow SETTLED %s %s: %+.2f%% held to expiry, target %s, "
         "peak %+.2f%%, worst %+.2f%%, breached %s.",
-        row.expiration, row.short_strike, row.long_strike, row.expiry_return_pct,
+        row.strategy, row.expiration, row.expiry_return_pct,
         f"hit at {row.target_return_pct:+.2f}%" if row.target_hit_at else "never hit",
         row.peak_return_pct or 0.0, row.worst_return_pct or 0.0, bool(row.breached),
     )

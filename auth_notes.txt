@@ -282,9 +282,30 @@ break; removing them is worth doing.
     Most likely no password is set on the account. Run section 1.
     (The message is intentionally identical for every failure cause.)
 
-401 "Not authenticated" on /auth/me
-    Missing or malformed Authorization header, an expired access token, or a
-    REFRESH token being used where an access token belongs.
+401 on /auth/me — READ THE DETAIL, it names the cause
+    Since 2026-08-23 each cause has its own message. The endpoint itself is
+    fine; it was verified returning 200 for a correct access token while all
+    of these returned an identical "Not authenticated", which is what made it
+    look broken.
+
+    "No bearer token"          the header never arrived. In Swagger /docs you
+                               must click Authorize and paste the token —
+                               calling /auth/login there does NOT apply it.
+    "That is a refresh token"  login returns access_token AND refresh_token.
+                               The second one is only for /auth/refresh.
+    "Access token has expired" they last 15 minutes (ACCESS_TOKEN_EXPIRES_IN).
+                               POST /auth/refresh with the refresh_token.
+    "could not be verified"    truncated on copy, or the word Bearer pasted
+                               into the value as well as the header.
+    "no longer exists"         the account was deleted after the token was
+                               issued. Tokens stay validly signed until they
+                               expire, so the user is re-read every request.
+    "This account is disabled" set disabled=false via PATCH /users/{id}.
+
+403 "Requires one of: admin"
+    Authentication worked; the role is wrong. Check GET /auth/me — a role of
+    null means no permissions anywhere, which is what accounts created
+    through POST /CRUD/register/ get.
 
 404 on /auth/login
     That deployment predates the auth work. Check `git log --oneline -1`.

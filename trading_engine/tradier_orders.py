@@ -51,23 +51,82 @@ class OrderError(RuntimeError):
     """Raised when Tradier refuses an order or the response is unusable."""
 
 
+def _order_env() -> str:
+    """Where ORDERS go, which is deliberately independent of where quotes come
+    from. The useful configuration is production market data with sandbox
+    execution: decisions made on real quotes, fills that cost nothing. Sandbox
+    quote data is thin enough that testing against it would exercise the
+    plumbing on prices the engine would never have traded on."""
+    return os.getenv("TRADIER_ORDER_ENV", "sandbox").lower()
+
+
 def _base() -> str:
-    env = os.getenv("TRADIER_ORDER_ENV", os.getenv("TRADIER_ENV", "sandbox")).lower()
-    return PRODUCTION_BASE if env == "production" else SANDBOX_BASE
+    return PRODUCTION_BASE if _order_env() == "production" else SANDBOX_BASE
 
 
 def _headers() -> dict:
-    key = os.getenv("TRADIER_API_KEY")
+    # Sandbox issues its own token; a production key returns 401 against it,
+    # which is verified rather than assumed. Fall back to the production key
+    # only when no sandbox key is configured, so a misconfiguration surfaces
+    # as an auth error instead of quietly sending orders to the live account.
+    if _order_env() == "production":
+        key = os.getenv("TRADIER_API_KEY")
+        missing = "TRADIER_API_KEY"
+    else:
+        key = os.getenv("TRADIER_SANDBOX_KEY")
+        missing = "TRADIER_SANDBOX_KEY"
     if not key:
-        raise OrderError("TRADIER_API_KEY is not set — cannot reach the order API.")
+        raise OrderError(f"{missing} is not set — cannot reach the {_order_env()} order API.")
     return {"Authorization": f"Bearer {key}", "Accept": "application/json"}
 
 
 def _account() -> str:
-    acct = os.getenv("TRADIER_ACCOUNT_ID")
+    if _order_env() != "production":
+        acct = os.getenv("TRADIER_SANDBOX_ACCOUNT_ID") or os.getenv("TRADIER_ACCOUNT_ID")
+    else:
+        acct = os.getenv("TRADIER_ACCOUNT_ID")
     if not acct:
-        raise OrderError("TRADIER_ACCOUNT_ID is not set.")
+        raise OrderError("No account id configured for the %s order API." % _order_env())
     return acct
+
+
+def preflight() -> dict:
+    """Everything that must be true before an order can be sent, checked at once.
+
+    Written because the account turned out to be the blocker rather than the
+    code: the configured id did not exist for the token, the balances endpoint
+    returned 401, and the account is a CASH account, which cannot sell the
+    credit spreads the afternoon window is built on.
+    """
+    out = {"order_env": _order_env(), "live_orders": LIVE_ORDERS,
+           "preview_only": PREVIEW_ONLY, "max_contracts": MAX_CONTRACTS}
+    try:
+        r = httpx.get(f"{_base()}/user/profile", headers=_headers(), timeout=10.0)
+        out["profile_status"] = r.status_code
+        if r.status_code == 200:
+            prof = (r.json() or {}).get("profile", {})
+            accts = prof.get("account")
+            accts = [accts] if isinstance(accts, dict) else (accts or [])
+            out["accounts"] = [
+                {"number": a.get("account_number"), "type": a.get("type"),
+                 "status": a.get("status")} for a in accts
+            ]
+            out["configured_account"] = _account()
+            out["account_matches"] = any(
+                a.get("account_number") == _account() for a in accts)
+    except OrderError as e:
+        out["error"] = str(e)
+        return out
+    except httpx.HTTPError as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
+    bal = account_snapshot()
+    out["balances"] = bal if "error" not in bal else {"error": bal}
+    if isinstance(bal, dict) and "error" not in bal:
+        out["account_type"] = bal.get("account_type")
+        out["can_sell_spreads"] = bal.get("account_type") in ("margin", "pdt")
+    return out
 
 
 def occ_symbol(underlying: str, expiry: "date | str", call_put: str, strike: float) -> str:
@@ -110,8 +169,8 @@ def _post_order(payload: dict, preview: bool) -> dict:
 
 
 def submit_vertical(underlying: str, expiry: "date | str", call_put: str,
-                    short_strike: float, long_strike: float, quantity: int,
-                    opening: bool, limit_price: float,
+                    long_strike: float, short_strike: float, quantity: int,
+                    opening: bool, limit_price: float, is_credit: bool,
                     preview: "bool | None" = None) -> dict:
     """One vertical spread, as a single two-leg order.
 
@@ -135,26 +194,32 @@ def submit_vertical(underlying: str, expiry: "date | str", call_put: str,
         )
         quantity = MAX_CONTRACTS
 
-    short_sym = occ_symbol(underlying, expiry, call_put, short_strike)
+    # long_strike is the leg BOUGHT and short_strike the leg SOLD, in both
+    # structures -- which is what the engine's own position row means by those
+    # names. The first draft hardcoded a credit spread's leg sides for every
+    # opening order, which would have sent the morning debit spread inside
+    # out: selling the in-the-money leg and buying the out-of-the-money one is
+    # a different trade at a different price, and it would have been filled.
     long_sym = occ_symbol(underlying, expiry, call_put, long_strike)
+    short_sym = occ_symbol(underlying, expiry, call_put, short_strike)
 
     if opening:
-        # A credit vertical sells the near strike; a debit one buys it. Which
-        # leg is "short" is already decided by the caller's strike arguments.
-        sides = ("sell_to_open", "buy_to_open")
-        order_type = "credit"
+        long_side, short_side = "buy_to_open", "sell_to_open"
     else:
-        sides = ("buy_to_close", "sell_to_close")
-        order_type = "debit"
+        long_side, short_side = "sell_to_close", "buy_to_close"
+
+    # The NET direction of money: opening a credit spread collects, closing it
+    # pays, and a debit spread is the mirror of both.
+    collecting = is_credit if opening else not is_credit
 
     payload = {
         "class": "multileg",
         "symbol": underlying.upper(),
-        "type": order_type,
+        "type": "credit" if collecting else "debit",
         "duration": ORDER_DURATION,
         "price": f"{abs(limit_price):.2f}",
-        "option_symbol[0]": short_sym, "side[0]": sides[0], "quantity[0]": str(quantity),
-        "option_symbol[1]": long_sym, "side[1]": sides[1], "quantity[1]": str(quantity),
+        "option_symbol[0]": long_sym, "side[0]": long_side, "quantity[0]": str(quantity),
+        "option_symbol[1]": short_sym, "side[1]": short_side, "quantity[1]": str(quantity),
     }
     return _post_order(payload, preview)
 

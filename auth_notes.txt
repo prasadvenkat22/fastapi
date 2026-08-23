@@ -1,8 +1,9 @@
 ================================================================================
 AUTHENTICATION — LOGIN, PASSWORDS, AND ROLES
 ================================================================================
-Last updated: 2026-08-23
-Code: routes/auth_router.py, helpers/jwt_tokens.py, helpers/auth_deps.py
+Last updated: 2026-08-23 (enforcement turned on)
+Code: routes/auth_router.py, routes/users_router.py, helpers/jwt_tokens.py,
+      helpers/auth_deps.py, main.py (where enforcement is applied)
 Scripts: scripts/add_user.py, scripts/set_password.py
 
 
@@ -10,18 +11,24 @@ Scripts: scripts/add_user.py, scripts/set_password.py
 READ FIRST — WHAT IS AND ISN'T TURNED ON
 ================================================================================
 
-Logging in WORKS. Enforcement DOES NOT.
+Logging in works AND enforcement is on, as of 2026-08-23.
 
-The /auth/* endpoints issue real tokens, and /auth/me validates them. But the
-role dependencies (get_current_user, require_role) are applied to ZERO routes.
-Every other endpoint still answers unauthenticated, exactly as before.
+Every router except /auth now requires a token. Verified against the running
+app rather than assumed:
 
-That was deliberate — turning enforcement on is the change that can lock you
-out of your own API, so it belongs in its own reviewable step rather than
-arriving as a side effect of adding a login.
+    unauthenticated  GET /users, GET /CRUD/users/, DELETE /CRUD/users/1,
+                     GET /trading/status          all 401
+    admin token      those same routes            200
+    trader token     GET /trading/status  200
+                     GET /users, GET /CRUD/customers/  403
 
-Until that step happens, treat the whole API as public. There is also no TLS;
-traffic is plain HTTP.
+STILL OPEN, deliberately: /, /docs, /openapi.json, /static, and /auth/login
+and /auth/refresh — you cannot get a token without them. deploy.sh health
+curls /docs, so protecting it breaks the health check; /docs does advertise
+every endpoint to anyone who can reach the host.
+
+STILL PLAIN HTTP. There is no TLS, so tokens and passwords cross the wire in
+clear text. This is now the largest remaining hole and is section 6 item 1.
 
 
 ================================================================================
@@ -193,65 +200,69 @@ Config: JWT_ALGORITHM (RS256), ACCESS_TOKEN_EXPIRES_IN (15 minutes),
 
 
 ================================================================================
-5. WHY USERS ARE CREATED FROM A SCRIPT AND NOT THE API
+5. MANAGING USERS OVER HTTP
 ================================================================================
 
-There ARE web endpoints for this already, and they are not usable for
-creating an admin:
+All of these require an admin token. Get one from POST /auth/login.
 
-    POST   /CRUD/register/        create a user with a password
-    POST   /CRUD/users/           identical to /register/, different status
-    GET    /CRUD/users/           list users
-    GET    /CRUD/users/{id}       one user
-    DELETE /CRUD/users/{id}       delete a user
+    GET    /users                       list, with role and whether a
+                                        password is set
+    GET    /users/{id}
+    POST   /users                       create WITH a role
+    PATCH  /users/{id}                  change role, disable, rename
+    DELETE /users/{id}
+    POST   /users/{id}/reset-password   for a password nobody remembers
 
-Two problems, and the second is the one that matters.
+Create an admin:
 
-FIRST: NEITHER CREATE ENDPOINT CAN ASSIGN A ROLE. UserCreate carries name,
-email and password only, so every account made over HTTP lands with
-role_id = NULL, which reads as no permissions. There is no endpoint anywhere
-that sets role_id. That is the actual reason admins are made with
-add_user.py — the API cannot do it, not merely that a script is tidier.
+    curl -X POST http://<host>/users       -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'       -d '{"email":"someone@example.com","role":"admin"}'
 
-SECOND: EVERY ONE OF THEM IS UNAUTHENTICATED. Anyone who can reach the host
-can create an account, list every user, or DELETE ANY USER, including all
-four admins. `DELETE /CRUD/users/{id}` behind no auth at all is the sharpest
-edge in the API today. Nothing has been lost to it because the host is not
-widely known, which is luck rather than a control.
+`password` is optional and usually omitted. Leave it out and the account
+exists but cannot log in until its owner sets one — same reasoning as
+add_user.py. Include it and it must be at least 12 characters.
 
-Two smaller inconsistencies worth closing at the same time: /register/
-enforces a 6-character minimum where set_password.py enforces 12, so the
-weaker path is the public one; and it hashes with the same bcrypt helper, so
-a password chosen there is fine — it is the 6 that is wrong.
+GUARDS. Four operations can lock everyone out of every protected route, and
+the only way back is a shell on the server, so all four refuse with a 409:
+deleting yourself, and deleting, disabling or demoting the only admin who can
+actually log in. Disabled admins and admins with no password do not count
+toward that last check, because neither can authenticate — counting them
+would let the guard pass while leaving nobody able to get in.
 
-UserResponse does NOT expose password_hash. That was checked rather than
-assumed.
+THE SCRIPTS STILL WORK and are still the bootstrap path. They talk to the
+database directly, so they are how you recover when nobody can log in — which
+is exactly the situation an HTTP endpoint cannot help with.
 
-BEFORE MOVING USER MANAGEMENT TO THE API, ENFORCEMENT HAS TO LAND FIRST.
-An endpoint that assigns the admin role, on an API where nothing checks who
-is calling, is a public admin-maker. The order is forced, and there is a
-second ordering constraint inside it: enforcement cannot be switched on
-until at least one admin has a password, or every protected route becomes
-unreachable and the only way back is a script on the server. Set the
-passwords first (section 1), then enforce, then move user management to
-the API if it is still wanted.
+THE OLD ENDPOINTS ARE STILL THERE and are now admin-only:
+
+    POST /CRUD/register/    POST /CRUD/users/    DELETE /CRUD/users/{id}
+
+Prefer /users. UserCreate has no role field, so anything created through the
+/CRUD/ pair still lands with role_id = NULL — authenticated, but holding no
+permissions on any router. They are kept only so an existing caller does not
+break; removing them is worth doing.
 
 
 ================================================================================
 6. REMAINING WORK BEFORE AUTH ACTUALLY PROTECTS ANYTHING
 ================================================================================
 
-  1. Apply the dependencies to routes. Suggested order, safest first:
-       a. /trading/*     most dangerous, smallest blast radius
-       b. CRUD writes and deletes
-       c. CRUD reads
-       d. /docs and /openapi.json — currently advertise all 65 endpoints
-          to anyone who can reach the host
+  DONE 2026-08-23: dependencies applied in main.py, and POST /CRUD/register/
+  is admin-only rather than public.
 
-  2. Decide what POST /CRUD/register/ should do. It is open to anyone today.
-     Either keep it open but hard-limit it to the lowest role, or put it
-     behind admin. If you put it behind admin, an admin must already exist
-     with a password — which is why setting one (section 1) comes first.
+  1. TLS. The biggest one now. Every token and password crosses the wire in
+     plain HTTP, so enforcement raises the bar against a stranger and not
+     against anyone who can watch the traffic.
+
+  2. The `user` role does nothing yet. Section 3 promises it read access to
+     business records; main.py gives /CRUD/* to admin only. Splitting reads
+     from writes needs per-endpoint dependencies across ~40 routes, and
+     claiming it in main.py without them would be a lie in the one file
+     people check. All four accounts are admins today, so nothing is blocked
+     by this — it is a promise the code has not kept, not a broken feature.
+
+  3. Remove POST /CRUD/register/ and POST /CRUD/users/. They duplicate
+     /users, cannot assign a role, and the accounts they make hold no
+     permissions on any router.
 
   3. Consider a refresh_tokens table if you want revocation. Access tokens
      are stateless and should never be stored. Refresh tokens are the ones

@@ -159,9 +159,15 @@ Re-run add_user.py with a different role to change it; the password is left
 alone. Re-run set_password.py to change or reset a password — that is the
 whole recovery story, there is no reset email.
 
-The API is currently OPEN: /auth/login issues tokens but no route requires
-one, and POST/DELETE /CRUD/users/ answer unauthenticated. Keep the host
-behind a firewall until section 6 of auth_notes.txt is done.
+Admins can also do all of this over HTTP without SSH -- POST /users with an
+admin token creates a user WITH a role, and POST /users/{id}/reset-password
+issues a temporary one. See section 5 of auth_notes.txt. The scripts remain
+the bootstrap and recovery path, because they work when nobody can log in.
+
+Every router except /auth now requires a token (enforced in main.py). Still
+unprotected on purpose: /, /docs, /openapi.json, /static and /auth/login.
+Traffic is still plain HTTP -- tokens and passwords cross the wire in clear,
+so keep the host behind a firewall until TLS is done.
 
 =======================================
 TESTED ENDPOINTS

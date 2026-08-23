@@ -16,12 +16,12 @@ from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 
 from .broker import (MockBrokerClient, MockSpreadPosition, estimate_credit_value, option_type_for,
                       estimate_spread_value, fill_price, is_credit)
-from .data_feed import chain_vertical, fetch_qqq_spot, log_price_divergence
+from .data_feed import chain_vertical, fetch_qqq_spot, log_price_divergence, today_expiry
 from .equity import current_equity
 from .graph import run_trading_cycle
 from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
 from .setup_vector_store import store_trade_setup
-from . import weekly_shadow
+from . import tradier_orders, weekly_shadow
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,73 @@ def _classify_close_reason(exit_reason: str, return_pct: float) -> str:
     if return_pct >= TAKE_PROFIT_PCT:
         return "TAKE_PROFIT"
     return "STOP_LOSS"
+
+
+
+def _route_order(position_like, quantity: int, opening: bool, limit_price: float,
+                 label: str) -> None:
+    """Send the order the engine's decision implies, and log what came back.
+
+    SHADOW for now: the engine's own row stays authoritative and this changes
+    nothing about what it believes it holds. That ordering is deliberate --
+    the same approach taken with chain pricing, where both numbers were logged
+    for a session before either was trusted. An order path that has never sent
+    an order should not also be the thing deciding what the position is.
+
+    Guarded completely. Every P&L figure in this repository already assumes a
+    fill it never received; an exception here must not also cost a cycle.
+    """
+    if not tradier_orders.LIVE_ORDERS:
+        return
+    try:
+        result = tradier_orders.submit_vertical(
+            position_like.underlying if hasattr(position_like, "underlying") else "QQQ",
+            today_expiry(),
+            option_type_for(position_like.strategy),
+            long_strike=position_like.long_strike,
+            short_strike=position_like.short_strike,
+            quantity=quantity,
+            opening=opening,
+            limit_price=limit_price,
+            is_credit=is_credit(position_like.strategy),
+        )
+        logger.info("Order [%s] %s: %s", label, "OPEN" if opening else "CLOSE", result)
+    except Exception:
+        logger.exception("Order [%s] failed — the engine's own state is unchanged.", label)
+
+
+def _reconcile(open_row) -> None:
+    """Does the broker agree with us about what is open?
+
+    Our row is a belief; the broker's position list is the fact. Comparing
+    them every cycle is what turns a silent divergence -- an order that never
+    filled, a leg that did -- into something visible while it can still be
+    acted on.
+    """
+    if not tradier_orders.LIVE_ORDERS:
+        return
+    try:
+        if open_row is None:
+            held = tradier_orders.open_positions()
+            if held:
+                logger.error(
+                    "RECONCILE: the engine believes it is flat, the broker holds %d position(s): %s",
+                    len(held), [p.get("symbol") for p in held],
+                )
+            return
+        call_put = option_type_for(open_row.strategy)
+        short_sym = tradier_orders.occ_symbol("QQQ", today_expiry(), call_put, open_row.short_strike)
+        long_sym = tradier_orders.occ_symbol("QQQ", today_expiry(), call_put, open_row.long_strike)
+        fill = tradier_orders.check_fill(short_sym, long_sym)
+        if fill["naked"]:
+            logger.error("RECONCILE: naked leg detected — %s", fill)
+        elif not fill["complete"]:
+            logger.error(
+                "RECONCILE: the engine holds %s %d contracts, the broker holds neither leg.",
+                open_row.strategy, open_row.quantity,
+            )
+    except Exception:
+        logger.exception("Reconciliation failed — continuing on the engine's own state.")
 
 
 async def execute_and_persist_cycle(db: Session) -> TradingState:
@@ -187,6 +254,8 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             if is_credit(open_row.strategy)
             else (exit_value - open_row.entry_net_debit)
         )
+        _route_order(open_row, open_row.quantity, opening=False,
+                     limit_price=exit_value, label=open_row.playbook or open_row.strategy)
         realized_dollars = per_spread * open_row.quantity * 100
         # The percentage has to describe the same trade as the dollars. The
         # rule still FIRED on the mid-based return -- that is what the stop and
@@ -231,6 +300,9 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
 
     if new_position is not None:
         if open_row is None:
+            _route_order(new_position, new_position.quantity, opening=True,
+                         limit_price=new_position.entry_net_debit,
+                         label=new_position.playbook or new_position.strategy)
             db.add(OpenPosition(
                 strategy=new_position.strategy,
                 underlying=new_position.underlying,
@@ -285,5 +357,10 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             # Best-effort — a Voyage hiccup here shouldn't undo an already
             # committed, correctly-closed trade.
             logger.exception("Failed to store trade setup vector for closed trade")
+
+    # Reconcile LAST, against settled state: entries, exits and the database
+    # row are all final by here, so a disagreement with the broker is a real
+    # disagreement rather than a snapshot taken mid-update.
+    _reconcile(db.query(OpenPosition).first())
 
     return final_state

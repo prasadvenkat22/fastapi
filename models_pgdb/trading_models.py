@@ -222,6 +222,13 @@ class WeeklyShadow(Base):
     # Marked every cycle while the contract is alive.
     last_marked_at = Column(DateTime(timezone=True), nullable=True)
     last_value_mid = Column(Float, nullable=True)
+    # Each side priced separately, so "close the winner and hold the loser"
+    # becomes a question the record can answer instead of one to argue about.
+    # Without these the condor is a single number and legging out is invisible.
+    last_call_side = Column(Float, nullable=True)
+    last_put_side = Column(Float, nullable=True)
+    call_side_at_entry = Column(Float, nullable=True)
+    put_side_at_entry = Column(Float, nullable=True)
     last_return_pct = Column(Float, nullable=True)
     peak_return_pct = Column(Float, nullable=True, default=0.0)
     worst_return_pct = Column(Float, nullable=True, default=0.0)

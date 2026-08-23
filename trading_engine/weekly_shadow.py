@@ -138,6 +138,7 @@ def _price(chain, cs, cl, ps, pl):
     mid is the buy-back cost and the bid is what selling collects.
     """
     mid = nat_buy = nat_sell = cross = 0.0
+    sides = {"call": None, "put": None}
     for short, long_, kind in ((cs, cl, "call"), (ps, pl, "put")):
         if short is None:
             continue
@@ -148,7 +149,9 @@ def _price(chain, cs, cl, ps, pl):
         nat_buy += q["ask"]
         nat_sell += q["bid"]
         cross += q["ask"] - q["bid"]
-    return {"mid": mid, "natural_buy": nat_buy, "natural_sell": nat_sell, "cross": cross}
+        sides[kind] = round(q["mid"], 4)
+    return {"mid": mid, "natural_buy": nat_buy, "natural_sell": nat_sell, "cross": cross,
+            "call_side": sides["call"], "put_side": sides["put"]}
 
 
 def _maybe_open(db, now: datetime) -> None:
@@ -189,6 +192,8 @@ def _maybe_open(db, now: datetime) -> None:
             entry_credit_mid=round(priced["mid"], 4),
             entry_credit_natural=round(max(priced["natural_sell"], 0.0), 4),
             entry_spread_width=round(priced["cross"], 4),
+            call_side_at_entry=priced["call_side"],
+            put_side_at_entry=priced["put_side"],
             peak_return_pct=0.0, worst_return_pct=0.0,
         ))
         logger.info(
@@ -221,6 +226,8 @@ def _mark(db, row: WeeklyShadow, now: datetime) -> None:
 
     row.last_marked_at = now
     row.last_value_mid = round(cost, 4)
+    row.last_call_side = priced["call_side"]
+    row.last_put_side = priced["put_side"]
     row.last_return_pct = round(ret, 2)
     row.peak_return_pct = round(max(row.peak_return_pct or 0.0, ret), 2)
     row.worst_return_pct = round(min(row.worst_return_pct or 0.0, ret), 2)

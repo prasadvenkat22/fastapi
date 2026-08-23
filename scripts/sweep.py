@@ -12,6 +12,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py credit      # credit window widths
     python scripts/sweep.py condor      # the structure we log but never trade
     python scripts/sweep.py events      # what scheduled macro days actually cost
+    python scripts/sweep.py forceclose # how late should the day be flattened?
     python scripts/sweep.py mstop      # is the morning stop too tight for the new structure?
     python scripts/sweep.py worstdays  # anatomy of the losing sessions
     python scripts/sweep.py taper      # tighten the ratchet as a position nears its max
@@ -85,6 +86,20 @@ EQUITY = 10000.0
 # flatters the busiest configuration -- which is precisely the axis several
 # of these sweeps are deciding.
 SLIPPAGE_ROUNDTRIP = 0.10
+
+# Commission, in premium terms, per contract per ROUND TRIP.
+#
+# Tradier charges $0.35 a contract per LEG, confirmed against the account by
+# scaling a preview order: 1 contract of a vertical is 2 legs and $0.70 to
+# open, so a round trip is 4 legs and $1.40 -- 0.014 in the premium units this
+# harness works in.
+#
+# It falls very unevenly. Against the credit window's +32.50 a trade at four
+# contracts it is $5.60, about 17% of the edge; against the morning window's
+# far larger per-trade figure it is negligible. That is the same asymmetry the
+# bid-ask shows, and the same reason a $1-wide credit spread measured -83.85 a
+# trade: fixed per-contract costs hurt small premiums disproportionately.
+COMMISSION_ROUNDTRIP = 0.014
 
 
 class _Clock:
@@ -335,7 +350,7 @@ def _close(entry: dict, position, spot: float, ts, reason: str) -> dict:
     exit_value = _mark(position, spot)
     per = ((entry["debit"] - exit_value) if is_credit(entry["strategy"])
            else (exit_value - entry["debit"]))
-    per -= SLIPPAGE_ROUNDTRIP
+    per -= SLIPPAGE_ROUNDTRIP + COMMISSION_ROUNDTRIP
     return {**entry, "exit_ts": ts, "exit_value": exit_value,
             "pnl": round(per * entry["qty"] * 100, 2),
             "pct": round(per / entry["debit"] * 100, 2) if entry["debit"] else 0.0,
@@ -510,6 +525,34 @@ def sweep_events(sessions: dict):
         total = sum(d["pnl"] for d in per)
         print(f"    {mode:10s} {total / len(per):+9.2f}/day   {total:+10.2f} total")
     CAL.EVENT_BLACKOUT = base_mode
+
+
+def sweep_forceclose(sessions: dict):
+    """How late to flatten. Expiry is 16:15, so this is not the bell.
+
+    15:45 was chosen to leave half an hour of contract life, so the exit
+    prices with real time value instead of marking to intrinsic, and to stay
+    clear of the market-on-close imbalances that widen quotes and spike gamma
+    in the final half hour. The counter-claim is that QQQ tends to move into
+    the close and the engine is out before it.
+
+    Both are assertions until swept, and the force close is the exit that
+    ends the most trades in the credit window.
+    """
+    print("")
+    print("FORCE CLOSE TIME -- expiry is 16:15")
+    print("")
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    base_h, base_m = N.FORCE_CLOSE_HOUR, N.FORCE_CLOSE_MINUTE
+    for h, m in ((15, 15), (15, 30), (15, 45), (15, 55), (16, 0)):
+        N.FORCE_CLOSE_HOUR, N.FORCE_CLOSE_MINUTE = h, m
+        trades, per_day = _run_arm(sessions, dtime(9, 45))
+        label = f"flatten at {h:02d}:{m:02d}" + ("  (current)" if (h, m) == (15, 45) else "")
+        _report_daily(label, per_day)
+        fc = [t for t in trades if t["reason"] == "FORCE_CLOSE"]
+        if fc:
+            _report("    the forced exits", fc, len(sessions))
+    N.FORCE_CLOSE_HOUR, N.FORCE_CLOSE_MINUTE = base_h, base_m
 
 
 def sweep_mstop(sessions: dict):
@@ -1640,6 +1683,8 @@ def main():
         sweep_retries(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
+    if which in ("forceclose", "all"):
+        sweep_forceclose(sessions)
     if which in ("mstop", "all"):
         sweep_mstop(sessions)
     if which in ("worstdays", "all"):

@@ -10,7 +10,16 @@ services:
     env_file:
       - .env
     ports:
-     - "5432:5432"
+     # 127.0.0.1 ONLY. Docker writes its own iptables rules and BYPASSES ufw,
+     # so a plain "5432:5432" published this database to the whole internet
+     # even though ufw allowed only 22, 80, 443 and 8000 -- confirmed on
+     # 2026-08-23 by connecting to the droplet's public IP on 5432 from
+     # outside. The firewall looked correct and was not being consulted.
+     #
+     # Nothing needs the public binding: the app reaches pgdb:5432 over the
+     # compose network. For a DB client on a laptop, tunnel instead:
+     #     ssh -L 5432:localhost:5432 root@<droplet>
+     - "127.0.0.1:5432:5432"
     volumes:
      - postgres-data:/var/lib/postgresql/data
      - ./docker/postgres-crunchy-pgvector/init:/docker-entrypoint-initdb.d:ro
@@ -27,7 +36,10 @@ services:
     env_file:
       - .env
     ports:
-      - 5050:80
+      # Same reasoning as pgdb above: loopback only, reached through an SSH
+      # tunnel. pgAdmin holds saved database credentials, so exposing it is
+      # strictly worse than exposing Postgres itself.
+      - 127.0.0.1:5050:80
     volumes:
       - pgadmin-data:/var/lib/pgadmin
     depends_on:

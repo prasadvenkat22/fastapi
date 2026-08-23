@@ -282,6 +282,21 @@ break; removing them is worth doing.
     Most likely no password is set on the account. Run section 1.
     (The message is intentionally identical for every failure cause.)
 
+"/auth/me has nowhere to put the token" (Swagger /docs)
+    Correct — no endpoint in Swagger has its own token field. Authorization
+    is set ONCE, globally: click the Authorize button at the top right, paste
+    the access_token ALONE (no "Bearer" — Swagger adds it), Authorize, Close.
+    The padlock beside each secured endpoint then shows closed.
+
+    Running POST /auth/login inside Swagger does NOT apply the token it
+    returns. You still have to copy access_token into Authorize by hand.
+
+    No Authorize button at all? Force-refresh /docs. The page caches the
+    schema, and a copy from before 2026-08-23 has no security scheme in it.
+    Confirmed present in openapi.json: securitySchemes.HTTPBearer, and
+    /auth/me carries security=[{"HTTPBearer": []}].
+
+
 401 on /auth/me — READ THE DETAIL, it names the cause
     Since 2026-08-23 each cause has its own message. The endpoint itself is
     fine; it was verified returning 200 for a correct access token while all

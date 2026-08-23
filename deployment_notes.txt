@@ -140,6 +140,65 @@ ENV FILE RULES
 - .env.production.example is the safe template checked into git
 
 =======================================
+USERS, ROLES AND PASSWORDS
+=======================================
+Two commands, in this order. They are separate on purpose: creating the
+account is safe to do over SSH, choosing the password is not.
+
+  ssh root@<DROPLET_IP>
+  cd /opt/fastapi
+
+  # 1. create the account and give it a role
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml       exec app python scripts/add_user.py someone@example.com admin
+
+  # 2. set their password -- NOTE: no -T (see troubleshooting)
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml       exec app python scripts/set_password.py someone@example.com
+
+Roles, from the roles table:
+
+  admin    full access: business records, users, GenAI, trading engine
+  trader   trading routes only
+  user     read access to business records
+
+Re-running add_user.py with a different role changes the role and leaves
+the password alone. That is how a promotion or demotion happens. A NULL
+role means no permissions, not a default grant.
+
+PASSWORDS
+- Nobody sets a password but its owner. add_user.py deliberately does not
+  invent one: a password created on the server has to be transmitted
+  somehow, and every way of doing that is worse than the account simply
+  not having one yet.
+- set_password.py prompts twice, hidden, minimum 12 characters, and stores
+  a bcrypt hash. The password is never echoed, never passed as an argument
+  (where `ps` would expose it), and never logged.
+- An account with no password CANNOT log in. Login checks for a null hash
+  and rejects, so creating the row early is harmless.
+
+FORGOTTEN PASSWORD
+Re-run set_password.py. That is the whole recovery story.
+
+There is no self-service reset, no reset email and no token flow, because
+nothing in this codebase sends mail. For a handful of admins who all have
+server access, an admin re-running one command is the recovery path. If
+that stops being true, a real reset flow needs an email provider wired up
+first -- do not fake it with a password chosen on the server.
+
+WHAT AUTHENTICATION DOES AND DOES NOT DO YET
+/auth/login issues real JWTs and /auth/me reads them. NOTHING ELSE IS
+PROTECTED. helpers/auth_deps.py defines require_admin() and
+require_trading(), but no router uses them -- every include_router() in
+main.py is bare, including the trading routes. Logging in currently proves
+who you are and grants nothing extra, and NOT logging in is not blocked.
+
+Turning enforcement on is a deliberate separate change, because it changes
+who can call what. Until it happens, treat the API as open and keep it
+behind the firewall.
+
+Emails are compared exactly at login. add_user.py lowercases what it
+stores, so log in in lowercase.
+
+=======================================
 TESTED ENDPOINTS
 =======================================
 GenAI file upload + RAG query:
@@ -181,3 +240,27 @@ Problem: nginx 502 Bad Gateway
 Problem: ModuleNotFoundError in Python
   Fix: Add the missing package to requirements.txt,
        push to GitHub, then ./deploy.sh update on server
+
+Problem: "Warning: Password input may be echoed" when setting a password
+  Fix: You used `docker compose exec -T`. The -T flag removes the TTY, so
+       getpass cannot hide the typing and the password appears on screen
+       and in your shell's scrollback. Drop the -T. If it already echoed,
+       set a different password.
+
+Problem: ModuleNotFoundError: No module named 'config' running a script
+         in scripts/
+  Fix: Already fixed -- add_user.py and set_password.py put the repo root
+       on sys.path themselves. If you add a NEW script in scripts/, copy
+       that bootstrap. Python puts the SCRIPT's directory on sys.path, not
+       the working directory, so `python scripts/x.py` from /app cannot
+       import config or models_pgdb. The cron job hides this by exporting
+       PYTHONPATH=/app in its own invocation.
+
+Problem: 401 "Incorrect email or password" for an account you know exists
+  Fix: Usually no password has been set yet -- check with:
+         docker exec postgres_container psql -U postgres -d postgres -c            "select email, password_hash is not null as has_pw from users;"
+       Then run set_password.py. Login returns the SAME message for an
+       unknown email, a wrong password, a disabled account and one with no
+       password set, on purpose: distinguishing them would let anyone test
+       which emails are registered. Also check the email case -- it is
+       matched exactly and stored lowercase.

@@ -179,3 +179,51 @@ class TradeSetupVector(Base):
     close_reason = Column(String, nullable=False)
     closed_at = Column(DateTime(timezone=True), default=func.now())
     setup_embedding = Column(Vector(EMBEDDING_DIM), nullable=True)
+
+
+class WeeklyShadow(Base):
+    """A weekly call credit spread the engine marks but does not trade.
+
+    Stateful, unlike the shadow condor, and necessarily so: a weekly position
+    spans days and its entry credit comes from Friday's option chain, which
+    cannot be refetched afterwards. Reconstructing it from bars the way the
+    condor does is impossible, so the entry has to be persisted at the moment
+    it is observed.
+
+    Two outcomes are recorded rather than one. `target_hit_at` is when the
+    spread first reached the take-profit share of its credit -- the rule that
+    books it Monday morning -- while `expiry_value` is what holding to
+    expiration would have paid. Keeping both is the only way to learn whether
+    booking early beats sitting still, which is the actual open question.
+    """
+
+    __tablename__ = "weekly_shadow"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    opened_at = Column(DateTime(timezone=True), default=func.now())
+    expiration = Column(String, nullable=False)        # YYYY-MM-DD
+    strategy = Column(String, nullable=False)          # CALL_CREDIT_SPREAD
+    short_strike = Column(Float, nullable=False)
+    long_strike = Column(Float, nullable=False)
+    width = Column(Float, nullable=False)
+
+    spot_at_entry = Column(Float, nullable=False)
+    short_delta = Column(Float, nullable=True)
+    short_iv = Column(Float, nullable=True)
+    entry_credit_mid = Column(Float, nullable=False)
+    entry_credit_natural = Column(Float, nullable=False)   # what a fill would pay
+    entry_spread_width = Column(Float, nullable=True)      # two-leg bid-ask to cross
+
+    # Marked every cycle while the contract is alive.
+    last_marked_at = Column(DateTime(timezone=True), nullable=True)
+    last_value_mid = Column(Float, nullable=True)
+    last_return_pct = Column(Float, nullable=True)
+    peak_return_pct = Column(Float, nullable=True, default=0.0)
+    worst_return_pct = Column(Float, nullable=True, default=0.0)
+    breached = Column(String, nullable=True)               # first timestamp spot >= short
+
+    # The two outcomes.
+    target_hit_at = Column(DateTime(timezone=True), nullable=True)
+    target_return_pct = Column(Float, nullable=True)
+    expiry_value = Column(Float, nullable=True)
+    expiry_return_pct = Column(Float, nullable=True)
+    notes = Column(String, nullable=True)

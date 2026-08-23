@@ -21,6 +21,7 @@ from .equity import current_equity
 from .graph import run_trading_cycle
 from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
 from .setup_vector_store import store_trade_setup
+from . import weekly_shadow
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -142,18 +143,60 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
     # nothing closed. exit_reason is what actually says a position closed —
     # keying off new_position alone would take the update-in-place branch and
     # silently lose the closed trade's realized P&L.
+    # The weekly shadow, which trades nothing. Guarded and last-ish so a
+    # note-taking feature can never interfere with a live position: an
+    # exception here must cost a log line, not a cycle.
+    try:
+        weekly_shadow.observe(db)
+    except Exception:
+        logger.exception("Weekly shadow failed — the trading cycle is unaffected.")
+
     closed_this_cycle = bool(final_state.get("exit_reason"))
 
     if open_row is not None and closed_this_cycle:
+        # Book the exit at the NATURAL, not at the mark.
+        #
+        # Decisions and accounting want different prices, and conflating them
+        # flatters the record. The mark is the mid, which is what the position
+        # is worth and the right input to a stop or a ratchet -- marking at the
+        # natural would make every position look half a spread worse than it is
+        # and fire exits early. But a fill is not the mid: closing a debit
+        # vertical sells it at its natural BID, closing a credit one buys it
+        # back at the natural ASK.
+        #
+        # Entries already price at the natural, so recording exits at the mid
+        # credited every trade with roughly half a spread it would never have
+        # received -- about $0.075 a contract on a morning vertical quoting
+        # 3.88/4.03, or $37 on a five-contract trade. scripts/sweep.py charges
+        # a full round trip, so the backtest was honest and only the live
+        # record ran optimistic, which is the number Monday gets judged on.
+        exit_value = pre_close_current_value
+        if market_quote is not None:
+            natural = market_quote["ask"] if is_credit(open_row.strategy) else market_quote["bid"]
+            exit_value = max(natural, 0.0)
+            logger.info(
+                "Exit booked at the natural %.3f rather than the mid %.3f (%.3f a contract of spread).",
+                exit_value, pre_close_current_value, abs(pre_close_current_value - exit_value),
+            )
+
         # Credit positions profit as the spread gets CHEAPER, so the sign
         # flips: entry_net_debit holds the credit received, and the gain is
         # what is left after buying it back.
         per_spread = (
-            (open_row.entry_net_debit - pre_close_current_value)
+            (open_row.entry_net_debit - exit_value)
             if is_credit(open_row.strategy)
-            else (pre_close_current_value - open_row.entry_net_debit)
+            else (exit_value - open_row.entry_net_debit)
         )
         realized_dollars = per_spread * open_row.quantity * 100
+        # The percentage has to describe the same trade as the dollars. The
+        # rule still FIRED on the mid-based return -- that is what the stop and
+        # the ratchet read, and _classify_close_reason is judging the decision,
+        # not the fill -- but what gets recorded as the result is the realised
+        # one.
+        realized_pct = (
+            round(per_spread / open_row.entry_net_debit * 100, 4)
+            if open_row.entry_net_debit else 0.0
+        )
         close_reason = _classify_close_reason(final_state.get("exit_reason", ""), pre_close_return_pct)
         db.add(TradeHistory(
             strategy=open_row.strategy,
@@ -162,9 +205,9 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             long_strike=open_row.long_strike,
             short_strike=open_row.short_strike,
             entry_net_debit=open_row.entry_net_debit,
-            exit_net_value=pre_close_current_value,
+            exit_net_value=exit_value,
             realized_pnl_dollars=round(realized_dollars, 2),
-            realized_pnl_pct=pre_close_return_pct,
+            realized_pnl_pct=realized_pct,
             close_reason=close_reason,
             playbook=open_row.playbook,
             opened_at=open_row.opened_at,

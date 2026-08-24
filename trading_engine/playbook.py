@@ -452,9 +452,25 @@ WINDOWS = (
         entry_fraction=None,
         risk_share=0.50,
         ride_to_close=True,
-        # 13:25, five minutes before AFTERNOON_CREDIT opens, so the slot is
-        # genuinely free when the credit window looks for an entry.
-        ride_until=time(13, 25),
+        # None: ride to the force close. The handoff was 13:25, five minutes
+        # before AFTERNOON_CREDIT opened, so the single position slot was free
+        # when the credit window looked for an entry. That is a cost worth
+        # paying only if the credit window is worth more than the tail of the
+        # morning trade, and chain-priced it is not (sweep.py handoff):
+        #
+        #     hand over at 13:25, credit trades         -11.16/day
+        #     ride to 15:45, credit gets what is left   -37.18/day
+        #     ride to 15:45, credit window OFF          +44.15/day
+        #     hand over at 13:25, credit window OFF     +42.49/day
+        #
+        # With AFTERNOON_CREDIT out of TRADING_ENABLED_WINDOWS there is
+        # nothing to hand to, and closing a live position at 13:25 to free a
+        # slot nobody uses just gives up two hours of the trade.
+        #
+        # PUT THIS BACK if AFTERNOON_CREDIT is ever re-enabled. The two
+        # settings are a pair: riding to the close with the credit window on
+        # is the WORST of the four rows above, not the best.
+        ride_until=None,
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "

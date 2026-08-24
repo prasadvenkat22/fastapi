@@ -21,6 +21,7 @@ from langchain_anthropic import ChatAnthropic
 from GENAI.vector_stores import VoyageEmbeddings
 from schemas_pgrs.trading_schema import MarketSentimentOutput
 
+from . import tradier_orders
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
 from .macro_calendar import blackout_active as event_blackout_active, describe as describe_event
@@ -1885,6 +1886,34 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     if market is not None and market["ask"] > 0:
                         net_debit = market["ask"]
                     quantity = broker.estimate_spread_quantity(eq.equity * entry_fraction, net_debit)
+
+                # Size to what the BROKER will actually be given, once orders
+                # are live.
+                #
+                # tradier_orders.submit_vertical clamps any order to
+                # TRADING_MAX_ORDER_CONTRACTS -- deliberately, so a first live
+                # session tests fills rather than the strategy. But it clamps
+                # only the ORDER. Without this the engine sizes to 5 contracts
+                # on a $10k book, sends 1, and then tracks a 5-contract
+                # position it does not own: its recorded P&L is five times the
+                # real one, and the daily loss cap -- the rule that stops a bad
+                # day -- is counted against size that was never filled.
+                #
+                # Entry and exit are both clamped, so the BROKER stays flat
+                # correctly either way. What breaks is the accounting, which is
+                # precisely what a first live session is meant to verify.
+                #
+                # Only while LIVE_ORDERS is on: with orders off there is no
+                # broker to disagree with, and clamping here would silently
+                # change every paper result and every sweep.
+                if tradier_orders.LIVE_ORDERS and quantity > tradier_orders.MAX_CONTRACTS:
+                    logger.info(
+                        "Sizing %d contracts down to the %d live-order cap so the "
+                        "position, its P&L and the daily loss cap all describe what "
+                        "the broker was actually asked for.",
+                        quantity, tradier_orders.MAX_CONTRACTS,
+                    )
+                    quantity = tradier_orders.MAX_CONTRACTS
 
                 # Half size after a loss. The cooldown decides WHETHER to
                 # take the next trade; this decides how big it is, and a

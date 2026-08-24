@@ -452,25 +452,32 @@ WINDOWS = (
         entry_fraction=None,
         risk_share=0.50,
         ride_to_close=True,
-        # None: ride to the force close. The handoff was 13:25, five minutes
-        # before AFTERNOON_CREDIT opened, so the single position slot was free
-        # when the credit window looked for an entry. That is a cost worth
-        # paying only if the credit window is worth more than the tail of the
-        # morning trade, and chain-priced it is not (sweep.py handoff):
+        # 13:25 — and it is no longer a handoff. AFTERNOON_CREDIT is out of
+        # TRADING_ENABLED_WINDOWS, so nothing is waiting for the slot; this is
+        # now a plain midday exit, and it earns its place on its own.
         #
-        #     hand over at 13:25, credit trades         -11.16/day
-        #     ride to 15:45, credit gets what is left   -37.18/day
-        #     ride to 15:45, credit window OFF          +44.15/day
-        #     hand over at 13:25, credit window OFF     +42.49/day
+        # Measured with the 12:30 window end, chain-priced (sweep.py handoff):
         #
-        # With AFTERNOON_CREDIT out of TRADING_ENABLED_WINDOWS there is
-        # nothing to hand to, and closing a live position at 13:25 to free a
-        # slot nobody uses just gives up two hours of the trade.
+        #     hand over 13:25, credit trades      +3.19/day   halves +35.51/-29.13
+        #     ride to 15:45, credit trades        +8.29/day   halves +80.72/-64.15
+        #     ride to 15:45, credit OFF          +53.14/day   halves +142.22/-35.95
+        #     exit at 13:25, credit OFF          +40.10/day   halves +74.31/ +5.89
         #
-        # PUT THIS BACK if AFTERNOON_CREDIT is ever re-enabled. The two
-        # settings are a pair: riding to the close with the credit window on
-        # is the WORST of the four rows above, not the best.
-        ride_until=None,
+        # Riding wins on total by $782 over 60 sessions and loses on the only
+        # test this file trusts: its second half is NEGATIVE, so the extra
+        # comes from the older half of the sample. The 13:25 exit is the only
+        # row of the four whose halves both come out positive. Same standard
+        # that chose a 12:30 window end over 11:30 for less total money.
+        #
+        # An earlier run of this sweep, taken at the 11:30 window end, put
+        # riding ahead on both counts (+44.15 against +42.49). Extending the
+        # window to 12:30 reversed it: later entries have less room before
+        # 13:25, so what rides past it is a different, worse-selected set of
+        # trades. The two settings interact and have to be swept together.
+        #
+        # If AFTERNOON_CREDIT is ever re-enabled this stays exactly as it is —
+        # it goes back to being a handoff and is needed more, not less.
+        ride_until=time(13, 25),
         note="The opening leg is spent and the midday range has not formed. ATM "
              "rather than ITM so a second morning move is still worth catching, "
              "on the same 90% target. The least justified window of the four -- "

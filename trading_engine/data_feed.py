@@ -252,6 +252,30 @@ def _tradier_quote(symbol: str) -> "dict | None":
     was NOT delayed (yfinance 706.91 against Tradier's 706.9099 at the same
     second), so strike selection was never reading stale prices; the lag was
     confined to the macro inputs.
+
+    ONLY VIX WAS WORTH MOVING, and that is a measurement rather than a
+    judgement call. What a lag costs is the size of a typical 15-minute move
+    against the threshold the reading feeds. Over a week of 1-minute bars:
+
+        ^TNX    median 0.200bp   p90 0.800bp   max 2.000bp
+        CL=F    median 0.141%    p90 0.375%    max 0.659%
+        ^VIX    median 0.050pts  p90 0.120pts  max 0.370pts
+
+    ^TNX feeds a 4bp spike gate (TNX_SPIKE_BPS), so a staleness of a fifth of
+    a basis point could only flip a reading already within a hair of the
+    threshold. It moved to Tradier anyway once TNX:CGI turned up in the symbol
+    directory (see TNX_TRADIER_SYMBOL) -- not because the lag was costing
+    anything, but because there was no longer a reason to keep it.
+
+    CL=F feeds the macro verdict as context for an LLM, not a threshold, so a
+    tenth of a percent changes nothing that is read to two decimal places.
+    Note also that Tradier's `CL` is Colgate-Palmolive, not crude; the real
+    proxy would be USO, with the same basis problem as IEF.
+
+    VIX is different only because of what it gates: VIX_LEVEL_MAX halts
+    entries in BOTH directions, and a halt exists for the tail. The medians
+    above are a quiet week -- on the day that ceiling matters, the 15-minute
+    move is not 0.05 points, and that is the case the swap was made for.
     """
     api_key = os.getenv("TRADIER_API_KEY")
     if not api_key:
@@ -393,20 +417,53 @@ def fetch_oil() -> "OilReading":
     return OilReading(level=level, session_open=session_open, change_pct=change_pct)
 
 
+# CBOE's 10-year yield index on Tradier. The spelling matters and is not
+# guessable: TNX, $TNX, ^TNX, TNX.X and US10Y are all unmatched, and an
+# earlier note in this file concluded from exactly that list that Tradier does
+# not carry it. It does — /markets/lookup?q=TNX&types=index returns TNX:CGI,
+# "CBOE Interest Rate 10 Year T Note". The lesson is to search the symbol
+# directory rather than probe spellings; TYX:CGI, FVX:CGI and IRX:CGI are
+# there too, for the 30-year, 5-year and 13-week.
+TNX_TRADIER_SYMBOL = os.getenv("TRADING_TNX_SYMBOL", "TNX:CGI")
+
+# CBOE quotes this index at TEN TIMES the yield: 47.04 means 4.704%. Getting
+# this wrong does not fail loudly — it produces a plausible-looking 47% yield
+# and a change_bps ten times too large, which would put every session over the
+# 4bp spike gate forever.
+TNX_INDEX_SCALE = float(os.getenv("TRADING_TNX_SCALE", "10.0"))
+
+
 def fetch_tnx() -> TnxReading:
-    """10-year Treasury yield (CBOE ^TNX) via yfinance, as a level plus its
-    move since the 09:30 cash open, in basis points.
+    """10-year Treasury yield, as a level plus its move since the cash open.
 
-    Not sourced from Tradier: confirmed against the quotes endpoint that it
-    carries none of TNX, $TNX, ^TNX, TNX.X or US10Y — only ordinary bond ETFs
-    like IEF and TLT, which track price rather than yield and would need
-    inverting and rescaling to stand in for one. Same situation as $ADDQ and
-    $TICKQ.
+    Tradier first (real time), yfinance second (15 minutes late).
 
-    yfinance quotes ^TNX directly in percent (4.694 = 4.694%), and returns
-    the extended session — the first bar of the day lands around 08:20 ET —
-    so the anchor is taken from regular hours for the same reason as VIX.
+    The delayed feed is tolerable here and the swap is still worth making.
+    Measured over a week of 1-minute bars, ^TNX moves a median of 0.2bp and a
+    p90 of 0.8bp in fifteen minutes, against the 4bp TNX_SPIKE_BPS gate this
+    feeds — so the lag could only ever flip a reading already sitting within
+    a basis point of the threshold. That is why yfinance stayed here for so
+    long, and why this is a tidy-up rather than a fix: the reason to prefer
+    the live feed is that there is now no reason not to.
+
+    Both level and open come from the same quote, so the two are consistent
+    even if one feed is stale. Tradier's `open` is the regular-session open,
+    which is the anchor this wants — yfinance needs _regular_session_open()
+    only because it returns the extended session from around 08:20 ET.
     """
+    quote = _tradier_quote(TNX_TRADIER_SYMBOL)
+    if quote and quote.get("last") is not None and quote.get("open") is not None:
+        try:
+            level = float(quote["last"]) / TNX_INDEX_SCALE
+            session_open = float(quote["open"]) / TNX_INDEX_SCALE
+            if level > 0 and session_open > 0:
+                return TnxReading(level=level, session_open=session_open,
+                                  change_bps=(level - session_open) * 100.0)
+        except (TypeError, ValueError):
+            pass
+        logger.warning("Tradier %s quote was unusable — falling back to delayed ^TNX.",
+                       TNX_TRADIER_SYMBOL)
+
     bars = yf.Ticker("^TNX").history(period="1d", interval="1m")
     if bars.empty:
         raise RuntimeError("yfinance returned no ^TNX data.")

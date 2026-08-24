@@ -510,7 +510,26 @@ WINDOWS = (
         # not move -- so this buys more credit for more capital at risk,
         # width-minus-credit per contract, and the risk allocation resizes
         # the position accordingly rather than quietly taking more exposure.
-        start=time(13, 30), end=time(15, 0), placement=CREDIT, width=4.0,
+        # 14:00, not 13:30. Swept chain-priced over 60 sessions at one
+        # contract, unconditional entry so placement is the only variable
+        # (scratch/closer.py, 2026-08-24). Per trade, net of friction:
+        #
+        #     entry  short  wing    n  credit  win%   gross   NET
+        #     13:30    +$2    $4   59    0.28   66%   +0.70  -10.70
+        #     14:00    +$2    $4   59    0.21   64%   +2.31   -9.09   <- best
+        #     14:30    +$2    $4   59    0.16   46%   -2.43  -13.83
+        #
+        # READ THE SIGN. The best cell here is the LEAST BAD, not a winner.
+        # Every afternoon premium-selling variant measured on chain prices
+        # loses: this window's own 3-sigma placement at all six widths, this
+        # fixed-offset grid at three entry times and three wings, and the
+        # condor at three offsets. The gross edge peaks near $2.31 a contract
+        # against a round-trip cost of at least $3.40 -- and that floor is
+        # tighter than any quote observed on this chain. It is not a tuning
+        # problem, and moving the entry to 14:00 buys about $1.60 a trade of
+        # a loss that stays a loss.
+        start=_env_time("TRADING_CREDIT_START", "14:00"), end=time(15, 0),
+        placement=CREDIT, width=4.0,
         # 50 ARMS the trail rather than booking; 90 is where it books. The
         # fixed 50% exit was leaving the second half of the credit behind on
         # a 0DTE structure that has no next session to collect it in -- see
@@ -640,7 +659,29 @@ def strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool) -> tup
 # How far out of the money the short leg sits on a credit vertical. Further
 # out means a higher chance of expiring worthless but a smaller credit — the
 # single knob trading win rate against payout.
-OTM_OFFSET = float(os.getenv("TRADING_OTM_OFFSET", "3.0"))
+#
+# $2, down from $3. Swept chain-priced over 60 sessions at one contract with
+# a $4 wing, unconditional entry so placement is the only variable
+# (scratch/offset.py, 2026-08-24). Net of friction, per trade:
+#
+#     14:00 entry            n   avg off  credit  win%    NET     halves
+#       fixed $2            59      2.00    0.21   64%   -9.09   -12.73/ -5.56
+#       fixed $3            59      3.00    0.08   10%  -11.85   -13.78/ -9.99
+#       max(3.0*sd, $3) <-  53      3.18    0.07    8%   -9.69    -9.59/ -9.78
+#       max(3.0*sd, $2)     53      2.62    0.14   45%   -5.80    -6.57/ -5.05
+#       max(2.0*sd, $2)     55      2.17    0.19   67%   -4.86    -5.46/ -4.28
+#       max(1.5*sd, $2)     57      2.09    0.20   67%   -5.92    -6.18/ -5.67
+#
+# The row marked <- is what shipped before this. Two things came out of it.
+# The volatility adaptation IS worth keeping -- every sigma-placed row beats
+# the fixed row at the same floor -- but 3 sigma was too far out, collecting
+# $0.07 and winning 8% of the time. And the halves finally agree at
+# max(2.0*sd, $2), which none of the wider placements manage.
+#
+# It is still a loss. See the note on AFTERNOON_CREDIT's start time: nothing
+# measured on chain prices makes this window positive, and this change takes
+# it from about -9.7 to -4.9 a trade rather than to profit.
+OTM_OFFSET = float(os.getenv("TRADING_OTM_OFFSET", "2.0"))
 
 # Volatility-adaptive alternative to the fixed offset above. The short strike
 # sits SD_MULTIPLE standard deviations from spot, floored at OTM_OFFSET.
@@ -651,7 +692,9 @@ OTM_OFFSET = float(os.getenv("TRADING_OTM_OFFSET", "3.0"))
 # because an SMA lagging below price drags a call strike toward the money --
 # measured live, a nominal "4 standard deviation" placement off the SMA came
 # out $1 CLOSER to spot than the plain fixed offset.
-OTM_SD_MULTIPLE = float(os.getenv("TRADING_OTM_SD_MULTIPLE", "3.0"))
+# 2.0, down from 3.0 — see the sweep table on OTM_OFFSET above, which moved
+# both knobs together because they only mean anything as a pair.
+OTM_SD_MULTIPLE = float(os.getenv("TRADING_OTM_SD_MULTIPLE", "2.0"))
 
 
 def otm_offset_for(sigma: float) -> float:

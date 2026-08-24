@@ -241,24 +241,40 @@ def fetch_qqq_session_vwap() -> "float | None":
         return None
 
 
-def _tradier_session_volume() -> "float | None":
-    """Today's cumulative QQQ volume from Tradier, as a reference."""
+def _tradier_quote(symbol: str) -> "dict | None":
+    """One live quote from Tradier, or None if it cannot be had.
+
+    Tradier's market data is real time on the production key. That matters
+    beyond convenience for anything gating a decision: measured on
+    2026-08-24 at 14:00:01 ET, yfinance's newest ^VIX bar was stamped
+    13:44:46 and its newest ^TNX bar 13:44:52 -- both a quarter of an hour
+    old, because Cboe index data is the classic 15-minute-delayed feed. QQQ
+    was NOT delayed (yfinance 706.91 against Tradier's 706.9099 at the same
+    second), so strike selection was never reading stale prices; the lag was
+    confined to the macro inputs.
+    """
     api_key = os.getenv("TRADIER_API_KEY")
     if not api_key:
         return None
     env = os.getenv("TRADIER_ENV", "sandbox").lower()
     base_url = TRADIER_PRODUCTION_URL if env == "production" else TRADIER_SANDBOX_URL
     try:
-        r = httpx.get(base_url, params={"symbols": "QQQ", "greeks": "false"},
+        r = httpx.get(base_url, params={"symbols": symbol, "greeks": "false"},
                       headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
                       timeout=10.0)
         r.raise_for_status()
         q = r.json().get("quotes", {}).get("quote")
         if isinstance(q, list):
             q = q[0] if q else None
-        return float(q["volume"]) if q and q.get("volume") is not None else None
+        return q if isinstance(q, dict) else None
     except Exception:
         return None
+
+
+def _tradier_session_volume() -> "float | None":
+    """Today's cumulative QQQ volume from Tradier, as a reference."""
+    q = _tradier_quote("QQQ")
+    return float(q["volume"]) if q and q.get("volume") is not None else None
 
 
 # Front-month WTI. Configurable because the front month rolls and a data
@@ -297,12 +313,19 @@ def _regular_session_open(bars: pd.DataFrame) -> float:
 
 
 def fetch_vix() -> VixReading:
-    """CBOE Volatility Index via yfinance, as a level plus its move since the
-    session open.
+    """CBOE Volatility Index — LEVEL from Tradier, session open from yfinance.
 
-    The session delta comes from the same 1-minute bar series we already
-    fetch, so no prior-cycle state has to be persisted to know whether
-    volatility is spiking right now.
+    The level comes from Tradier because yfinance's ^VIX is delayed a
+    quarter of an hour (see _tradier_quote for the measurement) and this
+    number gates trading: nodes.VIX_LEVEL_MAX halts entries in both
+    directions when VIX is at or above its ceiling. A halt that exists for
+    fast-moving tape is the last reading that should arrive fifteen minutes
+    after the fact.
+
+    The session OPEN stays on the yfinance bar series, and deliberately so.
+    It is a fixed historical value — 09:30 ET, hours old by the time it
+    matters — so a delayed feed carries it perfectly well, and the bar
+    series is what makes the anchoring below possible at all.
 
     The anchor is deliberately the 09:30 ET cash open rather than the first
     bar returned: Cboe publishes VIX through an extended session starting
@@ -315,8 +338,28 @@ def fetch_vix() -> VixReading:
     if bars.empty:
         raise RuntimeError("yfinance returned no VIX data.")
 
-    level = float(bars["Close"].iloc[-1])
     session_open = _regular_session_open(bars)
+    delayed_level = float(bars["Close"].iloc[-1])
+
+    quote = _tradier_quote("VIX")
+    live_level = None
+    if quote is not None and quote.get("last") is not None:
+        try:
+            live_level = float(quote["last"])
+        except (TypeError, ValueError):
+            live_level = None
+
+    if live_level is None:
+        # Falling back is safe but silent, and silent is how a feed regresses
+        # to delayed data for a week without anyone noticing.
+        logger.warning(
+            "VIX level falling back to the delayed yfinance print (%.2f) — "
+            "Tradier returned no quote.", delayed_level,
+        )
+        level = delayed_level
+    else:
+        level = live_level
+
     change_pct = ((level - session_open) / session_open) * 100.0 if session_open else 0.0
 
     return VixReading(level=level, session_open=session_open, change_pct=change_pct)

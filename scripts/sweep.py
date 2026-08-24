@@ -55,6 +55,7 @@ What it cannot replay, and what that costs:
   * yfinance serves 60 days of 5-minute bars, so the sample is what it is.
 """
 
+import os
 import sys
 from dataclasses import replace
 from datetime import datetime, time as dtime
@@ -186,6 +187,50 @@ class _Account:
                            limit, limit > 0 and cls.realized_today <= -limit)
 
 
+# Price with the chain-calibrated Black-Scholes pricer instead of broker.py's
+# probability approximation. Off by default so that every result already
+# committed in playbook.py can still be reproduced by re-running this file;
+# turn it on with SWEEP_CHAIN_PRICING=1 and the two are one flag apart.
+CHAIN_PRICING = os.getenv("SWEEP_CHAIN_PRICING", "0") == "1"
+
+# Session VIX, so the smile scales to the day being replayed rather than
+# pricing a March panic at the quiet session it was fitted on.
+_VIX_BY_DAY: dict = {}
+
+
+def _session_vix() -> "float | None":
+    return _VIX_BY_DAY.get(_Clock.now.date())
+
+
+def _patch_pricing():
+    """Swap broker.py's vertical pricing for the chain-calibrated one.
+
+    Both call sites are patched in every namespace that reached for them --
+    broker itself, nodes, and this file's own imported names. Missing one
+    leaves half the replay on the old pricer, which would show up as a
+    result that moves when the flag is toggled but by less than it should.
+    """
+    import trading_engine.chain_pricer as CP
+
+    def spread_value(strategy, long_strike, short_strike, spot, minutes_left=None):
+        mins = broker_mod.minutes_to_expiry() if minutes_left is None else minutes_left
+        return round(CP.vertical_value(spot, mins, long_strike, short_strike,
+                                       strategy == broker_mod.BULL_CALL_SPREAD,
+                                       _session_vix()), 4)
+
+    def credit_value(strategy, short_strike, long_strike, spot, minutes_left=None):
+        mins = broker_mod.minutes_to_expiry() if minutes_left is None else minutes_left
+        return round(CP.credit_value(spot, mins, short_strike, long_strike,
+                                     strategy == broker_mod.CALL_CREDIT_SPREAD,
+                                     _session_vix()), 4)
+
+    for mod in (broker_mod, N, sys.modules[__name__]):
+        if hasattr(mod, "estimate_spread_value"):
+            mod.estimate_spread_value = spread_value
+        if hasattr(mod, "estimate_credit_value"):
+            mod.estimate_credit_value = credit_value
+
+
 def _patch_engine():
     """Point the engine at simulated time and account state."""
     N.datetime = _FakeDatetime
@@ -206,10 +251,19 @@ def _patch_engine():
     # but there are no HISTORICAL chains to replay -- and reaching for today's
     # would price a June entry at August's quotes. Left in, the first run of
     # this sweep filled debit spreads at an expired chain's penny asks and
-    # reported +43,559 a trade. The model is the only pricing a replay can
-    # use, which is precisely why a premium-selling window cannot be validated
-    # by one.
+    # reported +43,559 a trade.
+    #
+    # That used to end "the model is the only pricing a replay can use, which
+    # is precisely why a premium-selling window cannot be validated by one."
+    # SWEEP_CHAIN_PRICING=1 is the way out of that: not a historical chain,
+    # but a pricer CALIBRATED to one. See trading_engine/chain_pricer.py --
+    # against 1,944 logged marks it cuts the error 82%, and on the two
+    # structures the engine actually trades it lands at 1.00x market for the
+    # morning debit spread (against 0.86x) and 1.43x for the afternoon credit
+    # spread (against 13.20x).
     N.fetch_option_chain = lambda *a, **k: {}
+    if CHAIN_PRICING:
+        _patch_pricing()
     # The shadow condor reaches for the chain through data_feed directly, so
     # patching the nodes reference alone left a live HTTP call in every cycle
     # of every sweep -- one per 30-second cache window, plus a warning line
@@ -259,7 +313,27 @@ def _load_sessions(period: str = "60d") -> dict:
         raise SystemExit("yfinance returned no bars")
     bars = bars.tz_convert(NY)
     _HISTORY = bars
+    if CHAIN_PRICING:
+        _load_vix(period)
     return {d: g for d, g in bars.groupby(bars.index.date) if len(g) > 40}
+
+
+def _load_vix(period: str) -> None:
+    """One VIX close per replayed session, to scale the smile.
+
+    Daily, not intraday: the smile is a whole-session calibration, and a
+    sweep that priced 09:45 off the previous close and 15:45 off the current
+    one would be measuring the difference between two feeds rather than a
+    parameter. A missing day simply prices at the reference VIX.
+    """
+    try:
+        vix = yf.Ticker("^VIX").history(period=period, interval="1d")
+        for ts, close in vix["Close"].items():
+            _VIX_BY_DAY[ts.date()] = float(close)
+        print(f"VIX loaded for {len(_VIX_BY_DAY)} sessions "
+              f"({min(_VIX_BY_DAY.values()):.1f} to {max(_VIX_BY_DAY.values()):.1f})")
+    except Exception as exc:
+        print(f"VIX unavailable ({exc}) — pricing every session at the reference level.")
 
 
 def _seen_at(ts) -> pd.DataFrame:
@@ -409,7 +483,12 @@ def sweep_windows(sessions: dict):
     for w in base:
         PB.ENABLED_WINDOWS = frozenset({w.name})
         trades, _ = _run_arm(sessions, w.start)
-        flag = "  [MODEL-PRICED, see docstring]" if w.placement == "CREDIT" else ""
+        # The warning only applies to the old pricer. Under SWEEP_CHAIN_PRICING
+        # a credit row is the one that got MORE trustworthy, not less -- that
+        # is the whole point of the flag -- and leaving the label on would
+        # have the reader discount the row that finally means something.
+        flag = ("" if CHAIN_PRICING
+                else "  [MODEL-PRICED, see docstring]" if w.placement == "CREDIT" else "")
         _report(f"{w.name} ${w.width:.0f} {w.placement}{flag}", trades, len(sessions))
     PB.WINDOWS = base
 

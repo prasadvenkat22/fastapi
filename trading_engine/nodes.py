@@ -657,9 +657,29 @@ def sma_agent(state: TradingState) -> dict:
     except Exception:
         session_move_pct = 0.0
 
+    # How far the session has been down at its WORST, which is a different
+    # question from where it stands now and the one a reversal thesis asks.
+    #
+    # By the time a CLEAN long triggers, price is above VWAP and both EMAs by
+    # construction -- so session_move_pct at that moment is near zero even on
+    # a day that was down a full percent an hour earlier. Gating a reversal
+    # entry on the CURRENT move would therefore never see the fall it is
+    # supposed to be reacting to.
+    try:
+        session_day = bars.index[-1].date()
+        today_bars = bars[[ts.date() == session_day and ts.time() >= dtime(9, 30)
+                           for ts in bars.index]]
+        session_drawdown_pct = (
+            (float(today_bars["Low"].min()) - session_open) / session_open * 100.0
+            if len(today_bars) and session_open else 0.0
+        )
+    except Exception:
+        session_drawdown_pct = 0.0
+
     return {"sma_trend": trend, "ema9_side": ema9_side, "ema_cross": ema_cross,
             "vwap_side": vwap_side, "ema50_reject": ema50_reject,
             "session_move_pct": round(session_move_pct, 3),
+            "session_drawdown_pct": round(session_drawdown_pct, 3),
             "adx": round(adx, 2) if adx_ok else 0.0, "adx_zone": adx_zone}
 
 
@@ -1753,6 +1773,23 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 )
                 window = None
                 action = "SESSION_NOT_WEAK_ENOUGH"
+
+            # The bullish mirror: a reversal entry may demand that the session
+            # HAS BEEN down, whatever it is doing at this moment.
+            if (
+                window is not None and bullish
+                and window.min_session_drawdown_pct is not None
+                and float(state.get("session_drawdown_pct") or 0.0)
+                > -window.min_session_drawdown_pct
+            ):
+                logger.info(
+                    "%s wants the session to have been down %.2f%% before buying the "
+                    "bounce; its worst is %.2f%% — no entry.",
+                    window.name, window.min_session_drawdown_pct,
+                    float(state.get("session_drawdown_pct") or 0.0),
+                )
+                window = None
+                action = "SESSION_NOT_FALLEN_ENOUGH"
 
             # Direction gate. The tier ladder is symmetric but the measured
             # edge is not: on bearish-stack mornings the bear put spread

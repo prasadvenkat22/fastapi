@@ -161,6 +161,20 @@ class PlaybookWindow:
     # losses came from the many mild bearish mornings that stalled and
     # bounced, not from the severe ones.
     min_session_drop_pct: "float | None" = None
+    # The bullish mirror: require the session to have been down at least this
+    # far AT ITS WORST before a LONG entry is allowed.
+    #
+    # Different field and different reading from min_session_drop_pct above,
+    # which gates shorts on where the session stands NOW. A reversal entry
+    # cares where it has BEEN -- by the time CLEAN fires, price is back above
+    # VWAP and both EMAs, so the current move is near zero on exactly the days
+    # this is meant to select. It reads session_drawdown_pct.
+    #
+    # The thesis is the one already written into MORNING_CREDIT's note, from
+    # the other side: MORNING DECLINES IN QQQ TEND TO REVERSE. That fact was
+    # used to explain why two bearish structures fail. This is the bullish
+    # half of the same observation, and until now nobody had tested it.
+    min_session_drawdown_pct: "float | None" = None
     #
     # Swept over 60 sessions on both morning short structures. The gate works
     # -- it separates a bearish signal from a bearish day -- and the two
@@ -399,6 +413,39 @@ WINDOWS = (
         # RSI band, so it is the tier that selects those days. Split in half
         # the good bucket held: +17.99 then +20.00, 50% win rate in both.
         # ATM and OTM flipped sign between halves and stay off entirely.
+        # NO drawdown gate, and this one was worth testing properly.
+        #
+        # The idea: playbook already records that morning declines in QQQ tend
+        # to reverse, so take the CLEAN long only on days that had already
+        # fallen. A crude harness liked it -- +55.45 a trade above a 1.0%
+        # drawdown against -12.56 below it. Run through the real engine
+        # (sweep.py daydrop), chain-priced:
+        #
+        #     no gate                27 tr  37% win   +89.11/tr  halves +171.49/  +12.62
+        #     had been down >=0.30%  21 tr  33% win   +49.13/tr  halves  -24.28/ +115.86
+        #     had been down >=0.50%  15 tr  27% win   -54.37/tr  halves -234.49/ +103.23
+        #     had been down >=0.70%   6 tr  50% win  +455.62/tr  halves -486.17/+1397.40
+        #     had been down >=0.80%   5 tr  60% win  +615.93/tr  halves -556.27/+1397.40
+        #     had been down >=1.00%   2 tr 100% win +1422.78/tr
+        #
+        # Read the ROW COUNT before the average. The spectacular cells are two
+        # to six trades, and their halves disagree by nearly two thousand
+        # dollars -- one or two enormous winners, not an edge. The cells with
+        # enough trades to mean anything are WORSE than no gate, and 0.50% is
+        # outright negative while 0.30% and 0.70% are positive. A real
+        # threshold effect is monotone; this alternates, which is what noise
+        # looks like when it is sliced finely enough.
+        #
+        # The crude harness that liked it scored all trades at -2.10 where the
+        # engine scores +89.11 -- it was splitting a P&L it could not
+        # reproduce, because it had no ratchet. That is the lesson worth
+        # keeping: a filter tested on a harness that misses the exit logic is
+        # measuring the harness.
+        #
+        # min_session_drawdown_pct and state["session_drawdown_pct"] stay,
+        # wired and unused, so the next person can re-run this in one line
+        # when the sample is bigger.
+        min_session_drawdown_pct=None,
         entry_tiers=frozenset({"CLEAN"}),
         # Long only. CLEAN is symmetric and its bear side opens a bear put
         # spread, which was never measured before it shipped. Measured now, on

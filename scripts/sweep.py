@@ -38,6 +38,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py rideratchet # profit protection for a riding position
     python scripts/sweep.py retries     # morning window length: does a second entry pay?
     python scripts/sweep.py handoff     # should the morning still hand its slot over at 13:25?
+    python scripts/sweep.py daydrop     # does the morning long want the day to have fallen first?
     python scripts/sweep.py breach      # model-free: how often a strike distance holds
     python scripts/sweep.py windows     # every window solo: which earns, which does not
     python scripts/sweep.py orb         # single-leg weekly calls on an opening-range break
@@ -491,6 +492,40 @@ def sweep_windows(sessions: dict):
         flag = ("" if CHAIN_PRICING
                 else "  [MODEL-PRICED, see docstring]" if w.placement == "CREDIT" else "")
         _report(f"{w.name} ${w.width:.0f} {w.placement}{flag}", trades, len(sessions))
+    PB.WINDOWS = base
+
+
+def sweep_daydrop(sessions: dict):
+    """Does the morning long want the session to have FALLEN first?
+
+    playbook.py already records that morning declines in QQQ tend to reverse,
+    and uses it to explain why a put debit spread and a bear call spread both
+    fail in that window. This is the bullish half of the same fact, which was
+    never tested: take the CLEAN long only when the day has already been down
+    at least N% at its worst.
+
+    A crude harness put the effect at +55.45 a trade above a 1.0% drawdown
+    against -12.56 below it, on six trades -- and scored all trades at -2.10
+    where the engine scores +122.62, so it was splitting a P&L it could not
+    reproduce. This runs the real engine.
+
+    WATCH THE ROW COUNT, not just the P&L. A gate that admits nothing prints
+    a beautiful average over two trades.
+    """
+    print("")
+    print("MORNING DRAWDOWN GATE -- require the session to have been down first")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base = PB.WINDOWS
+    for drawdown in (None, 0.3, 0.5, 0.7, 0.8, 1.0, 1.25):
+        PB.WINDOWS = tuple(
+            replace(w, min_session_drawdown_pct=drawdown) if w.name == "MORNING_DRIFT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+        trades, per_day = _run_arm(sessions, dtime(9, 45))
+        label = "no gate (live)" if drawdown is None else f"had been down >= {drawdown:.2f}%"
+        _report(label, trades, len(sessions))
     PB.WINDOWS = base
 
 
@@ -1799,6 +1834,8 @@ def main():
         sweep_morning(sessions)
     if which in ("windows", "all"):
         sweep_windows(sessions)
+    if which in ("daydrop", "all"):
+        sweep_daydrop(sessions)
     if which in ("handoff", "all"):
         sweep_handoff(sessions)
     if which in ("retries", "all"):

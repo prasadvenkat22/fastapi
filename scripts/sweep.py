@@ -37,6 +37,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py creditgate  # does the credit window need a directional tier?
     python scripts/sweep.py rideratchet # profit protection for a riding position
     python scripts/sweep.py retries     # morning window length: does a second entry pay?
+    python scripts/sweep.py handoff     # should the morning still hand its slot over at 13:25?
     python scripts/sweep.py breach      # model-free: how often a strike distance holds
     python scripts/sweep.py windows     # every window solo: which earns, which does not
     python scripts/sweep.py orb         # single-leg weekly calls on an opening-range break
@@ -490,6 +491,46 @@ def sweep_windows(sessions: dict):
         flag = ("" if CHAIN_PRICING
                 else "  [MODEL-PRICED, see docstring]" if w.placement == "CREDIT" else "")
         _report(f"{w.name} ${w.width:.0f} {w.placement}{flag}", trades, len(sessions))
+    PB.WINDOWS = base
+
+
+def sweep_handoff(sessions: dict):
+    """Should the morning winner still hand its slot to the credit window?
+
+    The 13:25 handoff exists because the engine holds one position at a time,
+    and it was justified on these numbers:
+
+        morning rides to 15:45, credit never trades   +36.40 a day
+        morning hands over at 13:25, credit trades    +80.87 a day
+
+    Both were MODEL-PRICED, and the model overstates a far-OTM credit spread
+    by up to 18x (see trading_engine/chain_pricer.py). The handoff gives up a
+    riding morning position to buy a credit trade -- so if the credit trade
+    is not worth 63 dollars a day, the trade that justified the cut was
+    priced on premium that was never there.
+
+    That is the whole question here, and it is only answerable with
+    SWEEP_CHAIN_PRICING=1. Run it both ways: the arms should DIVERGE, and if
+    they do not, the flag is not reaching the pricer.
+    """
+    print("")
+    print("13:25 HANDOFF -- does giving the slot to the credit window still pay?")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL (see docstring)'}")
+    print("")
+    base = PB.WINDOWS
+    for ride_until, windows, label in (
+        (dtime(13, 25), {"MORNING_DRIFT", "AFTERNOON_CREDIT"}, "hand over at 13:25, credit trades"),
+        (None, {"MORNING_DRIFT", "AFTERNOON_CREDIT"}, "ride to 15:45, credit gets what is left"),
+        (None, {"MORNING_DRIFT"}, "ride to 15:45, credit window OFF"),
+        (dtime(13, 25), {"MORNING_DRIFT"}, "hand over at 13:25, credit window OFF"),
+    ):
+        PB.WINDOWS = tuple(
+            replace(w, ride_until=ride_until) if w.name == "MORNING_DRIFT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset(windows)
+        _, per_day = _run_arm(sessions, dtime(9, 45))
+        _report_daily(label, per_day)
     PB.WINDOWS = base
 
 
@@ -1758,6 +1799,8 @@ def main():
         sweep_morning(sessions)
     if which in ("windows", "all"):
         sweep_windows(sessions)
+    if which in ("handoff", "all"):
+        sweep_handoff(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
     if which in ("events", "all"):

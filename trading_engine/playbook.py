@@ -329,7 +329,24 @@ WINDOWS = (
         # since depth follows width by default and depth is what measured
         # well. Untested at this width: the sweep in the block below covers
         # $3, $4 and $5, but the $5 row was run at a $2 depth, not $5.
-        start=time(10, 15), end=time(11, 30), placement=ITM, width=6.0,
+        # End 12:30, not 11:30. Chain-priced over 60 sessions with the credit
+        # window off, varying only this field:
+        #
+        #     entries until 11:30   21 tr  +121.41/tr  +2549 tot  halves +367.82/-102.60
+        #     entries until 12:30   27 tr   +89.11/tr  +2406 tot  halves +171.49/ +12.62
+        #     entries until 13:00   30 tr   +52.57/tr  +1577 tot  halves  +67.81/ +37.34
+        #
+        # 11:30 has the highest total and the worst claim to it. Its second
+        # half is NEGATIVE -- the whole +2549 comes from the older half of the
+        # sample, which by this file's own standard is a result about the
+        # sample rather than about the rule. 12:30 gives up 143 dollars of
+        # total, takes 29% more trades, and is the shortest window whose
+        # halves both come out positive.
+        #
+        # That also answers the second-half decay this window showed at 11:30:
+        # it was substantially an artefact of a window too short to re-enter.
+        # A setup that re-fires at noon had nowhere to fire into.
+        start=time(10, 15), end=time(12, 30), placement=ITM, width=6.0,
         # $6 wide with the long leg $2 in the money, which is close to the
         # ATM-long / OTM-short shape rather than the deep one this window
         # carried before. Judged per DAY with the credit window live, which

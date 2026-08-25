@@ -457,6 +457,26 @@ TNX_SPIKE_BPS = float(os.getenv("TRADING_TNX_SPIKE_BPS", "4.0"))
 # out of a tape that still prints positive.
 BREADTH_COLLAPSE_RATIO = float(os.getenv("TRADING_BREADTH_COLLAPSE_RATIO", "0.40"))
 
+# Whether the LLM verdict is one of the AND-terms in the macro gate.
+#
+# The other four terms are arithmetic on measured numbers -- breadth, VIX
+# level, VIX velocity, yield velocity. This one is a language model reading
+# headlines, and it is the term that has been binding:
+#
+#     2026-08-24   55 cycles passed all four objective terms,  0 went GOOD
+#     2026-08-25   31 cycles passed all four objective terms, 11 went GOOD
+#
+# It is NOT uniformly negative -- 08-19 ran 67% GOOD and 08-21 74% -- so
+# deleting it would be trading one unmeasured gate for another. And it cannot
+# be swept: scripts/sweep.py's _session_state hardcodes market_sentiment to
+# GOOD, so every parameter in this engine was measured with this gate wired
+# open. Its contribution, in either direction, is unknown.
+#
+# Left ON, behind a flag, so the two can be run against each other forward
+# with macro_block_reason recording which term refused each cycle. Turning it
+# off leaves the four objective terms, which is a stricter gate than nothing.
+MACRO_LLM_GATE = os.getenv("TRADING_MACRO_LLM_GATE", "true").lower() == "true"
+
 # Standard Wilder's RSI(14) thresholds.
 RSI_OVERBOUGHT = float(os.getenv("TRADING_RSI_OVERBOUGHT", "70.0"))
 RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
@@ -1111,13 +1131,31 @@ async def market_signals_agent(state: TradingState) -> dict:
             tnx.level, tnx.change_bps, tnx.session_open,
         )
 
-    sentiment = "GOOD" if (
-        breadth_is_bullish
-        and vix.level < VIX_LEVEL_MAX
-        and vix.change_pct < VIX_SPIKE_PCT
-        and not yields_spiking
-        and llm_verdict == "GOOD"
-    ) else "BAD"
+    # Each term named, so the log records WHICH one refused rather than only
+    # that something did.
+    #
+    # This was inferred by elimination on 2026-08-25 and should not have had
+    # to be. Over 08-24 and 08-25, cycles where every objective term passed
+    # -- breadth positive, not collapsing, yields quiet, VIX 15.7 against a
+    # 22.0 ceiling and -0.76% against a 10% spike limit:
+    #
+    #     2026-08-24   55 such cycles,  0 GOOD   (100% refused)
+    #     2026-08-25   31 such cycles, 11 GOOD   ( 65% refused)
+    #
+    # By elimination the LLM verdict refused all 55 on a day QQQ rose $6.50
+    # off its low. That is a real finding and it took a database query and a
+    # process of elimination to reach. One field makes it readable.
+    gates = {
+        "breadth": breadth_is_bullish,
+        "vix_level": vix.level < VIX_LEVEL_MAX,
+        "vix_spike": vix.change_pct < VIX_SPIKE_PCT,
+        "yields": not yields_spiking,
+        "llm": llm_verdict == "GOOD" or not MACRO_LLM_GATE,
+    }
+    failed = [name for name, ok in gates.items() if not ok]
+    sentiment = "GOOD" if not failed else "BAD"
+    if failed:
+        logger.info("Macro BAD — refused by: %s", ", ".join(failed))
 
     # BAD means "unsafe to be LONG" — collapsing breadth, spiking fear,
     # rising yields. Every one of those is a reason a bear put spread should
@@ -1138,6 +1176,11 @@ async def market_signals_agent(state: TradingState) -> dict:
 
     return {
         "market_sentiment": sentiment,
+        # Which AND-term refused, comma-joined, empty when GOOD. The whole
+        # point is that "BAD" on its own is unactionable: breadth turning
+        # negative and a headline model disliking the tape are different
+        # facts with different fixes.
+        "macro_block_reason": ",".join(failed),
         "macro_halt": halt,
         # The breadth that just gated this decision, as numbers rather than as
         # a sentence. Both gates below read these, and neither could be

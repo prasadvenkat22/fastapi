@@ -42,7 +42,30 @@ class TradingState(TypedDict):
     breadth_net_ratio: float   # addq / basket size
     breadth_drawdown: float    # net ratio, down from the recent window's peak
     breadth_collapsing: bool   # drawdown past the collapse threshold
+    # Where the session stands, and where it has BEEN.
+    #
+    # DECLARING THESE IS NOT COSMETIC. LangGraph carries only the keys this
+    # TypedDict names: anything else a node returns is dropped before the next
+    # node sees it. sma_agent has been returning session_move_pct for a long
+    # time and it was never declared here, so every live read of
+    # state["session_move_pct"] -- DAY_TREND_MAX_DROP_PCT and a window's
+    # min_session_drop_pct -- has been resolving to None.
+    #
+    # It never showed, because both of those gates are off by default. It
+    # would have shown the day one was switched on, as a gate that worked
+    # perfectly in every sweep and never once fired in production:
+    # scripts/sweep.py builds its state as a plain dict via _session_state,
+    # which has no schema and drops nothing. That divergence is the dangerous
+    # part -- a sweep and a live cycle disagreeing about what the engine can
+    # even see.
+    #
+    # Found on 2026-08-25 when macro_block_reason and session_drawdown_pct
+    # were both added, both reached the log line, and neither reached the
+    # database.
+    session_move_pct: float    # move from the 09:30 open, percent
+    session_drawdown_pct: float  # the session's WORST point vs the open, percent
     market_sentiment: str      # 'GOOD' or 'BAD'
+    macro_block_reason: str    # which AND-term refused: breadth/vix_level/vix_spike/yields/llm
     macro_halt: bool           # VIX at/above its ceiling — no entries in either direction
     macro_confidence: float    # model's confidence in the macro verdict
     macro_risk_factor: str     # model's one-line reason, logged for review

@@ -264,6 +264,18 @@ def _patch_engine():
     # morning debit spread (against 0.86x) and 1.43x for the afternoon credit
     # spread (against 13.20x).
     N.fetch_option_chain = lambda *a, **k: {}
+    # Size as the STRATEGY would, not as the live order cap allows.
+    #
+    # nodes.py clamps quantity to TRADING_MAX_ORDER_CONTRACTS while
+    # LIVE_ORDERS is on, so the engine tracks what the broker was actually
+    # given. Correct live, wrong here: with live orders enabled on the
+    # droplet the same configuration that measured +89 a trade came back at
+    # +8.48, because every arm was silently sized to one contract instead of
+    # seven. A sweep must measure the strategy, not the training-wheels cap
+    # that happens to be set on the box it runs on.
+    #
+    # Found on 2026-08-25 by a total that moved 10x with no parameter change.
+    N.tradier_orders.LIVE_ORDERS = False
     if CHAIN_PRICING:
         _patch_pricing()
     # The shadow condor reaches for the chain through data_feed directly, so
@@ -525,6 +537,41 @@ def sweep_daydrop(sessions: dict):
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
         trades, per_day = _run_arm(sessions, dtime(9, 45))
         label = "no gate (live)" if drawdown is None else f"had been down >= {drawdown:.2f}%"
+        _report(label, trades, len(sessions))
+    PB.WINDOWS = base
+
+
+def sweep_target(sessions: dict):
+    """A fixed profit target against the ride-and-ratchet the window uses.
+
+    MORNING_DRIFT sets ride_to_close, so take_profit_pct is retained but never
+    consulted -- the ratchet arms at +32% and exits on a 20% giveback instead.
+    A crude harness (no ratchet at all) liked a fixed +40% target: -11.10 a
+    trade riding, +8.24 with the target, halves +9.94/+6.54.
+
+    That harness's "ride" arm is a strawman, because riding WITHOUT a ratchet
+    is not what the engine does. If the target only beats an unratcheted ride
+    it has discovered the ratchet, not a better exit. This runs both against
+    the real thing.
+    """
+    print("")
+    print("EXIT STYLE -- fixed target vs ride-and-ratchet")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base = PB.WINDOWS
+    arms = [(True, None, "ride + ratchet (live)")]
+    for tp in (20.0, 30.0, 40.0, 50.0, 60.0):
+        arms.append((False, tp, f"fixed target +{tp:.0f}%, no ride"))
+    for ride, tp in ((True, None),):
+        pass
+    for ride, tp, label in arms:
+        PB.WINDOWS = tuple(
+            replace(w, ride_to_close=ride, take_profit_pct=(tp if tp else w.take_profit_pct))
+            if w.name == "MORNING_DRIFT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+        trades, _ = _run_arm(sessions, dtime(9, 45))
         _report(label, trades, len(sessions))
     PB.WINDOWS = base
 
@@ -1836,6 +1883,8 @@ def main():
         sweep_windows(sessions)
     if which in ("daydrop", "all"):
         sweep_daydrop(sessions)
+    if which in ("target", "all"):
+        sweep_target(sessions)
     if which in ("handoff", "all"):
         sweep_handoff(sessions)
     if which in ("retries", "all"):

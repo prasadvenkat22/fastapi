@@ -480,6 +480,30 @@ VIX_SPIKE_PCT = float(os.getenv("TRADING_VIX_SPIKE_PCT", "10.0"))
 # all three (-0.89%, -0.59%, -0.30%). Three days is far too small to call an
 # edge -- it is enough to say the gate can now fire at all, which is the
 # precondition for ever learning whether it should.
+#
+# IT HAS NEVER FIRED ON A TRADE. Re-tested 2026-08-25 against intraday ^TNX
+# over 49 sessions and the 31 CLEAN morning entries inside them:
+#
+#     no yield gate          31 tr  35% win   -2.31/tr
+#     skip when TNX >= +2bp  28 tr  36% win   -7.34/tr   (blocks 3)
+#     skip when TNX >= +3bp  31 tr  35% win   -2.31/tr   (blocks 0)
+#     skip when TNX >= +4bp  31 tr  35% win   -2.31/tr   (blocks 0)  <- live
+#     skip when TNX >= +6bp  31 tr  35% win   -2.31/tr   (blocks 0)
+#
+# So the three sessions that reached 4bp never coincided with an entry, and
+# the threshold is inert rather than protective. The one level that DOES
+# block (2bp) makes the result worse, so the three trades it rejects were
+# among the better ones.
+#
+# Left at 4.0 because inert costs nothing and the tail case it is aimed at --
+# a genuine rate shock -- is not in a 49-session sample. Do NOT tighten it to
+# 2bp on the strength of the paragraph above this one; that was measured and
+# it loses.
+#
+# Crude was tested the same way and is NOT gated for the same reason, only
+# worse: every threshold that blocks anything makes the result worse, and at
+# +0.5% the ten entries it would reject average +0.15 a trade against -3.48
+# for the twenty-six it keeps. It filters out the better half.
 TNX_SPIKE_BPS = float(os.getenv("TRADING_TNX_SPIKE_BPS", "4.0"))
 
 # Breadth is judged on level and trend alike. Expressed as a drop in net
@@ -504,9 +528,20 @@ BREADTH_COLLAPSE_RATIO = float(os.getenv("TRADING_BREADTH_COLLAPSE_RATIO", "0.40
 # GOOD, so every parameter in this engine was measured with this gate wired
 # open. Its contribution, in either direction, is unknown.
 #
-# Left ON, behind a flag, so the two can be run against each other forward
-# with macro_block_reason recording which term refused each cycle. Turning it
-# off leaves the four objective terms, which is a stricter gate than nothing.
+# SWITCHED OFF LIVE on 2026-08-25 (TRADING_MACRO_LLM_GATE=false in the
+# droplet's .env.production). The default here stays "true" so a fresh
+# checkout behaves as it always did; the deployed engine is the experiment.
+#
+# The argument for turning it off is not that it is bad -- it is that nobody
+# knows. Every number in strategy_notes.txt was produced with this term wired
+# open, so the deployed engine was strictly more restrictive than anything
+# ever measured, by an unmeasured amount. Off, the two are the same engine.
+#
+# The four objective terms remain: breadth positive and not collapsing, VIX
+# under 22, VIX velocity under 10%, yields under 4bp. What is given up is the
+# headline read -- it refused on a Putin nuclear-doctrine story on 2026-08-25
+# -- and that may well be worth something. macro_block_reason now records
+# every refusal, so a few weeks of forward data answers it either way.
 MACRO_LLM_GATE = os.getenv("TRADING_MACRO_LLM_GATE", "true").lower() == "true"
 
 # Standard Wilder's RSI(14) thresholds.

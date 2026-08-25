@@ -617,3 +617,48 @@ physical delivery, not cash-settled like SPX. A short call finishing a penny
 in the money assigns short shares. The 15:45 force close covers this -- but
 the exits run off a once-a-minute cron with no resting order at the exchange,
 so a failed closing order has no fallback.
+
+--------------------------------------------------------------------------------
+15. WIDTH AND STOPS, RESOLVED IN OPPOSITE DIRECTIONS  (2026-08-25)
+--------------------------------------------------------------------------------
+
+MORNING WIDTH 6 -> 10. Chain-priced through the engine, 60 sessions:
+
+    $6 wide   25 tr  36% win   +55.28/tr  +1381.91  halves +278.30/-150.59
+    $8 wide   24 tr  38% win  +196.78/tr  +4722.64  halves +521.92/-128.36
+    $10 wide  23 tr  39% win  +294.41/tr  +6771.53  halves +628.84/ -12.14
+
+Monotone in P&L, in win rate, AND in the second half, which is the test this
+file trusts. Max profit at a 41% debit goes from $332 to about $590.
+
+Read the exit mix before believing the headline: at $10 wide the trades exit
+HANDOFF 9 / STOP_LOSS 14 and never once reach the ride ceiling. So the wider
+spread is NOT getting closer to its maximum -- the short leg is $8 OTM and
+QQQ's daily range is $3.50-6.30, so it is almost never approached. What
+widening actually buys is a cheaper spread per dollar of width, which is more
+upside per dollar risked on the days that run.
+
+STOPS GO THE OPPOSITE WAY FOR THE TWO STRUCTURES, and this is the part worth
+keeping:
+
+    MORNING debit spread, stop swept
+        -20% (live)  +24.56/day    trades +162.58/tr  36% win
+        -30%          -1.37/day           +90.55/tr   41% win
+        -40%         -27.72/day           +35.89/tr   45% win
+        -50%         -37.03/day           +14.63/tr   48% win
+
+    AFTERNOON credit spread, stop swept
+        -100%        -47.14/tr   26/67 stopped
+        -300%        -44.24/tr    6/59
+        -600%        -30.14/tr    3/59
+
+Widening the stop helps the CREDIT spread and destroys the DEBIT one, and in
+both cases the win rate moves the other way from the P&L. The reason is what
+the stop is for in each structure. A debit spread's loss is already capped at
+the premium paid, so its stop is not limiting risk -- it is rotating capital
+out of a dead trade and into the next setup, and holding losers costs the
+next entry. A credit spread's loss is capped by the long leg instead, so its
+stop adds nothing and only converts unrealised noise into realised loss.
+
+"Do not book losses early" is therefore right for one window and wrong for
+the other. It is the single most counter-intuitive result in this file.

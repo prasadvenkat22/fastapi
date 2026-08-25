@@ -304,7 +304,8 @@ WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
         start=_env_time("TRADING_MOMENTUM_START", "09:45"),
-        end=_env_time("TRADING_MOMENTUM_END", "10:15"), placement=ITM, width=3.0,
+        end=_env_time("TRADING_MOMENTUM_END", "10:15"), placement=ITM,
+        width=_env_float("TRADING_MOMENTUM_WIDTH", 3.0),
         # Widest stop of the day. Measured over a month the average 5-minute
         # bar here spans $1.78 -- more than double the midday $0.83 -- and a
         # -20% stop on an ITM 3-wide is only a $0.65 move. The opening window
@@ -362,7 +363,8 @@ WINDOWS = (
         # it was substantially an artefact of a window too short to re-enter.
         # A setup that re-fires at noon had nowhere to fire into.
         start=_env_time("TRADING_MORNING_START", "10:15"),
-        end=_env_time("TRADING_MORNING_END", "12:30"), placement=ITM, width=6.0,
+        end=_env_time("TRADING_MORNING_END", "12:30"), placement=ITM,
+        width=_env_float("TRADING_MORNING_WIDTH", 6.0),
         # $6 wide with the long leg $2 in the money, which is close to the
         # ATM-long / OTM-short shape rather than the deep one this window
         # carried before. Judged per DAY with the credit window live, which
@@ -407,7 +409,9 @@ WINDOWS = (
         #
         # take_profit_pct is retained for reference but is not consulted while
         # ride_to_close is set.
-        take_profit_pct=35.0, stop_loss_pct=-20.0, risk_off_pct=-18.0,
+        take_profit_pct=_env_float("TRADING_MORNING_TAKE_PROFIT", 35.0),
+        stop_loss_pct=_env_float("TRADING_MORNING_STOP_PCT", -20.0),
+        risk_off_pct=_env_float("TRADING_MORNING_RISK_OFF_PCT", -18.0),
         # CLEAN only. Measured at a 10:15 entry over 60 sessions, ITM call
         # debit spreads returned +18.74 a trade on the 16 days the full
         # bullish stack held (price above VWAP and the 20 SMA, 9 EMA above
@@ -572,7 +576,8 @@ WINDOWS = (
         # declining a bet it has measured.
         name="MORNING_CREDIT",
         start=_env_time("TRADING_MORNING_CREDIT_START", "10:15"),
-        end=_env_time("TRADING_MORNING_CREDIT_END", "11:30"), placement=CREDIT, width=4.0,
+        end=_env_time("TRADING_MORNING_CREDIT_END", "11:30"), placement=CREDIT,
+        width=_env_float("TRADING_MORNING_CREDIT_WIDTH", 4.0),
         take_profit_pct=50.0, final_take_profit_pct=90.0,
         stop_loss_pct=-100.0, risk_off_pct=-60.0,
         risk_share=0.50, ratchet_giveback=0.30,
@@ -586,7 +591,8 @@ WINDOWS = (
     PlaybookWindow(
         name="ITM_GRINDER",
         start=_env_time("TRADING_GRINDER_START", "11:30"),
-        end=_env_time("TRADING_GRINDER_END", "13:30"), placement=ITM, width=3.0,
+        end=_env_time("TRADING_GRINDER_END", "13:30"), placement=ITM,
+        width=_env_float("TRADING_GRINDER_WIDTH", 3.0),
         # Quietest window of the session at $0.83 a bar, which is exactly what
         # a positive-theta ITM structure wants: the engine-wide -20% stop is
         # comfortably outside one bar here.
@@ -621,13 +627,51 @@ WINDOWS = (
         # a loss that stays a loss.
         start=_env_time("TRADING_CREDIT_START", "14:00"),
         end=_env_time("TRADING_CREDIT_END", "15:00"),
-        placement=CREDIT, width=4.0,
+        placement=CREDIT,
+        width=_env_float("TRADING_CREDIT_WIDTH", 4.0),
         # 50 ARMS the trail rather than booking; 90 is where it books. The
         # fixed 50% exit was leaving the second half of the credit behind on
         # a 0DTE structure that has no next session to collect it in -- see
         # final_take_profit_pct above. -100% is the classic credit stop: buy
         # it back for twice what you sold it for.
-        take_profit_pct=50.0, final_take_profit_pct=90.0, stop_loss_pct=-100.0, risk_off_pct=-60.0,
+        take_profit_pct=_env_float("TRADING_CREDIT_TAKE_PROFIT", 50.0),
+        final_take_profit_pct=_env_float("TRADING_CREDIT_FINAL_TAKE_PROFIT", 90.0),
+        # -600%, not -100%. THE STOP WAS THE WRONG SHAPE FOR THIS STRUCTURE.
+        #
+        # -100 came from the debit side, where it means "the premium paid is
+        # gone" and is a real limit. On a CREDIT position -100% means the
+        # spread DOUBLED -- and doubling a sixteen-cent credit is thirty-two
+        # cents, which a 67-cent move in QQQ produces without ever touching
+        # the short strike.
+        #
+        # That is not a hypothetical. Live on 2026-08-25 the engine sold
+        # 711/715 for 0.16 at 14:34 and bought it back at 0.39 at 14:46 for
+        # -$23. QQQ's high for the rest of the session was 710.67 against a
+        # 711 short strike: the spread expired worthless. Held, it pays
+        # +$14.60. The stop cost $39 on a day the underlying fell $3.64 --
+        # the exact day this structure exists for.
+        #
+        # A credit spread's loss is ALREADY capped at width-minus-credit by
+        # the long leg. The stop does not lower that ceiling; it converts
+        # unrealised noise into realised loss. Swept chain-priced through the
+        # engine, 60 sessions:
+        #
+        #     -100% (was)   16% win   26/67 stopped   -47.14/tr   worst -1020
+        #     -300%         19% win    6/59 stopped   -44.24/tr   worst -1020
+        #     -400%         20% win    4/59 stopped   -36.52/tr   worst  -680
+        #     -600%         22% win    3/59 stopped   -30.14/tr   worst  -340
+        #
+        # Monotone in both P&L and worst day, and at -600% the stop fires 3
+        # times in 59 -- which is the intent: let the spread expire worthless
+        # rather than booking a loss on a wiggle.
+        #
+        # IT DOES NOT MAKE THE WINDOW PAY. -30 a trade is still -30 a trade.
+        # A breach-based stop was also tested (exit when spot reaches the
+        # short strike) and measured WORSE than the percentage stop: a
+        # breached spread often comes back, and stopping realises the loss at
+        # its worst moment.
+        stop_loss_pct=_env_float("TRADING_CREDIT_STOP_PCT", -600.0),
+        risk_off_pct=-60.0,
         # 0.50. Swept over 60 sessions with equity compounding, the daily cap
         # live and indicators warmed over five sessions as the live feed warms
         # them: +57.98 a day at 20%, +104.27 at 35%, +108.30 at 50%, and

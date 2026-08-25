@@ -415,13 +415,24 @@ the parameter. Four of the last five ideas tested failed that bar.
 12. KNOWN LIMITS
 --------------------------------------------------------------------------------
 
-  - No orders are routed anywhere. The broker is a mock; fills are assumed.
-    A resting stop at the exchange does not exist, so a gap through a short
-    strike is bounded by the tail cap and by nothing else.
-  - The credit window earns most of the P&L and cannot be validated by
-    backtest: there are no historical option chains, and the model that would
-    price them is the one being corrected. Its forward record, chain-priced
-    since 2026-08-21, is the evidence that counts.
+  - Orders ARE routed now, to the live account, since 2026-08-25. What is
+    still true: no resting stop exists at the exchange. Every exit is decided
+    by a cron cycle that runs once a minute, so a gap through a short strike
+    is bounded by the tail cap, by the one-contract order cap, and by nothing
+    else. A minute is a long time in a 0DTE gamma move.
+  - The credit window no longer earns most of the P&L; chain-priced it loses
+    at every parameter tried (section 13). It cannot be validated by backtest
+    either -- there are no historical option chains -- so its forward record
+    is still the evidence that counts, and that record is now one real trade
+    at -$23.
+  - THE LLM MACRO TERM HAS NEVER BEEN IN ANY BACKTEST. sweep.py hardcodes
+    market_sentiment="GOOD", so every number in this file was produced with
+    that gate wired open. It was switched off live on 2026-08-25 so that the
+    deployed engine and the measured engine are finally the same engine.
+  - The chain-calibrated pricer has ONE anchor session for its volatility
+    smile and one afternoon for its term structure. Absolute dollars from any
+    sweep are indicative; the ranking between arms is the usable output.
+    scripts/capture_chain.py collects the snapshots that would fix this.
   - trade_setup_vectors stores every closed trade's setup and outcome and is
     not consulted by anything. It waits for enough trades that "three similar
     setups all lost" is signal rather than noise.

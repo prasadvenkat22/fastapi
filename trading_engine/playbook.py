@@ -303,7 +303,8 @@ class PlaybookWindow:
 WINDOWS = (
     PlaybookWindow(
         name="ATM_MOMENTUM",
-        start=_env_time("TRADING_MOMENTUM_START", "09:45"), end=time(10, 15), placement=ITM, width=3.0,
+        start=_env_time("TRADING_MOMENTUM_START", "09:45"),
+        end=_env_time("TRADING_MOMENTUM_END", "10:15"), placement=ITM, width=3.0,
         # Widest stop of the day. Measured over a month the average 5-minute
         # bar here spans $1.78 -- more than double the midday $0.83 -- and a
         # -20% stop on an ITM 3-wide is only a $0.65 move. The opening window
@@ -360,7 +361,8 @@ WINDOWS = (
         # That also answers the second-half decay this window showed at 11:30:
         # it was substantially an artefact of a window too short to re-enter.
         # A setup that re-fires at noon had nowhere to fire into.
-        start=time(10, 15), end=time(12, 30), placement=ITM, width=6.0,
+        start=_env_time("TRADING_MORNING_START", "10:15"),
+        end=_env_time("TRADING_MORNING_END", "12:30"), placement=ITM, width=6.0,
         # $6 wide with the long leg $2 in the money, which is close to the
         # ATM-long / OTM-short shape rather than the deep one this window
         # carried before. Judged per DAY with the credit window live, which
@@ -569,7 +571,8 @@ WINDOWS = (
         # 13:30. Sitting out is not a gap in the strategy; it is the strategy
         # declining a bet it has measured.
         name="MORNING_CREDIT",
-        start=time(10, 15), end=time(11, 30), placement=CREDIT, width=4.0,
+        start=_env_time("TRADING_MORNING_CREDIT_START", "10:15"),
+        end=_env_time("TRADING_MORNING_CREDIT_END", "11:30"), placement=CREDIT, width=4.0,
         take_profit_pct=50.0, final_take_profit_pct=90.0,
         stop_loss_pct=-100.0, risk_off_pct=-60.0,
         risk_share=0.50, ratchet_giveback=0.30,
@@ -582,7 +585,8 @@ WINDOWS = (
     ),
     PlaybookWindow(
         name="ITM_GRINDER",
-        start=time(11, 30), end=time(13, 30), placement=ITM, width=3.0,
+        start=_env_time("TRADING_GRINDER_START", "11:30"),
+        end=_env_time("TRADING_GRINDER_END", "13:30"), placement=ITM, width=3.0,
         # Quietest window of the session at $0.83 a bar, which is exactly what
         # a positive-theta ITM structure wants: the engine-wide -20% stop is
         # comfortably outside one bar here.
@@ -615,7 +619,8 @@ WINDOWS = (
         # tighter than any quote observed on this chain. It is not a tuning
         # problem, and moving the entry to 14:00 buys about $1.60 a trade of
         # a loss that stays a loss.
-        start=_env_time("TRADING_CREDIT_START", "14:00"), end=time(15, 0),
+        start=_env_time("TRADING_CREDIT_START", "14:00"),
+        end=_env_time("TRADING_CREDIT_END", "15:00"),
         placement=CREDIT, width=4.0,
         # 50 ARMS the trail rather than booking; 90 is where it books. The
         # fixed 50% exit was leaving the second half of the credit behind on

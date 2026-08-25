@@ -426,3 +426,97 @@ the parameter. Four of the last five ideas tested failed that bar.
     not consulted by anything. It waits for enough trades that "three similar
     setups all lost" is signal rather than noise.
   - The morning window's entire record is 24 backtested trades.
+
+--------------------------------------------------------------------------------
+13. FIRST LIVE SESSIONS, 2026-08-24 and 2026-08-25
+--------------------------------------------------------------------------------
+
+Orders now route. TRADING_LIVE_ORDERS=true, TRADIER_ORDER_ENV=production,
+account 6YB90697, TRADING_MAX_ORDER_CONTRACTS=1. Section 12's first known
+limit is obsolete.
+
+THE ORDER PATH WORKS, both directions. Open and close, multileg, correct leg
+sides, correct OCC symbols, filled at the natural. Commission confirmed at
+$0.35 a leg, so $1.40 a contract round trip -- the figure the sweeps have
+been charging all along.
+
+THE ONE LIVE TRADE, AND WHY IT LOST ON A DAY IT SHOULD HAVE WON
+
+2026-08-25 was a falling session: open 713.12, close 709.49, net -$3.64. A
+CALL credit spread is the structure for exactly that day. It lost anyway.
+
+    14:34  sold QQQ 711/715 for 0.16   (spot 709.9, short strike ~0.20 delta)
+    14:46  bought it back at 0.39      STOP_LOSS       -$23.00
+
+QQQ's high for the whole rest of the session was 710.67, against a 711 short
+strike. The spread was never breached and expired worthless. Held, it pays
++$14.60 after commission. The stop turned that into -$24.40, a $39 swing.
+
+The stop fired on a 67-cent move in QQQ, because stop_loss_pct=-100 is
+inherited from the debit side where it means "total loss of premium paid". On
+a CREDIT position -100% means the spread DOUBLED, and doubling sixteen cents
+is thirty-two cents. A credit spread's loss is already capped at
+width-minus-credit by the long leg; the stop does not lower that ceiling, it
+only converts unrealised noise into realised loss.
+
+Swept through the engine, chain-priced, the stop level is worth real money
+and does not rescue the window:
+
+    stop -100% (live)   16% win   26/67 stopped   -47.14/tr   worst -1020
+    stop -300%          19% win    6/59 stopped   -44.24/tr   worst -1020
+    stop -400%          20% win    4/59 stopped   -36.52/tr   worst  -680
+    stop -600%          22% win    3/59 stopped   -30.14/tr   worst  -340
+
+A breach-based stop -- exit when spot actually reaches the short strike --
+was tested and is WORSE than the percentage stop. A breached spread often
+comes back, and stopping realises the loss at its worst moment.
+
+THE MORNING NEVER TRADED, AND THE SWINGS WERE NOT TRADEABLE
+
+10:15-12:30 on 2026-08-25 held a $2.17 range and five swings of a dollar or
+more: +1.24, -1.32, +1.80, -1.16, +1.06. It is tempting to read that as five
+missed trades. It is not. The engine-wide -20% stop on a $268 spread is about
+$1.40 of QQQ movement, so every one of those swings sits INSIDE the noise
+band the stop is drawn around. Caught perfectly at both ends the largest
+would return roughly +16% of premium, about $43, less $11.40 of friction --
+and mistiming either end by a single five-minute bar costs about a third of
+what it makes. This structure needs a sustained move, not a range.
+
+WHAT ACTUALLY BLOCKED THE MORNING WAS THE MACRO GATE
+
+macro_block_reason was added on 2026-08-25 and records which AND-term
+refused. Over the two live sessions, cycles where every OBJECTIVE term passed
+-- breadth positive, not collapsing, yields quiet, VIX 15.7 against a 22.0
+ceiling and -0.76% against a 10% spike limit:
+
+    2026-08-24   55 such cycles,  0 went GOOD   (100% refused)
+    2026-08-25   31 such cycles, 11 went GOOD   ( 65% refused)
+
+By elimination the LLM verdict refused all 55 on a day QQQ rose $6.50 off its
+low. On 2026-08-25 it read "Putin updating Russia's nuclear doctrine" and
+held the bullish side shut while breadth recovered.
+
+THE POINT THAT MATTERS FOR THE SWEEPS: scripts/sweep.py's _session_state
+hardcodes market_sentiment="GOOD". Every number in this file -- including
+MORNING_DRIFT's +55.28 a trade -- was therefore measured with the LLM gate
+WIRED OPEN. The measured strategy and the deployed strategy are not the same
+strategy, and the difference is one term nobody has ever swept.
+TRADING_MACRO_LLM_GATE=false makes live match what was measured. It is left
+ON because turning it off on the strength of two sessions would be trading
+one unmeasured gate for another.
+
+Split by time of day over those sessions, forward 30-minute move after each
+cycle -- suggestive only, since per-minute rows share overlapping windows and
+six sessions is closer to six independent observations than to 800:
+
+    morning    GOOD  +0.244   BAD  +0.010     gate has signal
+    afternoon  GOOD  -0.234   BAD  -0.104     gate is INVERTED
+
+AFTERNOON_CREDIT IS OFF AGAIN
+
+Every lever measured chain-priced through the engine: entry time, strike
+offset, short delta 0.10 to 0.40, width $1-6, stop -100% to -600% and
+breach-based, ratchet giveback 15-50%, window length, and entry slicing in
+one to three tranches. Every configuration lands between -30 and -47 a trade.
+Nine parameter families, no positive cell. Re-enable on evidence, not on a
+new parameter.

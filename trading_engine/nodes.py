@@ -101,6 +101,38 @@ REENTRY_RISK_SHARE = float(os.getenv("TRADING_REENTRY_RISK_SHARE", "0.30"))
 # already disproved. Left configurable, but off by default.
 MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "0"))
 
+# Open a position in this many equal tranches, spaced ENTRY_SLICE_MINUTES
+# apart, instead of all at once.
+#
+# NOT the same thing as MAX_SCALE_INS above, which adds to a position the
+# market has already moved against and doubles it when it does. This is a
+# planned entry ladder: the size is decided up front and filled on a clock,
+# regardless of which way the position is going.
+#
+# Measured on the afternoon credit spread over 60 sessions, chain-priced,
+# same total size and same exits in every arm:
+#
+#     all at once                  58% win   -9.00/tr
+#     3 slices: 0, +10, +20 min    51% win   -6.15/tr
+#     3 slices: 0, +15, +30 min    52% win   -3.22/tr
+#
+# and it improved EVERY short-delta bucket, which is what separates it from
+# one lucky cell: -12.37 to -10.25 at 0.10 delta, -11.05 to -6.73 at 0.20,
+# -9.14 to -1.55 at 0.30, -6.28 to +3.53 at 0.40.
+#
+# The morning DEBIT spread measured the OPPOSITE -- every schedule worse than
+# one fill, -6.94 against -13.39 to -20.35. A debit spread is a momentum
+# trade where the trigger is the edge and delay costs the move; a credit
+# spread sells time value, so spreading the fills averages the premium. Set
+# this per book, not globally, when both are running.
+#
+# DEFAULT 1, which is exactly the previous behaviour: one tranche, opened in
+# full, no plan recorded. It is off because making it do anything needs at
+# least ENTRY_SLICES contracts -- a third of a contract does not exist -- and
+# at one contract per position the engine cannot slice at all.
+ENTRY_SLICES = max(int(os.getenv("TRADING_ENTRY_SLICES", "1")), 1)
+ENTRY_SLICE_MINUTES = float(os.getenv("TRADING_ENTRY_SLICE_MINUTES", "15"))
+
 # Whether the RELAXED entry tier trades at all. Set false to fall back to the
 # original strict gate everywhere.
 RELAXED_ENTRIES_ENABLED = os.getenv("TRADING_RELAXED_ENTRIES", "true").lower() == "true"
@@ -1257,6 +1289,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         return {"execution_status": "HALTED", "buy_more_count": state.get("buy_more_count", 0)}
 
     broker = broker or default_mock_broker()
+    # Initialised here, not where they are set: the entry that assigns
+    # them sits inside several layers of conditional, and the return at
+    # the bottom reads them unconditionally.
+    tranche_qty = 0
+    slices_remaining = 0
     sentiment = state.get("market_sentiment")
     halt = bool(state.get("macro_halt"))
     ema9_side = state.get("ema9_side")
@@ -1312,6 +1349,34 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # structure capped near +64% in total; measured on bullish-stack
         # mornings that cost 18.82 a trade against 36.40, for an identical
         # worst case.
+        # Fill the rest of a sliced entry before any exit rule runs.
+        #
+        # Ordering matters and is deliberate: a position that is still being
+        # built should finish being built before it can be stopped out of a
+        # size it never reached. The tranche is due on the clock, not on P&L
+        # -- that is the whole difference between this and place_buy_more,
+        # which adds to losers.
+        remaining = getattr(position, "entry_slices_remaining", 0) or 0
+        tranche = getattr(position, "entry_tranche_qty", 0) or 0
+        opened = getattr(position, "opened_at", None)
+        if remaining > 0 and tranche > 0 and opened is not None:
+            filled_so_far = ENTRY_SLICES - remaining
+            due_at_min = filled_so_far * ENTRY_SLICE_MINUTES
+            try:
+                elapsed_min = (datetime.now(NY) - opened).total_seconds() / 60.0
+            except Exception:
+                elapsed_min = 0.0
+            if elapsed_min >= due_at_min and not past_cutoff:
+                price = position.current_net_value
+                broker.add_entry_tranche(position.underlying, tranche, price)
+                position.entry_slices_remaining = remaining - 1
+                logger.info(
+                    "Entry tranche %d of %d: added %d contract(s) at %.2f after %.0f min "
+                    "— position now %d, blended entry %.2f.",
+                    filled_so_far + 1, ENTRY_SLICES, tranche, price, elapsed_min,
+                    position.quantity, position.entry_net_debit,
+                )
+
         ride = rides_to_close(position.playbook)
 
         # Profit ratchet. What matters is whether this position HAS been up,
@@ -2089,6 +2154,37 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         quantity, long_strike, short_strike, net_debit,
                         eq.equity, window.take_profit_pct,
                     )
+                    # Time-sliced entry. At the default ENTRY_SLICES=1 this is
+                    # a no-op: full_quantity == quantity and no plan is
+                    # recorded, so nothing downstream sees a difference.
+                    #
+                    # Integer division floors, so a target that does not divide
+                    # evenly puts the remainder in the FIRST tranche rather
+                    # than stranding it -- 5 contracts over 3 slices fills
+                    # 3/1/1, not 1/1/1 with two contracts never bought.
+                    full_quantity = quantity
+                    tranche_qty = 0
+                    slices_remaining = 0
+                    if ENTRY_SLICES > 1 and quantity >= ENTRY_SLICES:
+                        tranche_qty = quantity // ENTRY_SLICES
+                        slices_remaining = ENTRY_SLICES - 1
+                        quantity = full_quantity - tranche_qty * slices_remaining
+                        logger.info(
+                            "Sliced entry: %d contracts over %d tranches %.0f min apart — "
+                            "opening %d now, %d x %d to follow.",
+                            full_quantity, ENTRY_SLICES, ENTRY_SLICE_MINUTES,
+                            quantity, slices_remaining, tranche_qty,
+                        )
+                    elif ENTRY_SLICES > 1:
+                        # Cannot slice a position smaller than the slice count.
+                        # Said out loud rather than silently opening in full,
+                        # because "slicing is on" and "slicing is happening"
+                        # are different states and only one of them is visible.
+                        logger.info(
+                            "Sliced entry configured at %d slices but the position is %d "
+                            "contract(s) — opening in one order.", ENTRY_SLICES, quantity,
+                        )
+
                     if is_credit_window:
                         broker.place_credit_spread(strategy, "QQQ", quantity,
                                                    short_strike, long_strike, net_debit, playbook)
@@ -2101,6 +2197,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         action = "BUY_PUT_SPREAD"
 
     return {
+        "entry_tranche_qty": tranche_qty,
+        "entry_slices_remaining": slices_remaining,
         "execution_status": action,
         "exit_reason": exit_reason,
         "playbook": playbook,

@@ -54,6 +54,16 @@ class OpenPosition(Base):
     # Best return this position has shown, so a profit ratchet can measure
     # retracement from the peak rather than only from entry.
     peak_return_pct = Column(Float, nullable=True, default=0.0)
+    # Time-sliced entry plan. NULL means the position was opened in one order,
+    # which is the default and was the only behaviour before 2026-08-25.
+    #
+    # Two columns because one cannot be derived from the other safely:
+    # entry_tranche_qty is the slice size, frozen at entry so later tranches
+    # do not drift as equity moves, and entry_slices_remaining counts down.
+    # Deriving either from `quantity` breaks the moment anything else changes
+    # it. See TRADING_ENTRY_SLICES in nodes.py for the measurement.
+    entry_tranche_qty = Column(Integer, nullable=True)
+    entry_slices_remaining = Column(Integer, nullable=True)
     # Signal readings at entry — carried through to TradeHistory on close so
     # the setup that triggered this trade isn't lost.
     entry_macd_signal = Column(String, nullable=True)

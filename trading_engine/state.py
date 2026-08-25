@@ -73,3 +73,10 @@ class TradingState(TypedDict):
     playbook: str              # Named time-window strategy that opened the position ('' if none opened)
     exit_reason: str           # Why a position closed: 'FORCE_CLOSE', 'TAKE_PROFIT', 'STOP_LOSS', 'RISK_OFF' ('' if nothing closed)
     buy_more_count: int        # Tracking safety scale-ins
+    # Time-sliced entry plan for the position just opened. 0/0 means it
+    # was opened in one order, which is the default. Declared here for
+    # the same reason session_move_pct had to be: LangGraph drops keys
+    # this TypedDict does not name, so an undeclared field reaches the
+    # log line and never reaches the database.
+    entry_tranche_qty: int
+    entry_slices_remaining: int

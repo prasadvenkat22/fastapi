@@ -576,6 +576,58 @@ def sweep_target(sessions: dict):
     PB.WINDOWS = base
 
 
+def sweep_creditstop(sessions: dict):
+    """Is the credit window's stop protecting anything, or just realising noise?
+
+    AFTERNOON_CREDIT inherited stop_loss_pct=-100 from the debit side, where
+    "-100% of premium paid" is a total loss and means something. On a CREDIT
+    position -100% means the spread doubled -- and when the credit is sixteen
+    cents, doubling is thirty-two cents, which a 67-cent move in QQQ produces
+    without ever touching the short strike.
+
+    That is not hypothetical. Live on 2026-08-25 the engine sold 711/715 for
+    0.16 at 14:34 and bought it back at 0.39 at 14:46 for -$23. QQQ's high
+    for the rest of the session was 710.67 against a 711 short strike: the
+    spread would have expired worthless and kept the whole credit.
+
+    A credit spread's loss is ALREADY capped at width-minus-credit by the long
+    leg. The stop does not lower that ceiling; it converts unrealised noise
+    into realised loss. Crude harness over 60 sessions, breach rate identical
+    at 29% in every arm:
+
+        2x credit (live)   58% win  29% stopped   -9.00/tr
+        3x credit          67% win  20% stopped   -6.22/tr
+        no stop            75% win   0% stopped   +0.97/tr
+    """
+    print("")
+    print("CREDIT STOP -- what the buy-it-back stop actually buys")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base = PB.WINDOWS
+    for stop, risk_off, label in (
+        (-100.0, -60.0, "stop -100%, risk-off -60% (live)"),
+        (-200.0, -60.0, "stop -200%, risk-off -60%"),
+        (-300.0, -60.0, "stop -300%, risk-off -60%"),
+        (-100.0, None, "stop -100%, NO risk-off"),
+        (-400.0, -60.0, "stop -400%, risk-off -60%"),
+        (-600.0, -60.0, "stop -600%, risk-off -60%"),
+        # -10000 was tried here and returned NO TRADES in 60 sessions. Risk
+        # sizing divides the risk budget by the stop distance, so an absurd
+        # stop makes every contract look infinitely risky and sizes to zero.
+        # An arm that takes no trades is not "the no-stop case", it is a
+        # broken arm, and it prints a blank row rather than a warning.
+    ):
+        PB.WINDOWS = tuple(
+            replace(w, stop_loss_pct=stop, risk_off_pct=risk_off)
+            if w.name == "AFTERNOON_CREDIT" else w
+            for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
+        trades, _ = _run_arm(sessions, dtime(13, 30))
+        _report(label, trades, len(sessions))
+    PB.WINDOWS = base
+
+
 def sweep_handoff(sessions: dict):
     """Should the morning winner still hand its slot to the credit window?
 
@@ -1885,6 +1937,8 @@ def main():
         sweep_daydrop(sessions)
     if which in ("target", "all"):
         sweep_target(sessions)
+    if which in ("creditstop", "all"):
+        sweep_creditstop(sessions)
     if which in ("handoff", "all"):
         sweep_handoff(sessions)
     if which in ("retries", "all"):

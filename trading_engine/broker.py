@@ -199,6 +199,12 @@ class MockSpreadPosition:
     current_net_value: float  # per-spread current value (long mark - short mark)
     playbook: str = ""        # named strategy that opened it; drives its take-profit target
     peak_return_pct: float = 0.0  # best return this position has ever shown
+    # Time-sliced entry plan, carried from the OpenPosition row so the
+    # rules can see how much of the intended size is still unfilled.
+    # 0/0 means the position was opened in one order.
+    entry_tranche_qty: int = 0
+    entry_slices_remaining: int = 0
+    opened_at: object = None
 
     @property
     def return_pct(self) -> float:
@@ -294,6 +300,34 @@ class MockBrokerClient:
             "status": "mock_filled", "action": BEAR_PUT_SPREAD, "underlying": underlying,
             "quantity": quantity, "long_strike": long_strike, "short_strike": short_strike,
         }
+
+    def add_entry_tranche(self, underlying: str, quantity: int, price: float) -> dict:
+        """Add a planned tranche to an open position at a known fill price.
+
+        Distinct from place_buy_more, which doubles the position and is a
+        response to the trade going against you. This is the rest of an entry
+        that was always going to be this size -- the quantity is decided at
+        open and filled on a clock.
+
+        The entry price is re-blended rather than left alone, and that is the
+        whole reason this needs its own method. return_pct divides by
+        entry_net_debit, so adding contracts at a different price without
+        updating it makes every downstream number wrong at once: the stop,
+        the ratchet's peak, the take-profit and the recorded P&L would all be
+        measured against a cost basis the position no longer has.
+        """
+        pos = self._position
+        if pos is None or quantity <= 0:
+            return {"status": "no_position"}
+        old_qty = pos.quantity
+        new_qty = old_qty + quantity
+        pos.entry_net_debit = round(
+            (pos.entry_net_debit * old_qty + price * quantity) / new_qty, 4
+        )
+        pos.quantity = new_qty
+        return {"status": "mock_filled", "action": "ADD_TRANCHE", "underlying": underlying,
+                "quantity": quantity, "total_quantity": new_qty,
+                "blended_entry": pos.entry_net_debit}
 
     def place_buy_more(self, underlying: str, quantity: int) -> dict:
         pos = self._position

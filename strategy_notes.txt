@@ -531,3 +531,89 @@ breach-based, ratchet giveback 15-50%, window length, and entry slicing in
 one to three tranches. Every configuration lands between -30 and -47 a trade.
 Nine parameter families, no positive cell. Re-enable on evidence, not on a
 new parameter.
+
+--------------------------------------------------------------------------------
+14. THE RISK/REWARD ARITHMETIC, AND TWO OUTSIDE NOTES TESTED 2026-08-25
+--------------------------------------------------------------------------------
+
+THE FACT THAT EXPLAINS EVERY LOSING CREDIT VARIANT
+
+A credit spread's break-even win rate IS its risk ratio, and delta IS the
+market's estimate of the probability of finishing in the money. So a
+15-delta short call has about an 85% chance of expiring worthless and pays
+odds of exactly 85%. Measured across the delta sweep, $4 wide:
+
+    delta  credit   risk   risk:reward  breakeven win%  actual win%   gap
+     0.10  $  9.7  $ 390       40:1          97.6%          19%       -79
+     0.15  $ 16.8  $ 383       23:1          95.8%          58%       -38
+     0.20  $ 24.7  $ 375       15:1          93.8%          64%       -30
+     0.30  $ 42.4  $ 358        8:1          89.4%          64%       -25
+     0.40  $ 63.9  $ 336        5:1          84.0%          63%       -21
+
+Selling closer narrows the gap and never closes it: the required win rate
+falls faster than the achieved one rises. The structure is a fair bet before
+costs and a losing one after, and $1.40 of commission is 13% of an $11
+credit. Any edge has to come from implied vol exceeding realised, and at
+0DTE the fee eats it first.
+
+WHY PATH BEATS DIRECTION, which answers "QQQ falls most afternoons":
+
+    59 sessions, 13:30 -> 15:45:  closed DOWN 56%, closed UP 44%
+    but the max RISE above the 13:30 price before 15:45:
+        rose >= $0.63 (0.40 delta strike)  78% of days
+        rose >= $1.96 (0.20 delta strike)  29% of days
+    median max-rise $1.12, against a median close of -$0.155
+
+Direction is on the seller's side; path is not. Afternoons wander up before
+drifting down, and a spread is marked against you on the way.
+
+WIDTH: THE MARGINAL TABLE (0.15 delta, 13:00 entry, held to 15:45)
+
+    width  credit  +credit    risk   +risk   ratio   net/tr
+    $  1  $ 11.1       -    $  89      -     8.0:1   -3.22
+    $  2  $ 16.2    +5.0    $ 184    +95    11.4:1   -3.77
+    $  3  $ 18.2    +2.0    $ 282    +98    15.5:1   -5.32
+    $  4  $ 18.9    +0.7    $ 381    +99    20.1:1   -7.03
+    $  5  $ 19.2    +0.3    $ 481   +100    25.1:1   -8.63
+
+Every extra dollar of width adds ~$99 of risk; the credit it adds runs
++5.00, +2.00, +0.70, +0.30. Past $2 the long leg is already worth a cent or
+two, so widening removes protection without buying premium. The credit
+window moved to $2 wide on this: 86% of the $4 credit for 48% of the risk.
+
+BOOK THE FAST HALF AND STOP. RE-ENTRY IS WORSE.
+
+    hold to 15:45, one trade      1.00 tr/day    -2.41/day
+    book at 50%, no re-entry      1.00 tr/day    +1.40/day
+    book at 50%, re-enter         3.32 tr/day   -10.80/day
+    book at 30%, re-enter         4.10 tr/day   -21.78/day
+
+Booking half the decay and releasing the collateral beats holding for the
+slow half. Re-entering pays fixed friction against a premium that shrinks as
+the session runs out. The one-position limit enforces this for free.
+
+THE MORNING NOTE MEASURED BACKWARDS
+
+An outside note recommended $2-3 wide morning debit spreads at +0.15 to
++0.25 net delta. Tested on the same CLEAN entries:
+
+    OURS: $6 wide, long $2 ITM    35% win  net delta +0.60  debit/width 41%  +3.40/tr
+    $3 wide, long 0.55 delta      32% win  net delta +0.34  debit/width 41%  +0.97/tr
+    $2 wide, long 0.55 delta      32% win  net delta +0.23  debit/width 47%  -3.19/tr
+    $2 wide, long 0.50 delta      28% win  net delta +0.23  debit/width 40%  -5.49/tr
+
+Result improves monotonically with net delta, which matches this file's own
+width sweep from the other direction. The note's debit-to-width test (40-50%
+of width) is already satisfied at 41%.
+
+The note applies "narrow is efficient" to both structures. It is right for
+credit and wrong for debit, and the reason is the same fact: extra width buys
+almost no premium, so on a spread you SELL it is pure added risk, while on a
+spread you BUY it is ceiling -- and ceiling is what a 35%-win-rate strategy
+needs. Opposite structures, opposite answer.
+
+ASSIGNMENT RISK, previously unrecorded. QQQ is an American-style ETF with
+physical delivery, not cash-settled like SPX. A short call finishing a penny
+in the money assigns short shares. The 15:45 force close covers this -- but
+the exits run off a once-a-minute cron with no resting order at the exchange,
+so a failed closing order has no fallback.

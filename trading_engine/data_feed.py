@@ -17,7 +17,7 @@ needs tick-by-tick trade classification data no snapshot-quote API provides)
 import logging
 import os
 from dataclasses import dataclass
-from datetime import time
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -228,8 +228,56 @@ def fetch_qqq_spot() -> float:
     return float(bars["Close"].iloc[-1])
 
 
+def _tradier_session_vwap() -> "float | None":
+    """Session VWAP from Tradier's own intraday bars.
+
+    /markets/timesales returns 5-minute bars carrying BOTH a correct volume
+    and a per-bar vwap, so the session figure is just the volume-weighted
+    mean of those. session_filter=open restricts it to regular hours, which
+    is the anchor VWAP is supposed to have -- no need for the 09:30 slicing
+    the yfinance path does by hand.
+
+    This existed the whole time the engine was falling back to an unweighted
+    average. Same lesson as TNX:CGI: the endpoint list was never searched,
+    only the one endpoint already in use was re-examined.
+    """
+    api_key = os.getenv("TRADIER_API_KEY")
+    if not api_key:
+        return None
+    env = os.getenv("TRADIER_ENV", "sandbox").lower()
+    base = (TRADIER_PRODUCTION_URL if env == "production"
+            else TRADIER_SANDBOX_URL).replace("/quotes", "/timesales")
+    today = datetime.now(NY).strftime("%Y-%m-%d")
+    try:
+        r = httpx.get(base, params={"symbol": "QQQ", "interval": "5min",
+                                    "start": f"{today} 09:30", "end": f"{today} 16:00",
+                                    "session_filter": "open"},
+                      headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                      timeout=10.0)
+        r.raise_for_status()
+        data = (r.json().get("series") or {}).get("data") or []
+        if isinstance(data, dict):
+            data = [data]
+        num = den = 0.0
+        for bar in data:
+            vol, vwap = bar.get("volume"), bar.get("vwap")
+            if not vol or vwap is None:
+                continue
+            num += float(vwap) * float(vol)
+            den += float(vol)
+        return num / den if den > 0 else None
+    except Exception:
+        return None
+
+
 def fetch_qqq_session_vwap() -> "float | None":
-    """Session VWAP for QQQ, priced from yfinance bars but VOLUME-checked.
+    """Session VWAP for QQQ. Tradier first, yfinance as a volume-checked fallback.
+
+    The fallback below is not hypothetical: on 2026-08-25 it fired 52 times
+    in a single morning, so VWAP -- one of the four rules in the CLEAN entry
+    gate -- was running on an UNWEIGHTED typical price for most of the
+    session. The guard was doing its job; the problem was that nothing better
+    was wired up behind it.
 
     yfinance's intraday volume for QQQ is unreliable: measured against
     Tradier's quote for the same session it reported 200.9M against 19.4M,
@@ -243,6 +291,10 @@ def fetch_qqq_session_vwap() -> "float | None":
     VWAP falls back to an unweighted typical price, which is less precise but
     is not weighted by a number known to be wrong.
     """
+    live = _tradier_session_vwap()
+    if live is not None and live > 0:
+        return live
+
     try:
         bars = yf.Ticker("QQQ").history(period="1d", interval="5m")
         if bars.empty:

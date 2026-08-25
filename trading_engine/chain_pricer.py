@@ -80,6 +80,46 @@ SMILE_C = float(os.getenv("TRADING_SMILE_C", "0.1867"))
 # provisional and the RANKING between variants as the usable output.
 SMILE_VIX_REFERENCE = float(os.getenv("TRADING_SMILE_VIX_REF", "15.7"))
 
+# Volatility TERM STRUCTURE: implied vol rises with tenor, and the smile above
+# cannot express that because every observation behind it was 0DTE.
+#
+# The gap is not academic. Priced against the live chain on 2026-08-24 the
+# pricer drifted from over- to under-stating as tenor extended:
+#
+#     0.9 days   1.21x market
+#     1.9 days   1.08x
+#     2.9 days   0.89x
+#     3.9 days   0.79x
+#
+# and the cause was visible in the quotes: actual short-leg IV climbed from
+# 0.157 to 0.188 on the call side across those tenors while this module
+# returned a flat 0.176. A weekly backtest run through the uncorrected pricer
+# would understate the credit by a fifth -- biased against precisely the trade
+# it would be testing.
+#
+# Fitted on 1,006 quoted strikes across 8 expiries (0.8 to 9.8 days), keeping
+# only real quotes (bid > 0, 0.03 <= |delta| <= 0.97, 0.05 <= iv <= 0.60 --
+# without those filters deep-wing mid_iv noise puts the fit at R^2 0.24 and an
+# at-the-money vol of 158%):
+#
+#     iv = A*x^2 + B*x + C + D*ln(T/T_REF)      R^2 0.647, resid sd 0.0265
+#     against the flat smile's                  R^2 0.568, resid sd 0.0293
+#
+# Expressed here as a MULTIPLIER rather than by refitting A/B/C, so the 0DTE
+# behaviour validated against 1,944 logged marks is left exactly as it was and
+# only the extrapolation away from that anchor changes. TERM_SLOPE is D/C from
+# that fit; at four days it lifts vol 21%, which is 0.1881/0.1558 in the
+# fitted table.
+#
+# SINGLE SNAPSHOT, ONE MOMENT. The ATM term structure that day was not even
+# monotone -- 0.1698 at 0.8d, 0.2099 at 3.8d, 0.1815 at 6.8d -- which is an
+# event landing inside the near expiries, not a smooth curve. A log fit cannot
+# represent that and is not meant to; it is a first-order correction, and
+# scripts/capture_chain.py exists to accumulate the snapshots that would let
+# it be refitted on more than one afternoon.
+TERM_REF_MINUTES = float(os.getenv("TRADING_TERM_REF_MINUTES", "390.0"))
+TERM_SLOPE = float(os.getenv("TRADING_TERM_SLOPE", "0.077"))
+
 
 def _normal_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
@@ -98,6 +138,14 @@ def implied_vol(strike: float, spot: float, years: float, vix: float | None = No
     iv = SMILE_A * x * x + SMILE_B * x + SMILE_C
     if vix and vix > 0:
         iv *= vix / SMILE_VIX_REFERENCE
+    # Term structure. 1.0 at the 0DTE reference, so nothing about the
+    # validated same-day pricing moves; floored well above zero because the
+    # log runs negative for tenors shorter than the reference and a deeply
+    # intraday quote should not be scaled toward nothing.
+    if TERM_SLOPE:
+        minutes = years * YEAR_MINUTES
+        if minutes > 0:
+            iv *= max(1.0 + TERM_SLOPE * math.log(minutes / TERM_REF_MINUTES), 0.5)
     # A floor, not a fudge: the quadratic can go negative far enough out,
     # where it is extrapolating past every strike it ever saw.
     return max(iv, 0.03)

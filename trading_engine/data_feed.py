@@ -145,6 +145,33 @@ BAR_INTERVAL = os.getenv("TRADING_BAR_INTERVAL", "5m")
 # when the bar finished. That is not a signal, it is a snapshot of a candle
 # still being drawn.
 #
+# That was one anecdote, so it was re-tested on 2026-08-25 by rebuilding the
+# whole CLEAN stack twice at every minute across 7 sessions of 1-minute bars
+# -- once on closed bars, once with a partial bar appended -- and comparing
+# 695 minute-evaluations inside the 10:15-12:30 window:
+#
+#     CLEAN true on closed bars                        101 minutes
+#     CLEAN true on forming bars                       116 minutes
+#     5-min windows where FORMING fired at least once   38
+#        still true once the bar closed                 21   (55%)
+#        REPAINTED, gone by the close                    17   (45%)
+#
+# NEARLY HALF of forming-bar signals do not survive their own candle. The
+# anecdote was representative.
+#
+# Forming bars did not find extra trade DAYS in that sample -- both versions
+# fired on the same three sessions -- they just fired earlier, by 2, 5 and 9
+# minutes. Priced identically, entering earlier was worse on two of the three
+# and worse in total by $22.86. THREE TRADES IS NOT EVIDENCE and the P&L is
+# quoted only because it points the same way as the repaint count; the 45% is
+# the number doing the work here.
+#
+# The mechanism behind the two losers is worth keeping: on 2026-08-24 the
+# forming entry paid LESS for the spread (2.55 against 2.69) and still lost
+# more (-88.34 against -66.83), because entering nine minutes before the move
+# confirmed meant nine more minutes of adverse drift against the same -20%
+# stop. Earlier is not cheaper if the stop is what ends the trade.
+#
 # The decisive argument is not the repaint though: scripts/sweep.py steps
 # five-minute bars, so every measurement behind every parameter in this engine
 # evaluated entries at bar CLOSES. Running live on partial bars means live and

@@ -263,9 +263,20 @@ def _tradier_quote(symbol: str) -> "dict | None":
 
     ^TNX feeds a 4bp spike gate (TNX_SPIKE_BPS), so a staleness of a fifth of
     a basis point could only flip a reading already within a hair of the
-    threshold. It moved to Tradier anyway once TNX:CGI turned up in the symbol
-    directory (see TNX_TRADIER_SYMBOL) -- not because the lag was costing
-    anything, but because there was no longer a reason to keep it.
+    threshold. It moved to Tradier's TNX:CGI anyway (see TNX_TRADIER_SYMBOL)
+    -- and that bought NOTHING in latency, which is worth stating plainly
+    because the commit that made the change did not know it yet. Measured
+    live on 2026-08-25 at 09:37:06 ET:
+
+        QQQ       lag  0.0 min
+        VIX       lag  0.1 min
+        TNX:CGI   lag 15.0 min     <- stamped 09:22:03
+
+    Tradier's real-time entitlement covers equities and VIX; the other CBOE
+    index feeds arrive on the same fifteen-minute delay as yfinance. The swap
+    is kept because it removes a dependency rather than because it removes a
+    lag, and because the day Tradier's entitlement changes it becomes live for
+    free. Do not let the "Tradier" in fetch_tnx imply "real time".
 
     CL=F feeds the macro verdict as context for an LLM, not a threshold, so a
     tenth of a percent changes nothing that is read to two decimal places.

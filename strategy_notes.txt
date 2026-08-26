@@ -801,3 +801,36 @@ SHIPPED AND OFF. FADE_ENTRIES_ENABLED defaults false. bollinger_pierce stays
 in the state either way: bollinger_zone reads UPPER_BAND both for a bar that
 crossed OUT of the band and for one riding it, and those are different
 setups. Distinguishing them cost a day of reasoning and is worth recording.
+
+--------------------------------------------------------------------------------
+19. THE CREDIT WINDOW'S END TIME, RE-TESTED  (2026-08-26)
+--------------------------------------------------------------------------------
+
+On 2026-08-26 QQQ topped at 712.96 at exactly 15:00 -- the minute the credit
+window shuts -- and faded to 711.84 by the close. That looks like a rule
+costing money, so it was re-swept now that the geometry has changed:
+
+    credit_end 15:00 (live)   54 tr  9% win  -52.19/tr  -2818.12
+    credit_end 15:15          55 tr  9% win  -52.87/tr  -2908.10
+    credit_end 15:30          55 tr  9% win  -52.88/tr  -2908.16
+
+Extending buys ONE trade in 60 sessions and costs about $0.70 a trade. 15:15
+and 15:30 are identical, so nothing fires in that last quarter hour at all.
+The 15:00 top was a coincidence of timing, not an opportunity the rule keeps
+missing. UNCHANGED.
+
+Worth separating two things that look alike. Entries stop at 15:00; the
+FORCE CLOSE is 15:45, and that one was swept separately and is a genuine
+optimum -- flattening at 15:30 books the forced exits at -13.48 a trade where
+15:45 books them at -7.82, because a 0DTE spread's theta collapse happens in
+that last stretch. Late is right for EXITS and wrong for ENTRIES.
+
+WHY THE AFTERNOON DID NOT TRADE, 2026-08-26. The read was bullish for the
+whole window -- macd BULLISH, ABOVE_SMA, ABOVE_VWAP, riding the upper band --
+so no bearish tier fired, and a bullish read in a credit window sells PUTS,
+which needs macro GOOD, and breadth was negative. The refusal was correct:
+QQQ went 710.85 to 711.84 over the window, and every call spread would have
+lost ($1 OTM -49.77, $2 OTM -21.28, $3 OTM -5.34).
+
+Three live sessions now, one trade, -$23. Both refusals on 08-26 came from
+the objective terms, not from the LLM gate removed the night before.

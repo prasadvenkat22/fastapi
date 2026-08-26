@@ -1934,6 +1934,42 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 window = None
                 action = "SESSION_NOT_FALLEN_ENOUGH"
 
+            # Sell into strength. A window may refuse to open until the
+            # underlying has risen a set distance above its price when the
+            # window started -- so the short strike lands above a local high
+            # rather than wherever price sat when a clock struck.
+            #
+            # Reads the bar series directly rather than carrying a state
+            # field, because the reference price depends on WHICH window is
+            # active and the indicator agents do not know that. fetch_qqq_bars
+            # is patched by scripts/sweep.py, so this resolves the same way in
+            # a replay as it does live.
+            if window is not None and window.min_rise_from_start is not None:
+                rise = None
+                try:
+                    bars = fetch_qqq_bars()
+                    idx = bars.index
+                    if getattr(idx, "tz", None) is not None:
+                        idx = idx.tz_convert(NY)
+                    today = datetime.now(NY).date()
+                    at_start = [
+                        float(bars["Close"].iloc[i]) for i, ts in enumerate(idx)
+                        if ts.date() == today and ts.time() >= window.start
+                    ]
+                    if at_start:
+                        rise = float(state.get("qqq_close") or at_start[-1]) - at_start[0]
+                except Exception:
+                    logger.exception("Could not measure the rise since %s opened — "
+                                     "letting the entry through.", window.name)
+                if rise is not None and rise < window.min_rise_from_start:
+                    logger.info(
+                        "%s waits for a $%.2f rise before selling; QQQ is %+.2f "
+                        "since the window opened — no entry.",
+                        window.name, window.min_rise_from_start, rise,
+                    )
+                    window = None
+                    action = "AWAITING_RISE"
+
             # Direction gate. The tier ladder is symmetric but the measured
             # edge is not: on bearish-stack mornings the bear put spread
             # returned -15.52 a trade at a 25% win rate, and its sign was not

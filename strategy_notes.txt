@@ -713,3 +713,47 @@ DEPLOYED CONFIGURATION as of 2026-08-25 close:
                       books at 50% of credit, stop -200%
     macro LLM gate    OFF          the one term never in any backtest
     orders            production, 3-contract cap, $4,000 budget
+
+--------------------------------------------------------------------------------
+17. SELL INTO STRENGTH -- BUILT, MEASURED, LEFT OFF  (2026-08-26)
+--------------------------------------------------------------------------------
+
+The idea: a call credit spread sold at a fixed clock time places its short
+strike wherever price happens to be. Sold after a push up, the same delta
+sits above a local high instead. It is the same mechanism as the one credit
+finding that worked earlier in the week -- selling at an upper-band pierce
+beat selling at a fixed time.
+
+A crude harness liked it, on the $2-wide $1-OTM spread booking at 50%:
+
+    enter at 13:30             59 tr  85% win   +4.81/tr  halves +6.49/+3.19
+    enter after a +$0.50 rise  37 tr  95% win  +16.33/tr  halves +23.78/+9.27
+    enter after a +$1.00 rise  20 tr  95% win  +16.18/tr  halves +23.99/+8.36
+
+Through the real engine it reverses:
+
+    no gate (live)      55 tr   7% win   -94.42/tr
+    min rise $0.50      15 tr   0% win  -164.12/tr
+
+FIFTH TIME this week the crude harness has been contradicted by the engine,
+and every one of the five was about how a trade ENDS rather than how it
+starts. The harness has no ratchet and holds one contract; the engine
+ratchets and sizes on capital at risk. It is fine for ranking ENTRY rules and
+must not be trusted on anything downstream of the entry.
+
+PlaybookWindow.min_rise_from_start and the AWAITING_RISE gate are shipped and
+default to None. TRADING_CREDIT_MIN_RISE turns it on in one line if forward
+data ever argues for it.
+
+A REGRESSION I INTRODUCED, recorded because the process failure matters more
+than the parameter. On 2026-08-25 the credit stop was tightened from -600% to
+-200% on request, and deployed without re-running the sweep -- despite the
+sweep two days earlier having measured that widening that stop was worth $17
+a trade. Caught the next morning:
+
+    0.25 delta, -200% stop   53 tr   -94.42/tr   worst -1123.74
+    0.25 delta, -600% stop   53 tr   -53.20/tr   worst  -397.25
+
+$41 a trade and nearly triple the worst day. Reverted before the window
+opened. THE RULE: a change that contradicts something already measured gets
+re-swept before it ships, not after.

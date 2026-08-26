@@ -175,6 +175,26 @@ class PlaybookWindow:
     # used to explain why two bearish structures fail. This is the bullish
     # half of the same observation, and until now nobody had tested it.
     min_session_drawdown_pct: "float | None" = None
+    # Sell premium INTO STRENGTH: refuse a credit entry until the underlying
+    # has risen this many dollars above its price at the window's start.
+    #
+    # A call credit spread sold at a fixed clock time places its short strike
+    # against wherever price happens to be. Sold after a push up, the same
+    # delta sits above a local high instead. Measured over 60 sessions on the
+    # $2-wide, $1-OTM spread booking at 50%:
+    #
+    #     enter at 13:30            59 tr  85% win   +4.81/tr  halves +6.49/+3.19
+    #     enter after a +$0.50 rise 37 tr  95% win  +16.33/tr  halves +23.78/+9.27
+    #     enter after a +$1.00 rise 20 tr  95% win  +16.18/tr  halves +23.99/+8.36
+    #
+    # Same mechanism as the one credit finding that worked earlier in the
+    # week: selling at an upper-band pierce beat selling at a fixed time.
+    # Price that has just run is a better place to sell calls than price that
+    # happens to be there when a clock strikes.
+    #
+    # The cost is trade count -- it only fires on days that rise after the
+    # window opens, cutting 59 sessions to 37 or 20. Twenty trades is thin.
+    min_rise_from_start: "float | None" = None
     #
     # Swept over 60 sessions on both morning short structures. The gate works
     # -- it separates a bearish signal from a bearish day -- and the two
@@ -672,6 +692,10 @@ WINDOWS = (
         # its worst moment.
         stop_loss_pct=_env_float("TRADING_CREDIT_STOP_PCT", -600.0),
         risk_off_pct=-60.0,
+        # None by default -- the measurement is 20-37 trades and needs a
+        # forward record before it becomes the standing behaviour. Set
+        # TRADING_CREDIT_MIN_RISE=0.50 to trade it.
+        min_rise_from_start=_env_float("TRADING_CREDIT_MIN_RISE", None),
         # 0.50. Swept over 60 sessions with equity compounding, the daily cap
         # live and indicators warmed over five sessions as the live feed warms
         # them: +57.98 a day at 20%, +104.27 at 35%, +108.30 at 50%, and

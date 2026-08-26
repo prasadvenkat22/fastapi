@@ -25,6 +25,7 @@ class TradingState(TypedDict):
     bollinger_zone: str
     bollinger_sd: float        # 20-period stdev — sizes the credit-spread strike distance
     bollinger_cross: str       # 'CROSS_UP', 'CROSS_DOWN', or 'NONE' — 20-period midline cross        # 'UPPER_BAND', 'LOWER_BAND', or 'NORMAL'
+    bollinger_pierce: str      # 'UP_PIERCE'/'DOWN_PIERCE'/'NONE' — the bar that crossed OUT of the band, not one riding it
     rsi_zone: str              # 'OVERBOUGHT' (>=70), 'OVERSOLD' (<=30), or 'NEUTRAL'
     # Self-computed Nasdaq-100 breadth. Recorded because it GATES -- a level
     # check and a collapse check both read it -- and until now it left no

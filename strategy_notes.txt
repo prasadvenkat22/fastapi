@@ -757,3 +757,47 @@ a trade. Caught the next morning:
 $41 a trade and nearly triple the worst day. Reverted before the window
 opened. THE RULE: a change that contradicts something already measured gets
 re-swept before it ships, not after.
+
+--------------------------------------------------------------------------------
+18. THE UPPER-BAND FADE -- BUILT, ISOLATED, REFUTED  (2026-08-26)
+--------------------------------------------------------------------------------
+
+Every bearish tier demands macd == BEARISH and sma == BELOW_SMA, so an
+upper-band pierce inside an UPTREND -- the classic fade -- cannot be traded
+at all. That is a genuine gap in the ladder, and it was worth closing on the
+crude harness's numbers, which made it the only credit entry all week to beat
+its unconditional baseline by a wide margin:
+
+    at an upper-band pierce, short atm+2   n=23  78% win  +34.10/tr
+    unconditional entry, same structure    n=60  65% win   +5.00/tr
+
+Through the engine, isolated so FADE is the only path in:
+
+    FADE only     13 tr   0% win   -94.41/tr   halves  -64.27/-120.25
+    all tiers     54 tr   9% win   -52.19/tr   halves  -71.15/ -33.22
+
+Zero wins in thirteen trades, and worse than the tier set it would replace.
+
+TWO METHOD LESSONS, both expensive.
+
+First: adding a tier at the END of the ladder cannot add trades to a window
+that already enters on 54 of 59 sessions. The first sweep returned
+-52.19 against -52.18 -- identical to the cent, the same tell that has caught
+three disconnected knobs this week. A tier has to be ISOLATED to be measured.
+
+Second, and larger: the crude harness has now been contradicted by the engine
+SIX times in a row on credit entries, always in the same direction -- it
+makes entry filters look better than they are, because it cannot reproduce
+what happens after the entry. Seven of these thirteen trades exited on
+TAKE_PROFIT and it still lost, meaning small wins and large stops. Use that
+harness to RANK entry rules and never to size the benefit.
+
+Today's tape was the plainer evidence anyway: QQQ rode the upper band from
+710.85 at 13:30 to close at 712.61, its afternoon high. Every call credit
+spread would have lost -- $1 OTM -49.77, $2 OTM -21.28, $3 OTM -5.34 -- and
+the direction gate that refused the trade was correct.
+
+SHIPPED AND OFF. FADE_ENTRIES_ENABLED defaults false. bollinger_pierce stays
+in the state either way: bollinger_zone reads UPPER_BAND both for a bar that
+crossed OUT of the band and for one riding it, and those are different
+setups. Distinguishing them cost a day of reasoning and is worth recording.

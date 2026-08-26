@@ -166,6 +166,28 @@ TREND_ENTRIES_ENABLED = os.getenv("TRADING_TREND_ENTRIES", "false").lower() == "
 # the market supplies. The RSI band does 75% of the filtering; VWAP only 16%.
 CLEAN_ENTRIES_ENABLED = os.getenv("TRADING_CLEAN_ENTRIES", "true").lower() == "true"
 
+# Whether the FADE tier trades: sell premium into a band PIERCE, with no
+# requirement that the trend agree.
+#
+# Every bearish tier in this engine demands macd == BEARISH and sma ==
+# BELOW_SMA, so an upper-band pierce inside an uptrend -- the classic fade --
+# cannot be traded at all. Measured on a crude harness over 60 sessions,
+# selling a call credit spread at an upper-band pierce was the ONLY credit
+# entry all week to beat its unconditional baseline by a wide margin:
+#
+#     at an upper-band pierce, short atm+2   n=23  78% win  +34.10/tr
+#     unconditional entry, same structure    n=60  65% win   +5.00/tr
+#
+# and the mirror does NOT work -- selling puts at a LOWER-band pierce
+# measured -17.08 against +5.00 unconditional. The band is a good ceiling and
+# a bad floor in this instrument, so this tier is BEAR ONLY.
+#
+# Fires on the first bar OUT of the band, not on any bar sitting outside it.
+# On 2026-08-26 QQQ rode the upper band all afternoon and a fade would have
+# lost at every strike; bollinger_zone cannot tell that from a pierce, which
+# is why bollinger_pierce exists.
+FADE_ENTRIES_ENABLED = os.getenv("TRADING_FADE_ENTRIES", "false").lower() == "true"
+
 # REJECT: a failed test of the 50 EMA from below. Bearish only -- the measured
 # edge is one-directional and there is no evidence for a mirrored bullish case.
 REJECT_ENTRIES_ENABLED = os.getenv("TRADING_REJECT_ENTRIES", "true").lower() == "true"
@@ -1012,7 +1034,30 @@ def bollinger_agent(state: TradingState) -> dict:
     # record accumulates. See shadow_condor_marks for why it is not traded.
     shadow = shadow_condor_marks(bars, float(last_close))
 
+    # First bar of a pierce, as distinct from riding the band.
+    #
+    # bollinger_zone alone cannot tell those apart -- both read UPPER_BAND.
+    # On 2026-08-26 QQQ rode the upper band all afternoon in an uptrend and a
+    # fade would have lost at every strike; the setup that measured +34.10 a
+    # trade was price pushing OUTSIDE a band that had not kept up. The
+    # difference is whether this is the bar that crossed out.
+    prev_zone = "NORMAL"
+    if len(close) >= 2:
+        prev_upper = (window.mean().iloc[-2] + 2 * window.std().iloc[-2])
+        prev_lower = (window.mean().iloc[-2] - 2 * window.std().iloc[-2])
+        if close.iloc[-2] >= prev_upper:
+            prev_zone = "UPPER_BAND"
+        elif close.iloc[-2] <= prev_lower:
+            prev_zone = "LOWER_BAND"
+    if zone == "UPPER_BAND" and prev_zone != "UPPER_BAND":
+        pierce = "UP_PIERCE"
+    elif zone == "LOWER_BAND" and prev_zone != "LOWER_BAND":
+        pierce = "DOWN_PIERCE"
+    else:
+        pierce = "NONE"
+
     return {"bollinger_zone": zone, "bollinger_cross": cross,
+            "bollinger_pierce": pierce,
             "bollinger_sd": round(float(std), 4) if std == std else 0.0,
             "shadow_condor": shadow}
 
@@ -1780,6 +1825,11 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # CLEAN: the four-rule structural gate. Checked FIRST because it is
         # the most selective -- if it and a looser tier both match, the
         # tighter attribution is the more informative one.
+        # FADE: sell into a band PIERCE with no trend requirement. Bear only
+        # -- the mirror measured -17.08 against +5.00 unconditional, because
+        # the band is a good ceiling and a bad floor in this instrument.
+        fade_bear = state.get("bollinger_pierce") == "UP_PIERCE"
+
         clean_bull = (
             sma == "ABOVE_SMA" and ema_cross == "EMA9_ABOVE_SMA20"
             and vwap_side == "ABOVE_VWAP" and rsi_band == "BULL_BAND"
@@ -1836,6 +1886,10 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             tier, bullish = "RELAXED", relaxed_bull
         elif MOMENTUM_ENTRIES_ENABLED and (momentum_bull or momentum_bear):
             tier, bullish = "MOMENTUM", momentum_bull
+        elif FADE_ENTRIES_ENABLED and fade_bear:
+            # Last in the ladder: if a trend-agreeing tier also matches,
+            # that is the more informative attribution.
+            tier, bullish = "FADE", False
         elif REJECT_ENTRIES_ENABLED and reject_bear:
             tier, bullish = "REJECT", False
         elif TREND_ENTRIES_ENABLED and (trend_bull or trend_bear):

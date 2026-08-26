@@ -662,3 +662,54 @@ stop adds nothing and only converts unrealised noise into realised loss.
 
 "Do not book losses early" is therefore right for one window and wrong for
 the other. It is the single most counter-intuitive result in this file.
+
+--------------------------------------------------------------------------------
+16. WHY "TRADE MORE" KEEPS LOSING  (2026-08-25, five independent tests)
+--------------------------------------------------------------------------------
+
+The idea arrives in many forms -- book early, re-enter after a dip, ladder
+the entry, ratchet out on a stall, keep the window open longer -- and every
+one of them was measured. All five lose, and all five raise the WIN RATE
+while lowering the P&L, which is what makes the idea so persistent:
+
+    credit spread, book 50% then re-enter    -10.80/day  vs +1.40 one trade
+    credit spread, book 30% then re-enter    -21.78/day
+    morning, 3-tranche laddered entry        worse at every schedule tried
+    morning, ratchet books on a fade          -36.61/tr  vs +294.41 riding
+       (and a LOOSE ratchet does not fix it: 0.35 giveback -40.52/tr)
+    morning, window open to 13:00             +161.08/tr vs +294.41 to 12:30
+       -- 5 extra trades, -$2,262: the marginal entries average about -$290
+
+One mechanism explains all of them. MORNING_DRIFT wins 39% of the time and
+its entire edge is in the few trades that run. Any rule that books early or
+trades more does two things at once: it pays the round-trip friction again
+(~$11-14 a contract) and it truncates the winners that pay for the 61% of
+losers. The win rate rises because small wins get banked; the P&L falls
+because the large ones stop existing.
+
+The counter-argument is real and priced: waiting does forfeit gains that were
+briefly on the table. It is simply smaller than the cost of not being in the
+trade on the days that run.
+
+THE MORNING'S RATCHET IS DEAD CODE, deliberately. ride_to_close means only
+the stop, the 13:25 deadline and the force close can end the trade -- no
+target, no trail. That is not an oversight; enabling the ratchet was measured
+at -36.61 a trade against +294.41 for riding.
+
+WINDOW LENGTH IS A GENUINE OPTIMUM, not a default:
+
+    entries until 11:30   20 tr  35% win  +202.94/tr  halves +712/-307
+    entries until 12:30   23 tr  39% win  +294.41/tr  halves +629/ -12   <- live
+    entries until 13:00   28 tr  36% win  +161.08/tr  halves +316/  +6
+
+12:30 wins on total and nearly ties the best second half. Too short and it
+misses setups; too long and it takes worse ones.
+
+DEPLOYED CONFIGURATION as of 2026-08-25 close:
+
+    MORNING_DRIFT     10:15-12:30  $10 wide, long $2 ITM (short $8 OTM)
+                      stop -20%, rides to a 13:25 exit
+    AFTERNOON_CREDIT  13:30-15:00  $2 wide, 0.25 delta (~$1 OTM)
+                      books at 50% of credit, stop -200%
+    macro LLM gate    OFF          the one term never in any backtest
+    orders            production, 3-contract cap, $4,000 budget

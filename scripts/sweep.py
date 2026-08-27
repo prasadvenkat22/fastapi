@@ -57,6 +57,7 @@ What it cannot replay, and what that costs:
   * yfinance serves 60 days of 5-minute bars, so the sample is what it is.
 """
 
+import math
 import os
 import sys
 from dataclasses import replace
@@ -89,6 +90,54 @@ EQUITY = 10000.0
 # flatters the busiest configuration -- which is precisely the axis several
 # of these sweeps are deciding.
 SLIPPAGE_ROUNDTRIP = 0.10
+
+# Options trade on a PRICE GRID, and this harness has never modelled it.
+#
+# broker.fill_price rounds to four decimals, so a replay can mark a spread at
+# 0.0437 and book a gain of a third of a cent. No such fill exists. QQQ
+# options quote in pennies below $3.00 and nickels above, and every real exit
+# lands on that grid.
+#
+# It does not matter much at $3-4 -- a penny on the morning debit spread is
+# 0.3% -- and it decides everything at a nickel. Live on 2026-08-27 the
+# credit window sold 721/723 for 0.05, ratcheted out at a measured +20%, and
+# booked exactly $0.00: the peak-to-exit move the ratchet was reading was
+# ONE TICK, and crossing the spread to act on it consumed the whole of it.
+# A smooth-price harness cannot produce that result, which is why no previous
+# sweep of this window ever showed it.
+#
+# Buys round UP to the next tick and sells round DOWN, which is the direction
+# a crossing order actually fills.
+TICK_PRICING = os.getenv("SWEEP_TICK_PRICING", "true").lower() == "true"
+TICK_BELOW_3 = 0.01
+TICK_ABOVE_3 = 0.05
+TICK_BREAK = 3.0
+
+
+def _to_tick(price: float, side: str) -> float:
+    """Snap a fill to the grid the contract actually trades on."""
+    if price <= 0:
+        return 0.0
+    tick = TICK_BELOW_3 if price < TICK_BREAK else TICK_ABOVE_3
+    n = price / tick
+    # The epsilon keeps a price already ON the grid from being nudged a whole
+    # tick by floating-point dust -- 0.07/0.01 is 6.999999999999999.
+    n = math.ceil(n - 1e-9) if side == "buy" else math.floor(n + 1e-9)
+    return max(round(n * tick, 4), 0.0)
+
+
+def _patch_ticks():
+    """Quantise every simulated fill, in every namespace that took a copy."""
+    if not TICK_PRICING:
+        return
+    raw = broker_mod.fill_price
+
+    def fill_price_ticked(model_value: float, side: str) -> float:
+        return _to_tick(raw(model_value, side), side)
+
+    for mod in (broker_mod, N, sys.modules[__name__]):
+        if hasattr(mod, "fill_price"):
+            mod.fill_price = fill_price_ticked
 
 # Commission, in premium terms, per contract per ROUND TRIP.
 #
@@ -278,6 +327,8 @@ def _patch_engine():
     N.tradier_orders.LIVE_ORDERS = False
     if CHAIN_PRICING:
         _patch_pricing()
+    # After the pricer, so the grid is applied to whatever prices it produces.
+    _patch_ticks()
     # The shadow condor reaches for the chain through data_feed directly, so
     # patching the nodes reference alone left a live HTTP call in every cycle
     # of every sweep -- one per 30-second cache window, plus a warning line
@@ -626,6 +677,53 @@ def sweep_creditstop(sessions: dict):
         trades, _ = _run_arm(sessions, dtime(13, 30))
         _report(label, trades, len(sessions))
     PB.WINDOWS = base
+
+
+def sweep_mincredit(sessions: dict):
+    """How much premium is worth getting out of bed for?
+
+    TRADING_MIN_CREDIT exists and has sat at its 0.05 default. On 2026-08-27
+    the live window sold 721/723 twice at exactly 0.05 -- ON the floor, since
+    the guard is a strict `<` -- and the second one ratcheted out at a
+    measured +20% for exactly $0.00. At a nickel of credit one tick IS 20%,
+    so every exit threshold in the window sits below the resolution of the
+    price grid. The engine was measuring a quantity it could not act on.
+
+    This arm asks where the floor should be. It is run against the DEPLOYED
+    configuration -- 13:30 start, $2 wing, 0.25 short delta -- not the file
+    defaults, because the answer is a number to put in the live env.
+
+    READ THE TRADE COUNT ALONGSIDE THE AVERAGE. A higher floor is a filter,
+    and a filter that improves the per-trade average by refusing everything
+    has not found an edge, it has found the door. The per-session line is the
+    one that can tell those apart.
+
+    And read this arm the way section 16 says to read every entry filter: it
+    RANKS floors. The harness holds one contract and has no ratchet, so the
+    dollar figures are not what the live window would earn.
+    """
+    print("")
+    print("CREDIT FLOOR -- minimum premium worth taking width-of-risk for")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}"
+          f"    grid: {'PENNY/NICKEL TICKS' if TICK_PRICING else 'SMOOTH -- not real'}")
+    print("")
+    base_windows, base_floor, base_delta = PB.WINDOWS, N.MIN_CREDIT, N.CREDIT_SHORT_DELTA
+    # Match the live env, so the number this prints can be pasted into it.
+    N.CREDIT_SHORT_DELTA = 0.25
+    PB.WINDOWS = tuple(
+        replace(w, start=dtime(13, 30), width=2.0) if w.name == "AFTERNOON_CREDIT" else w
+        for w in base_windows
+    )
+    PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
+    try:
+        for floor in (0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50):
+            N.MIN_CREDIT = floor
+            trades, per_day = _run_arm(sessions, dtime(13, 30))
+            traded = len([d for d in per_day if d["trades"]])
+            _report(f"floor {floor:.2f}  ({traded}/{len(sessions)} sessions)",
+                    trades, len(sessions))
+    finally:
+        PB.WINDOWS, N.MIN_CREDIT, N.CREDIT_SHORT_DELTA = base_windows, base_floor, base_delta
 
 
 def sweep_handoff(sessions: dict):
@@ -1939,6 +2037,8 @@ def main():
         sweep_target(sessions)
     if which in ("creditstop", "all"):
         sweep_creditstop(sessions)
+    if which in ("mincredit", "all"):
+        sweep_mincredit(sessions)
     if which in ("handoff", "all"):
         sweep_handoff(sessions)
     if which in ("retries", "all"):

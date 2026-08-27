@@ -907,3 +907,75 @@ other positions consumed margin it could not see.
 No parameter in playbook.py accounts for a second decision-maker on the same
 margin balance. The engine needs its own account, or a hard sub-allocation it
 can treat as the whole world.
+
+--------------------------------------------------------------------------------
+21. THE CREDIT FLOOR, MEASURED -- AND THE PRICE GRID THE HARNESS NEVER HAD
+    (2026-08-27)
+--------------------------------------------------------------------------------
+
+Live on 2026-08-27 the credit window sold 721/723 for 0.05 twice, and the
+second one ratcheted out at a measured +20% for exactly $0.00. At a nickel of
+credit ONE TICK IS 20%: the peak-to-exit move the ratchet was reading was a
+single penny, and crossing the spread to act on it consumed all of it.
+
+That prompted two things: a sweep of TRADING_MIN_CREDIT, and a correction to
+the harness that had to come first.
+
+THE HARNESS HAD NO PRICE GRID
+
+broker.fill_price rounds to four decimals, so a replay could mark a spread at
+0.0437 and book a third of a cent. No such fill exists. QQQ options quote in
+pennies below $3.00 and nickels above, and every real exit lands there.
+
+scripts/sweep.py now quantises simulated fills -- buys up a tick, sells down,
+which is how a crossing order actually fills. SWEEP_TICK_PRICING=false
+restores the old smooth behaviour for reproducing earlier numbers.
+
+It matters least where premium is large and most where it is small, which is
+exactly where this window lives:
+
+    floor 0.05, smooth prices    -54.45/tr
+    floor 0.05, penny grid       -63.56/tr      the grid costs $9 a trade
+
+BUT IT DID NOT CHANGE ANY CONCLUSION, AND THE SWEEP WAS NEVER THE PROBLEM.
+Both models say every floor loses. The smooth harness was flattering this
+window by about 17% at a nickel and was already reporting it as a loser. The
+live config was not chosen on a sweep that hid the failure -- the playbook's
+own comment block says plainly that every afternoon premium-selling variant
+measured on chain prices loses, and that "it is not a tuning problem".
+
+THE FLOOR SWEEP, DEPLOYED CONFIG (13:30 start, $2 wing, 0.25 delta)
+60 sessions, chain-priced, penny grid:
+
+    floor   sessions traded   n    win%    per trade      total
+    0.05          48/60      51    12%      -63.56       -3241.80
+    0.10          41/60      43     9%      -45.80       -1969.60
+    0.15          29/60      30    27%      -28.11        -843.40
+    0.20          14/60      14    50%       -4.07          -57.00
+    0.25           3/60       3    67%       +0.60           +1.80
+    0.30+          0/60       -      -      no trades
+
+READ THE SESSION COUNT, NOT THE AVERAGE. The per-trade number improves
+monotonically as the trade count collapses, and turns positive only at three
+trades in sixty sessions. That is the signature of a filter with no edge: it
+is not finding better trades, it is finding the door. A floor that "wins" by
+refusing 95% of sessions and taking three has measured nothing.
+
+There is no floor at which this window makes money while still trading.
+
+The one genuinely diagnostic row is the exit mix at 0.05: twenty TAKE_PROFIT
+exits against six winning trades. The take-profit threshold fires on the mid
+and the fill happens at the natural, so most of the window's "profit-taking"
+books a loss. That is the live 721/723 ratchet, sixty sessions deep.
+
+WHAT THIS ARGUES FOR
+
+Not a higher floor. Raising it to 0.20 turns a large loss into a small one by
+trading a quarter as often, and both halves stay negative. The floor is a
+brake on a vehicle pointed the wrong way.
+
+The honest reading is the one section 14 reached from the probability side
+and the playbook comment reached from the pricing side: selling market-priced
+0DTE premium is a fair bet before costs, and there is no version of it that
+survives them. This window should be off. Keeping it on at 0.20 is the
+least-bad configuration if it stays, and it still loses.

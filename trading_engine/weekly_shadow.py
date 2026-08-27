@@ -1,4 +1,33 @@
-"""A weekly call credit spread, observed and never traded.
+"""Weekly credit structures across many underlyings, observed and never traded.
+
+Started as a QQQ call spread and now marks CALL, PUT and CONDOR on every
+symbol in TRADING_WEEKLY_SYMBOLS. Nothing here places an order or consumes
+buying power; it writes rows on Friday and marks them until expiry.
+
+WHY ALL THREE STRUCTURES, PER SYMBOL. On QQQ the two sides are not
+symmetric and the asymmetry is measured, not assumed: over 5 years of 5-day
+outcomes the 0.12-delta CALL finished in the money 20.9% of the time against
+11.7% priced, while the PUT finished 12.3% against 11.4% priced. Delta is
+priced driftless and QQQ drifts up, so a call seller is short the index's own
+direction and a condor pairs a negative-EV wing with a positive-EV one.
+
+Whether that holds on a single name is an open question, and a different one
+per name -- a high-IV single stock has no reason to share an index's drift.
+Recording the wings separately costs nothing and is the only way to find out;
+collapsing them into a condor number would hide exactly the effect worth
+knowing about.
+
+WHAT THIS CANNOT TELL YOU YET. Whether the premium is worth selling at all is
+a question about implied against realised, and scripts/rv_vs_iv.py answers it
+from the snapshots capture_chain.py collects. Those started on 2026-08-27, so
+the first period-matched single-name pairs land in early September. Until
+then this is accumulating structure records with no verdict attached, which
+is the intended order: the 0DTE credit window was live for weeks before its
+own numbers said it loses at every setting.
+
+Original QQQ note follows.
+
+A weekly call credit spread, observed and never traded.
 
 Sell a call spread late on Friday, hold it over the weekend for the decay,
 and look at it again on Monday morning. The idea is sound and the engine has
@@ -27,12 +56,13 @@ Friday and marks it every cycle until expiry.
 
 import logging
 import os
+from collections import Counter
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from models_pgdb.trading_models import WeeklyShadow
 
-from .data_feed import chain_vertical, fetch_option_chain, fetch_qqq_spot, strike_for_delta
+from .data_feed import chain_vertical, fetch_option_chain, fetch_spot, strike_for_delta
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +102,59 @@ VARIANTS = tuple(
     if v.strip()
 )
 WIDTH = float(os.getenv("TRADING_WEEKLY_WIDTH", "5.0"))
+
+# Width can be expressed in STRIKES instead, which is the unit that travels
+# across symbols. Left at 0 the dollar figure above is used, so QQQ keeps the
+# exact width its existing record was built on.
+WIDTH_STRIKES = int(os.getenv("TRADING_WEEKLY_WIDTH_STRIKES", "0"))
+
+# Which underlyings to mark. The same list capture_chain.py snapshots, so the
+# implied-vol history and the structure record cover the same names.
+#
+# Nothing here is traded. These are candidates for a single-name book and the
+# only honest evidence about them is forward evidence: there is no historical
+# option-chain feed to backtest a weekly condor against, which is the same
+# reason this module exists for QQQ.
+SYMBOLS = tuple(
+    v.strip().upper()
+    for v in os.getenv(
+        "TRADING_WEEKLY_SYMBOLS",
+        "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN"
+    ).split(",")
+    if v.strip()
+)
 TARGET_PCT = float(os.getenv("TRADING_WEEKLY_TARGET_PCT", "25.0"))
 MIN_CREDIT = float(os.getenv("TRADING_WEEKLY_MIN_CREDIT", "0.10"))
+
+
+def _strike_spacing(chain) -> float:
+    """The gap this symbol actually lists strikes on.
+
+    Read from the chain rather than configured, because it varies by symbol
+    and by price: QQQ and CRWV quote $1, while MU, STX, WDC, DELL and META
+    quote $5. The most common gap, not the smallest -- a chain often carries
+    a few half-strikes near the money that would otherwise be mistaken for
+    the grid.
+    """
+    strikes = sorted({float(key[1]) for key in chain})
+    gaps = [round(b - a, 4) for a, b in zip(strikes, strikes[1:]) if b > a]
+    if not gaps:
+        return 1.0
+    return Counter(gaps).most_common(1)[0][0]
+
+
+def _width_for(chain) -> float:
+    """Spread width in dollars, respecting the symbol's own strike grid.
+
+    WIDTH is a dollar figure tuned on QQQ's $1 grid. On a $5-strike name a
+    narrower spread does not exist, so taking the larger of the two leaves
+    QQQ exactly as it was and gives every other name the tightest spread it
+    actually lists.
+    """
+    spacing = _strike_spacing(chain)
+    if WIDTH_STRIKES:
+        return round(WIDTH_STRIKES * spacing, 2)
+    return round(max(WIDTH, spacing), 2)
 
 
 def _next_weekly_expiry(today: date) -> str:
@@ -102,15 +183,37 @@ def observe(db, now: "datetime | None" = None) -> None:
     if not ENABLED:
         return
     now = now or datetime.now(NY)
-    rows = _open_rows(db)
-    if not rows:
-        _maybe_open(db, now)
-        return
-    for row in rows:
-        _mark(db, row, now)
+
+    # One chain fetch per (symbol, expiration), not per row. Three variants
+    # on eleven symbols is 33 open rows, and fetching per row would be 33
+    # requests every cycle for 11 chains' worth of information.
+    groups: dict = {}
+    for row in _open_rows(db):
+        groups.setdefault((row.symbol or "QQQ", row.expiration), []).append(row)
+
+    for (symbol, expiration), group in groups.items():
+        chain = fetch_option_chain(expiration, symbol=symbol)
+        spot = fetch_spot(symbol) if chain else None
+        # Passed even when empty: a row past its expiration still has to
+        # settle, and settling reads nothing from the chain.
+        for row in group:
+            _mark(db, row, now, chain, spot)
+
+    # A symbol with nothing open is a candidate to open, independently of
+    # what the others are carrying.
+    #
+    # The old check was "are there any open rows AT ALL", which with a single
+    # underlying meant the same thing. With eleven it would let QQQ's open
+    # position block every other name from ever starting one -- and it would
+    # have done so silently, since a shadow that never opens looks exactly
+    # like a shadow whose entry conditions were not met.
+    open_symbols = {sym for sym, _ in groups}
+    for symbol in SYMBOLS:
+        if symbol not in open_symbols:
+            _maybe_open(db, now, symbol)
 
 
-def _legs(chain, variant):
+def _legs(chain, variant, width: float):
     """Strikes for one variant, or None when the chain cannot supply them.
 
     Returns (call_short, call_long, put_short, put_long) with None where a
@@ -121,12 +224,12 @@ def _legs(chain, variant):
         cs = strike_for_delta(chain, "call", SHORT_DELTA)
         if cs is None:
             return None
-        cl = cs + WIDTH
+        cl = cs + width
     if variant in ("PUT", "CONDOR"):
         ps = strike_for_delta(chain, "put", SHORT_DELTA)
         if ps is None:
             return None
-        pl = ps - WIDTH
+        pl = ps - width
     return cs, cl, ps, pl
 
 
@@ -154,39 +257,44 @@ def _price(chain, cs, cl, ps, pl):
             "call_side": sides["call"], "put_side": sides["put"]}
 
 
-def _maybe_open(db, now: datetime) -> None:
+def _maybe_open(db, now: datetime, symbol: str) -> None:
     if now.weekday() != ENTRY_WEEKDAY or now.time() < ENTRY_TIME:
         return
 
     expiry = _next_weekly_expiry(now.date())
-    chain = fetch_option_chain(expiry)
+    chain = fetch_option_chain(expiry, symbol=symbol)
     if not chain:
-        logger.info("Weekly shadow: no chain for %s yet.", expiry)
+        logger.info("Weekly shadow %s: no chain for %s yet.", symbol, expiry)
         return
-    spot = fetch_qqq_spot()
+    spot = fetch_spot(symbol)
+    if spot is None:
+        logger.info("Weekly shadow %s: no spot available — skipped.", symbol)
+        return
+    width = _width_for(chain)
 
     for variant in VARIANTS:
-        legs = _legs(chain, variant)
+        legs = _legs(chain, variant, width)
         if legs is None:
-            logger.info("Weekly shadow %s: no strike near %.2f delta on %s.",
-                        variant, SHORT_DELTA, expiry)
+            logger.info("Weekly shadow %s %s: no strike near %.2f delta on %s.",
+                        symbol, variant, SHORT_DELTA, expiry)
             continue
         cs, cl, ps, pl = legs
         priced = _price(chain, cs, cl, ps, pl)
         if priced is None:
-            logger.info("Weekly shadow %s: %s chain missing a leg.", variant, expiry)
+            logger.info("Weekly shadow %s %s: %s chain missing a leg.",
+                        symbol, variant, expiry)
             continue
         if priced["mid"] < MIN_CREDIT:
-            logger.info("Weekly shadow %s: collects only %.3f, below the %.2f floor.",
-                        variant, priced["mid"], MIN_CREDIT)
+            logger.info("Weekly shadow %s %s: collects only %.3f, below the %.2f floor.",
+                        symbol, variant, priced["mid"], MIN_CREDIT)
             continue
 
         short_leg = chain.get(("call", float(cs))) if cs else chain.get(("put", float(ps)))
         db.add(WeeklyShadow(
-            expiration=expiry, strategy=f"WEEKLY_{variant}",
+            symbol=symbol, expiration=expiry, strategy=f"WEEKLY_{variant}",
             short_strike=cs, long_strike=cl,
             put_short_strike=ps, put_long_strike=pl,
-            width=WIDTH, spot_at_entry=round(spot, 2),
+            width=width, spot_at_entry=round(spot, 2),
             short_delta=round(short_leg.delta, 4) if short_leg and short_leg.delta is not None else None,
             short_iv=round(short_leg.iv, 4) if short_leg and short_leg.iv is not None else None,
             entry_credit_mid=round(priced["mid"], 4),
@@ -197,22 +305,25 @@ def _maybe_open(db, now: datetime) -> None:
             peak_return_pct=0.0, worst_return_pct=0.0,
         ))
         logger.info(
-            "Weekly shadow OPENED %s %s — calls %s/%s puts %s/%s, credit %.3f mid / %.3f natural, "
-            "%.3f to cross, spot %.2f.",
-            variant, expiry, cs, cl, ps, pl,
+            "Weekly shadow OPENED %s %s %s ($%.2f wide) — calls %s/%s puts %s/%s, "
+            "credit %.3f mid / %.3f natural, %.3f to cross, spot %.2f.",
+            symbol, variant, expiry, width, cs, cl, ps, pl,
             priced["mid"], max(priced["natural_sell"], 0.0), priced["cross"], spot,
         )
     db.commit()
 
 
-def _mark(db, row: WeeklyShadow, now: datetime) -> None:
-    """Reprice one open shadow and record both outcomes as they arrive."""
+def _mark(db, row: WeeklyShadow, now: datetime, chain, spot) -> None:
+    """Reprice one open shadow and record both outcomes as they arrive.
+
+    The chain and spot are passed in rather than fetched here so that all
+    variants on one symbol share a single request -- see observe().
+    """
     if now.date().isoformat() > row.expiration:
         _settle(db, row, now)
         return
 
-    chain = fetch_option_chain(row.expiration)
-    if not chain:
+    if not chain or spot is None:
         return
     priced = _price(chain, row.short_strike, row.long_strike,
                     row.put_short_strike, row.put_long_strike)
@@ -222,7 +333,6 @@ def _mark(db, row: WeeklyShadow, now: datetime) -> None:
     cost = max(priced["mid"], 0.0)
     credit = row.entry_credit_mid
     ret = ((credit - cost) / credit * 100.0) if credit else 0.0
-    spot = fetch_qqq_spot()
 
     row.last_marked_at = now
     row.last_value_mid = round(cost, 4)
@@ -236,15 +346,16 @@ def _mark(db, row: WeeklyShadow, now: datetime) -> None:
                 or (row.put_short_strike is not None and spot <= row.put_short_strike))
     if breached and not row.breached:
         row.breached = now.isoformat()
-        logger.warning("Weekly shadow %s BREACHED: spot %.2f.", row.strategy, spot)
+        logger.warning("Weekly shadow %s %s BREACHED: spot %.2f.",
+                       row.symbol, row.strategy, spot)
 
     if ret >= TARGET_PCT and row.target_hit_at is None:
         row.target_hit_at = now
         row.target_return_pct = round(ret, 2)
         logger.info(
-            "Weekly shadow %s hit the %.0f%% target at %+.2f%% — the Monday rule would book "
-            "here. Still marking to expiry to see whether holding beat it.",
-            row.strategy, TARGET_PCT, ret,
+            "Weekly shadow %s %s hit the %.0f%% target at %+.2f%% — the Monday rule would "
+            "book here. Still marking to expiry to see whether holding beat it.",
+            row.symbol, row.strategy, TARGET_PCT, ret,
         )
     db.commit()
 
@@ -260,9 +371,9 @@ def _settle(db, row: WeeklyShadow, now: datetime) -> None:
     row.expiry_return_pct = round(((credit - cost) / credit * 100.0) if credit else 0.0, 2)
     db.commit()
     logger.info(
-        "Weekly shadow SETTLED %s %s: %+.2f%% held to expiry, target %s, "
+        "Weekly shadow SETTLED %s %s %s: %+.2f%% held to expiry, target %s, "
         "peak %+.2f%%, worst %+.2f%%, breached %s.",
-        row.strategy, row.expiration, row.expiry_return_pct,
+        row.symbol, row.strategy, row.expiration, row.expiry_return_pct,
         f"hit at {row.target_return_pct:+.2f}%" if row.target_hit_at else "never hit",
         row.peak_return_pct or 0.0, row.worst_return_pct or 0.0, bool(row.breached),
     )

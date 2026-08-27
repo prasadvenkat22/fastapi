@@ -979,3 +979,79 @@ and the playbook comment reached from the pricing side: selling market-priced
 0DTE premium is a fair bet before costs, and there is no version of it that
 survives them. This window should be off. Keeping it on at 0.20 is the
 least-bad configuration if it stays, and it still loses.
+
+--------------------------------------------------------------------------------
+22. THE WEEKLY BOOK GOES MULTI-SYMBOL, AND A DEPLOY RACE  (2026-08-27)
+--------------------------------------------------------------------------------
+
+weekly_shadow.py now marks CALL, PUT and CONDOR on every symbol in
+TRADING_WEEKLY_SYMBOLS -- the same eleven capture_chain.py snapshots, so the
+implied-vol history and the structure record cover the same names. Nothing is
+traded. Shadow first, deliberately: the 0DTE credit window ran live for weeks
+before its own numbers said it loses at every setting, and that is the
+mistake not to repeat on eleven new symbols at once.
+
+WHY ALL THREE STRUCTURES RATHER THAN THE CONDOR ASKED FOR. On QQQ the wings
+are not symmetric and it is measured, not assumed: over 5 years of 5-day
+outcomes the 0.12-delta CALL finished ITM 20.9% against 11.7% priced, the PUT
+12.3% against 11.4%. Delta is priced driftless and QQQ drifts up, so a condor
+pairs a negative-EV wing with a positive-EV one. Whether that holds on a
+single name is a different question per name -- a high-IV single stock has no
+reason to share an index's drift -- and recording the wings separately is the
+only way to find out. It costs nothing.
+
+THE STRIKE GRID IS READ, NOT CONFIGURED. WIDTH was a dollar figure tuned on
+QQQ's $1 strikes. The names added quote differently -- $5 on SNDK, MU, STX,
+META, MSFT, GOOGL, AMZN; $2.50 on WDC and DELL; $1 on QQQ and CRWV -- so a $5
+width is five strikes on one name and one strike on another. _strike_spacing
+reads the gap from the chain (the MODE, not the minimum: chains carry stray
+half-strikes near the money that would be mistaken for the grid) and the
+width is at least one strike. QQQ is unchanged at $5, which keeps its
+existing record continuous.
+
+Dry run against real chains for the 2026-08-28 expiry, 0.12 delta, condor:
+
+    sym     spot   grid  width   credit  cr/risk
+    QQQ   721.11   1.00   5.00     0.55    12.4%
+    SNDK 1484.95   5.00   5.00     0.35     7.5%
+    MU    933.90   5.00   5.00     0.55    12.4%
+    CRWV   86.80   1.00   5.00     0.37     8.0%
+    STX   847.20   5.00   5.00     0.00     0.0%   <- no bid, skipped
+    WDC   462.00   2.50   5.00     0.00     0.0%   <- no bid, skipped
+    DELL  472.26   2.50   5.00     0.73    17.1%
+    META  571.10   5.00   5.00     0.56    12.6%
+    MSFT  504.91   5.00   5.00     0.47    10.4%
+    GOOGL 340.65   5.00   5.00     0.26     5.5%
+    AMZN  256.26   5.00   5.00     0.23     4.8%
+
+STX and WDC price at zero natural credit -- the 0.12-delta wing has no bid on
+a one-strike-wide spread -- and the MIN_CREDIT floor skips them. That is the
+floor doing its job, and note the contrast with the 0DTE window: there the
+floor could not rescue a structure with no edge, here it is refusing a quote
+that does not exist. Same mechanism, different question.
+
+Nothing about these numbers says any of it is worth selling. Credit-to-risk
+is not edge -- section 14 -- and the verdict needs rv_vs_iv.py, whose first
+period-matched single-name pairs land in early September.
+
+DEPLOY RACE: scp INTO A LIVE BIND MOUNT IS NOT ATOMIC
+
+Uploading data_feed.py cost one live cycle at 20:11 UTC:
+
+    ImportError: cannot import name 'fetch_spot' from trading_engine.data_feed
+
+The file was correct before and after. The cron fires run_cycle.py every
+minute as a fresh process, and that minute's process imported the file WHILE
+scp was still writing it. Nothing was wrong with the code and nothing needed
+fixing -- 20:12 recovered on its own.
+
+It is the third time a deployment step, rather than a code change, has cost a
+live cycle: the data_feed NameError, the model-before-migration column error,
+and now this. The fix is to write to a temporary name and rename, since
+rename within a filesystem is atomic and an importing process sees either the
+old file or the new one:
+
+    scp file host:/opt/fastapi/path.tmp && ssh host 'mv path.tmp path'
+
+Harmless here because the market was shut. During a session it would have
+been a minute in which a live position was not managed.

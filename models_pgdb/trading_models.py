@@ -210,6 +210,11 @@ class WeeklyShadow(Base):
     __tablename__ = "weekly_shadow"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     opened_at = Column(DateTime(timezone=True), default=func.now())
+    # Which underlying. Defaulted to QQQ because every row written before
+    # 2026-08-27 is one, and the column exists so the single-name book can be
+    # compared name by name -- the question being not "does a weekly condor
+    # work" but "on which names does implied exceed realised".
+    symbol = Column(String, nullable=False, default="QQQ", index=True)
     expiration = Column(String, nullable=False)        # YYYY-MM-DD
     strategy = Column(String, nullable=False)          # CALL_CREDIT_SPREAD
     # Call side: short/long. Put side: put_short/put_long. A CALL variant

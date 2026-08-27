@@ -228,6 +228,39 @@ def fetch_qqq_spot() -> float:
     return float(bars["Close"].iloc[-1])
 
 
+def fetch_spot(symbol: str) -> "float | None":
+    """Freshest price for any symbol, or None if it cannot be had.
+
+    Tradier first, because the production key is real time and this is used to
+    choose strikes and to decide whether a short strike has been breached --
+    both of which read a stale price as a real one. yfinance is the fallback
+    rather than the source for the same reason fetch_qqq_spot exists: a
+    5-minute bar close is fine for a moving average and not for a strike.
+
+    Returns None rather than raising or guessing. Every caller is
+    observational, and a name whose quote is briefly unavailable should drop
+    out of that cycle, not poison a record with a wrong number.
+    """
+    quote = _tradier_quote(symbol)
+    if quote:
+        for field in ("last", "close", "prevclose"):
+            value = quote.get(field)
+            if value:
+                try:
+                    price = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if price > 0:
+                    return price
+    try:
+        bars = yf.Ticker(symbol).history(period="1d", interval="1m")
+        if not bars.empty:
+            return float(bars["Close"].iloc[-1])
+    except Exception:
+        logger.debug("No spot for %s from either source.", symbol, exc_info=True)
+    return None
+
+
 def _tradier_session_vwap() -> "float | None":
     """Session VWAP from Tradier's own intraday bars.
 

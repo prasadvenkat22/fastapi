@@ -8,6 +8,7 @@ whenever a position fully closes, so without writing a TradeHistory row here
 first, the result of that trade (profit or loss) would simply disappear."""
 
 import logging
+import time
 
 from sqlalchemy.orm import Session
 
@@ -44,20 +45,25 @@ def _classify_close_reason(exit_reason: str, return_pct: float) -> str:
 
 
 def _route_order(position_like, quantity: int, opening: bool, limit_price: float,
-                 label: str) -> None:
+                 label: str) -> "dict | None":
     """Send the order the engine's decision implies, and log what came back.
 
-    SHADOW for now: the engine's own row stays authoritative and this changes
-    nothing about what it believes it holds. That ordering is deliberate --
-    the same approach taken with chain pricing, where both numbers were logged
-    for a session before either was trusted. An order path that has never sent
-    an order should not also be the thing deciding what the position is.
+    No longer shadow. This began as a logging-only path, with the engine's own
+    row authoritative and the broker's answer recorded but never acted on --
+    the same staged approach taken with chain pricing, where both numbers were
+    logged for a session before either was trusted.
+
+    Closes have since been promoted: the caller reads the returned order and
+    an explicit rejection keeps the position open (see _close_rejected).
+    OPENS are still shadow in exactly the old sense -- the row is written
+    whatever the broker says -- which is a known gap, visible as a RECONCILE
+    line rather than as a corrected position.
 
     Guarded completely. Every P&L figure in this repository already assumes a
     fill it never received; an exception here must not also cost a cycle.
     """
     if not tradier_orders.LIVE_ORDERS:
-        return
+        return None
     try:
         result = tradier_orders.submit_vertical(
             position_like.underlying if hasattr(position_like, "underlying") else "QQQ",
@@ -71,8 +77,58 @@ def _route_order(position_like, quantity: int, opening: bool, limit_price: float
             is_credit=is_credit(position_like.strategy),
         )
         logger.info("Order [%s] %s: %s", label, "OPEN" if opening else "CLOSE", result)
+        return result
     except Exception:
         logger.exception("Order [%s] failed — the engine's own state is unchanged.", label)
+        return None
+
+
+# Terminal states in which the broker has refused or abandoned an order. A
+# close that reaches one of these did NOT happen, whatever the submit call
+# answered at the time.
+_DEAD_ORDER_STATES = {"rejected", "canceled", "cancelled", "expired", "error"}
+
+
+def _close_rejected(order_result: "dict | None") -> bool:
+    """Did the broker REFUSE this close?
+
+    submit_vertical answering {'status': 'ok'} means "accepted for
+    processing", not "filled", and the two came apart on 2026-08-27: an
+    external buyback removed the short leg, the engine's multileg exit was
+    rejected a second after being accepted, and the caller booked it anyway.
+    A TradeHistory row was written for a close that never happened and two
+    real contracts went unmanaged into expiry.
+
+    Only an EXPLICIT refusal counts. An order still working when the poll runs
+    out is left alone and treated as standing, because the opposite mistake is
+    worse: a row kept open on an order that then fills would have the next
+    cycle try to sell a position the account no longer holds. Between booking
+    a close that is merely slow and double-closing one that already went
+    through, the slow case is the recoverable one -- _reconcile compares
+    against the broker every cycle and says so out loud.
+    """
+    if not tradier_orders.LIVE_ORDERS or not order_result:
+        return False
+    order_id = order_result.get("id")
+    if not order_id:
+        return False
+    for attempt in range(6):
+        try:
+            status = (tradier_orders.order_status(order_id).get("status") or "").lower()
+        except Exception:
+            logger.exception("Could not read close order %s — treating it as standing.", order_id)
+            return False
+        if status in _DEAD_ORDER_STATES:
+            logger.error("Close order %s came back %s.", order_id, status)
+            return True
+        if status == "filled":
+            return False
+        if attempt < 5:
+            time.sleep(1.5)
+    logger.warning(
+        "Close order %s still %s after the poll — booking it and letting RECONCILE "
+        "catch it if it never fills.", order_id, status or "unknown")
+    return False
 
 
 def _reconcile(open_row) -> None:
@@ -257,49 +313,62 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             if is_credit(open_row.strategy)
             else (exit_value - open_row.entry_net_debit)
         )
-        _route_order(open_row, open_row.quantity, opening=False,
-                     limit_price=exit_value, label=open_row.playbook or open_row.strategy)
-        realized_dollars = per_spread * open_row.quantity * 100
-        # The percentage has to describe the same trade as the dollars. The
-        # rule still FIRED on the mid-based return -- that is what the stop and
-        # the ratchet read, and _classify_close_reason is judging the decision,
-        # not the fill -- but what gets recorded as the result is the realised
-        # one.
-        realized_pct = (
-            round(per_spread / open_row.entry_net_debit * 100, 4)
-            if open_row.entry_net_debit else 0.0
-        )
-        close_reason = _classify_close_reason(final_state.get("exit_reason", ""), pre_close_return_pct)
-        db.add(TradeHistory(
-            strategy=open_row.strategy,
-            underlying=open_row.underlying,
-            quantity=open_row.quantity,
-            long_strike=open_row.long_strike,
-            short_strike=open_row.short_strike,
-            entry_net_debit=open_row.entry_net_debit,
-            exit_net_value=exit_value,
-            realized_pnl_dollars=round(realized_dollars, 2),
-            realized_pnl_pct=realized_pct,
-            close_reason=close_reason,
-            playbook=open_row.playbook,
-            opened_at=open_row.opened_at,
-            entry_macd_signal=open_row.entry_macd_signal,
-            entry_sma_trend=open_row.entry_sma_trend,
-            entry_bollinger_zone=open_row.entry_bollinger_zone,
-            entry_rsi_zone=open_row.entry_rsi_zone,
-        ))
-        closed_trade = {
-            "strategy": open_row.strategy,
-            "macd_signal": open_row.entry_macd_signal,
-            "sma_trend": open_row.entry_sma_trend,
-            "bollinger_zone": open_row.entry_bollinger_zone,
-            "rsi_zone": open_row.entry_rsi_zone,
-            "realized_pnl_pct": pre_close_return_pct,
-            "close_reason": close_reason,
-        }
-        db.delete(open_row)
-        db.flush()      # release the row before any replacement is inserted
-        open_row = None  # anything opened below is a fresh position
+        # A submitted close is not a completed one -- see _close_rejected.
+        # On an explicit refusal the position row STAYS, nothing is recorded,
+        # and the next cycle sees a live position again and can act on it.
+        order_result = _route_order(
+            open_row, open_row.quantity, opening=False,
+            limit_price=exit_value, label=open_row.playbook or open_row.strategy)
+
+        if _close_rejected(order_result):
+            logger.error(
+                "EXIT REJECTED [%s]: %s %s/%s x%d is STILL OPEN. Nothing booked, "
+                "the row is kept so the next cycle can retry.",
+                open_row.playbook or open_row.strategy, open_row.strategy,
+                open_row.long_strike, open_row.short_strike, open_row.quantity,
+            )
+        else:
+            realized_dollars = per_spread * open_row.quantity * 100
+            # The percentage has to describe the same trade as the dollars. The
+            # rule still FIRED on the mid-based return -- that is what the stop and
+            # the ratchet read, and _classify_close_reason is judging the decision,
+            # not the fill -- but what gets recorded as the result is the realised
+            # one.
+            realized_pct = (
+                round(per_spread / open_row.entry_net_debit * 100, 4)
+                if open_row.entry_net_debit else 0.0
+            )
+            close_reason = _classify_close_reason(final_state.get("exit_reason", ""), pre_close_return_pct)
+            db.add(TradeHistory(
+                strategy=open_row.strategy,
+                underlying=open_row.underlying,
+                quantity=open_row.quantity,
+                long_strike=open_row.long_strike,
+                short_strike=open_row.short_strike,
+                entry_net_debit=open_row.entry_net_debit,
+                exit_net_value=exit_value,
+                realized_pnl_dollars=round(realized_dollars, 2),
+                realized_pnl_pct=realized_pct,
+                close_reason=close_reason,
+                playbook=open_row.playbook,
+                opened_at=open_row.opened_at,
+                entry_macd_signal=open_row.entry_macd_signal,
+                entry_sma_trend=open_row.entry_sma_trend,
+                entry_bollinger_zone=open_row.entry_bollinger_zone,
+                entry_rsi_zone=open_row.entry_rsi_zone,
+            ))
+            closed_trade = {
+                "strategy": open_row.strategy,
+                "macd_signal": open_row.entry_macd_signal,
+                "sma_trend": open_row.entry_sma_trend,
+                "bollinger_zone": open_row.entry_bollinger_zone,
+                "rsi_zone": open_row.entry_rsi_zone,
+                "realized_pnl_pct": pre_close_return_pct,
+                "close_reason": close_reason,
+            }
+            db.delete(open_row)
+            db.flush()      # release the row before any replacement is inserted
+            open_row = None  # anything opened below is a fresh position
 
     if new_position is not None:
         if open_row is None:

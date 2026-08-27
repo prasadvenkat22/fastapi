@@ -834,3 +834,76 @@ lost ($1 OTM -49.77, $2 OTM -21.28, $3 OTM -5.34).
 
 Three live sessions now, one trade, -$23. Both refusals on 08-26 came from
 the objective terms, not from the LLM gate removed the night before.
+
+--------------------------------------------------------------------------------
+20. THE FIRST MORNING FILL, AND A CLOSE THAT NEVER CLOSED  (2026-08-27)
+--------------------------------------------------------------------------------
+
+MORNING_DRIFT fired for the first time with real money, and the trade itself
+is not the story. What matters is what happened to the exit.
+
+    10:52  BULL via MORNING_DRIFT:CLEAN, 2 contracts, long 716 / short 726
+           at $3.08 on $4,178 equity. macro=GOOD, the first all week.
+           Order 143622161 filled both legs.
+    11:02  An order the engine did not place bought back both 726 shorts.
+    11:39  STOP_LOSS fired. The engine submitted its multileg close and
+           Tradier answered {'id': 143647390, 'status': 'ok'}.
+    11:40  That order was REJECTED -- it tried to buy back a short leg the
+           account no longer held.
+
+The engine booked the trade anyway. It wrote a TradeHistory row with a
+realised P&L, deleted the OpenPosition row, and from the next cycle onward
+logged "the engine believes it is flat". Two real long calls were left
+unmanaged, ITM, four and a half hours from expiry.
+
+WHAT WAS ACTUALLY WRONG
+
+Not the external order. The external order exposed it, but the defect stands
+on its own: 'status': 'ok' from Tradier means ACCEPTED FOR PROCESSING, and
+the engine read it as FILLED. service._route_order was written as a shadow
+path -- deliberately, and correctly, back when it sent nothing -- with the
+engine's own row authoritative and the broker's reply logged and discarded.
+Nobody revisited that when LIVE_ORDERS went true. So every close since has
+been booked on the assumption that submitting an order and completing one are
+the same event, and any rejection at all -- a limit that never fills, a
+halted underlying, a margin refusal -- would have silently abandoned the
+position and written a fictitious P&L.
+
+That last part is the expensive half. This repo judges every strategy on its
+recorded results, and the record now contains at least one close that did not
+happen. A backtest can be wrong and be fixed; a corrupted live record is what
+the sweeps are calibrated against.
+
+THE FIX
+
+_close_rejected polls the order's terminal status before anything is booked.
+On an explicit refusal -- rejected, canceled, expired, error -- the
+OpenPosition row STAYS, no TradeHistory is written, and the next cycle sees a
+live position and can act on it.
+
+Only an explicit refusal counts. An order still working when the poll runs
+out is treated as standing, because the opposite mistake is worse: a row kept
+open on an order that then fills would have the next cycle sell a position
+the account no longer holds. Between booking a close that is merely slow and
+double-closing one that already went through, the slow case is the one
+RECONCILE catches every cycle.
+
+OPENS ARE STILL SHADOW. An open is written to the database whatever the
+broker says. Same class of bug, not yet fixed, and it shows up as a RECONCILE
+line rather than a corrected position.
+
+THE OTHER PROBLEM, WHICH CODE CANNOT FIX
+
+This account has more than one thing trading it. Alongside the engine's
+position it held QQQ 714C +15, 718C -10, 719C -7 (which grew from -5 while
+this was being investigated), plus MU and SNDK spreads. The engine did not
+place any of them.
+
+Three things it relies on are wrong as a result: the equity figure that sizes
+every position, the 15% tail cap computed from that equity, and the leg
+reconciliation. It sized 2 contracts against $4,178 of assumed equity while
+other positions consumed margin it could not see.
+
+No parameter in playbook.py accounts for a second decision-maker on the same
+margin balance. The engine needs its own account, or a hard sub-allocation it
+can treat as the whole world.

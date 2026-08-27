@@ -518,8 +518,11 @@ def _report(label: str, trades: list, sessions: int):
 def sweep_morning(sessions: dict):
     print("\nMORNING_DRIFT -- width x long-leg depth, entries 10:15-11:30\n")
     base = PB.WINDOWS
-    for width in (3.0, 4.0, 5.0, 6.0):
-        for depth in (None, 2.0):
+    # depth positions the LONG leg below the money; width then places the
+    # short leg above it. depth 2 / width 10 is live ($2 ITM, $8 OTM);
+    # depth 5 / width 8 is the $5 ITM / $3 OTM placement.
+    for width in (6.0, 8.0, 10.0):
+        for depth in (2.0, 3.0, 5.0):
             PB.WINDOWS = tuple(
                 replace(w, width=width, long_depth=depth) if w.name == "MORNING_DRIFT" else w
                 for w in base
@@ -823,6 +826,73 @@ def sweep_strength(sessions: dict):
         _report(label, run(rule), len(sessions))
 
 
+def sweep_package(sessions: dict):
+    """The 2026-08-27 proposal, as a package and component by component.
+
+    Proposed after a session where the morning stopped out at 11:39 on the
+    dip to 716.67 -- the local bottom -- and QQQ then ran to 720.53 by 13:15:
+
+        placement   $5 ITM / $3 OTM instead of $2 ITM / $8 OTM
+        entry       2 contracts, one now and one ten minutes later
+        target      book a clean 70%
+        exit        otherwise hold into the afternoon
+        stop        -10%, and retry after 30 minutes
+
+    The 30-minute retry is already the deployed behaviour
+    (TRADING_REENTRY_COOLDOWN_MINUTES=30) and is already simulated here, so
+    it is not a variable -- it is the baseline both arms sit on.
+
+    ISOLATED, NOT JUST BUNDLED. A package that loses tells you nothing about
+    which part lost, and a package that wins can win despite one of its
+    parts. Each component is therefore also run alone against live, which is
+    the only way to see whether the pieces interact or simply add up.
+
+    RANK, DO NOT SIZE (section 16). One position at a time, harness friction.
+    """
+    print("")
+    print("THE PACKAGE -- proposed morning configuration, and each part alone")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}"
+          f"    grid: {'PENNY/NICKEL TICKS' if TICK_PRICING else 'SMOOTH -- not real'}")
+    print("")
+    base = PB.WINDOWS
+    base_slices, base_mins = N.ENTRY_SLICES, N.ENTRY_SLICE_MINUTES
+
+    # (label, width, depth, stop, final_tp, slices)
+    arms = (
+        ("live: $10/$2 ITM, -20%, ride", 10.0, 2.0, -20.0, None, 1),
+        ("PACKAGE (all five)",            8.0, 5.0, -10.0,  70.0, 2),
+        ("  package, live placement",    10.0, 2.0, -10.0,  70.0, 2),
+        ("  package, live stop -20%",     8.0, 5.0, -20.0,  70.0, 2),
+        ("  package, no 70% target",      8.0, 5.0, -10.0, None, 2),
+        ("  package, single entry",       8.0, 5.0, -10.0,  70.0, 1),
+        ("  live + 70% target only",     10.0, 2.0, -20.0,  70.0, 1),
+        ("  live + 2 slices only",       10.0, 2.0, -20.0, None, 2),
+        ("  live + -10% stop only",      10.0, 2.0, -10.0, None, 1),
+        # Is -10% a real optimum or one lucky cell? Scanned on live
+        # placement, everything else held at live.
+        ("stop scan: -5%",               10.0, 2.0,  -5.0, None, 1),
+        ("stop scan: -8%",               10.0, 2.0,  -8.0, None, 1),
+        ("stop scan: -12%",              10.0, 2.0, -12.0, None, 1),
+        ("stop scan: -15%",              10.0, 2.0, -15.0, None, 1),
+        ("stop scan: -25%",              10.0, 2.0, -25.0, None, 1),
+    )
+    try:
+        for label, width, depth, stop, final_tp, slices in arms:
+            PB.WINDOWS = tuple(
+                replace(w, width=width, long_depth=depth, stop_loss_pct=stop,
+                        final_take_profit_pct=final_tp)
+                if w.name == "MORNING_DRIFT" else w
+                for w in base
+            )
+            N.ENTRY_SLICES, N.ENTRY_SLICE_MINUTES = slices, 10.0
+            PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+            trades, _ = _run_arm(sessions, dtime(10, 15))
+            _report(label, trades, len(sessions))
+    finally:
+        PB.WINDOWS = base
+        N.ENTRY_SLICES, N.ENTRY_SLICE_MINUTES = base_slices, base_mins
+
+
 def sweep_handoff(sessions: dict):
     """Should the morning winner still hand its slot to the credit window?
 
@@ -1026,7 +1096,12 @@ def sweep_mstop(sessions: dict):
     print("MORNING STOP WIDTH -- on the placement actually being traded")
     print("")
     base = PB.WINDOWS
-    for stop in (-15.0, -20.0, -30.0, -40.0, -50.0):
+    # -100% is the honest "no stop" arm for a DEBIT spread: the premium paid
+    # is the whole risk, so a stop at -100% can never fire before expiry does.
+    # It is finite on purpose -- risk sizing divides the loss budget by the
+    # stop distance, so an absurd number sizes every contract to zero and
+    # returns an empty arm that reads like a result (see sweep_creditstop).
+    for stop in (-15.0, -20.0, -30.0, -40.0, -50.0, -70.0, -100.0):
         PB.WINDOWS = tuple(
             replace(w, stop_loss_pct=stop) if w.name == "MORNING_DRIFT" else w for w in base
         )
@@ -2134,6 +2209,8 @@ def main():
         sweep_target(sessions)
     if which in ("creditstop", "all"):
         sweep_creditstop(sessions)
+    if which in ("package", "all"):
+        sweep_package(sessions)
     if which in ("strength", "all"):
         sweep_strength(sessions)
     if which in ("mincredit", "all"):

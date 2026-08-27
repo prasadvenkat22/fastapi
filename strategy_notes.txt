@@ -1107,3 +1107,89 @@ WHAT IT ARGUES. The live -600% stop is the second-best arm and no stop is the
 best. That is a live config question and not a sweep's to decide, but the
 direction is clear: if the credit window stays on, it should be cut LESS, not
 more.
+
+--------------------------------------------------------------------------------
+24. THE MORNING STOP, RE-SWEPT -- AND A COMPOSE FOOTGUN  (2026-08-27)
+--------------------------------------------------------------------------------
+
+Proposed after a session where the morning stopped out at 11:39 on the dip to
+716.67 -- the session's local bottom -- and QQQ then ran to 720.53 by 13:15:
+$5 ITM / $3 OTM placement, two contracts ten minutes apart, book a clean 70%,
+otherwise hold to the afternoon, stop at -10% and retry after 30 minutes.
+
+Swept as a package AND component by component, because a package that loses
+says nothing about which part lost. 60 sessions, chain-priced, penny grid,
+MORNING_DRIFT alone:
+
+    live: $10/$2 ITM, -20%, ride   +141.40/tr   halves +433.10/-127.86
+    PACKAGE (all five)              -18.85/tr   halves  +37.04/ -74.75
+      package, live placement      +109.61/tr
+      package, live stop -20%       -30.20/tr
+      package, no 70% target        -18.85/tr   IDENTICAL to the package
+      package, single entry         -22.11/tr
+      live + 70% target only       +141.40/tr   IDENTICAL to live
+      live + 2 slices only          +84.03/tr
+      live + -10% stop only        +296.73/tr   halves +620.60/ -27.15
+
+Three separable results.
+
+THE PLACEMENT IS WHAT SINKS THE PACKAGE. Swapping only the placement back to
+live turns -18.85 into +109.61. The full 3x3 grid is monotone in both
+directions -- wider is better, shallower long leg is better -- and the live
+cell is the best of nine. The proposed cell wins MORE OFTEN (46% vs 32%) with
+half the worst day, which is the section 16 pattern exactly: comfort bought
+with P&L.
+
+THE 70% TARGET IS INERT. Identical numbers with and without it, because
+ride_to_close means only the stop, the 13:25 deadline and the force close can
+end a morning trade. A target on a riding window is not a small effect, it is
+no effect.
+
+THE STOP IS A REAL FIND, AND IT IS THE PROPOSER'S. Scanned on live placement:
+
+    -5%    24 tr  25% win  +231.98/tr   halves +634.70/-170.75
+    -8%    24 tr  33% win  +329.29/tr   halves +674.12/ -15.53
+    -10%   24 tr  33% win  +296.73/tr   halves +620.60/ -27.15   <- deployed
+    -12%   24 tr  33% win  +273.86/tr   halves +617.27/ -69.55
+    -15%   25 tr  32% win  +167.31/tr   halves +456.83/ -99.94
+    -20%   25 tr  32% win  +141.40/tr   halves +433.10/-127.86   <- was live
+    -25%   27 tr  37% win  +157.53/tr   halves +389.25/ -57.64
+
+A smooth plateau at -8/-10/-12, breaking down at -5% where the win rate
+collapses. Not a lucky cell. -10% deployed rather than the -8% peak: the
+plateau centre has -8 and -12 confirming it on both sides, and peaks are
+where overfitting lives.
+
+WHAT SEPARATES THIS FROM EVERY REFUTED IDEA. Trade count barely moves (24 vs
+25) and the win rate does not move (33% vs 32%). It is not winning by trading
+less or by banking small wins -- the two signatures section 16 catches. The
+second half improves most, -127.86 to -27.15, which says the decay visible in
+every placement cell was substantially a stop-width problem.
+
+IT WOULD NOT HAVE SAVED THE DAY THAT PROMPTED IT. A tighter stop fires
+EARLIER. On 2026-08-27 it would have exited before -20% did and still missed
+the recovery. It is better on average because it cuts losers cheaper, not
+because it holds through dips. The rule that would have saved that specific
+session -- no stop -- measures worse (+90.74 vs +141.40).
+
+DEPLOY INCIDENT: `docker compose up -d` SILENTLY DROPS TO PAPER MODE
+
+The live config lives in .env.production, but docker-compose.yml declares
+`env_file: .env`. The production values are supplied by docker-compose.prod.yml,
+an OVERRIDE that must be named explicitly:
+
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+Running plain `docker compose up -d` recreated the container against `.env`,
+which has no TRADING_LIVE_ORDERS, no contract cap, and none of the window
+settings. The engine came back with LIVE_ORDERS=False, MAX_CONTRACTS=1,
+budget $10,000, MORNING_DRIFT at $6 wide and the credit window at 14:00 --
+every one a code default, and no error anywhere.
+
+Earlier deploys survived only because they used `docker compose restart`,
+which preserves the container's original configuration. `restart` and `up -d`
+are not interchangeable here and the difference is silent.
+
+Four minutes outside market hours, so it cost nothing. In a session it would
+have been a live position managed by an engine that believed it was on paper.
+ALWAYS pass both -f files, and ALWAYS verify LIVE_ORDERS after any recreate.

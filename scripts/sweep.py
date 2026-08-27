@@ -726,6 +726,103 @@ def sweep_mincredit(sessions: dict):
         PB.WINDOWS, N.MIN_CREDIT, N.CREDIT_SHORT_DELTA = base_windows, base_floor, base_delta
 
 
+def sweep_strength(sessions: dict):
+    """Should a call credit spread be cut faster when the tape keeps making highs?
+
+    The proposal, 2026-08-27: a bullish session is where a call credit spread
+    gets hurt, so exit early when QQQ keeps printing new highs rather than
+    waiting for a percentage stop.
+
+    It is worth separating from the stop question sweep_creditstop already
+    answered. That one found tightening UNCONDITIONALLY makes things worse --
+    2x credit -9.00/tr, 3x -6.22, no stop +0.97 -- because a percentage stop
+    on a credit spread realises noise that the long leg has already capped.
+    This asks something different: not "stop sooner" but "stop on a SIGNAL",
+    where the signal is the tape doing the specific thing that hurts.
+
+    Both readings of "keeps hitting highs" are tested, because they are not
+    the same rule:
+
+        session high   spot exceeds the session's high as it stood at entry.
+                       One clean event, and the one a trader watching the
+                       tape would actually notice.
+        three up bars  three consecutive rising closes. Fires more often and
+                       earlier, and catches a grind that never prints a
+                       dramatic new high.
+
+    Placement is held constant across every arm -- same strikes, same entry
+    minute, same session set -- so the exit rule is the only thing moving.
+
+    RANK, DO NOT SIZE. One contract, no ratchet, no re-entry. Section 16.
+    """
+    print("")
+    print("STRENGTH EXIT -- cut the call credit spread when the tape makes highs?")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}"
+          f"    grid: {'PENNY/NICKEL TICKS' if TICK_PRICING else 'SMOOTH -- not real'}")
+    print("")
+    offset, wing, entry = 2.0, 2.0, dtime(13, 30)
+
+    def run(rule):
+        out = []
+        for day, bars in sessions.items():
+            idx = [i for i, ts in enumerate(bars.index) if ts.time() >= entry]
+            if not idx:
+                continue
+            i = idx[0]
+            spot = float(bars["Close"].iloc[i])
+            atm = broker_mod.round_to_strike(spot)
+            short, long_ = atm + offset, atm + offset + wing
+            mins = broker_mod.minutes_to_expiry(bars.index[i].to_pydatetime())
+            credit = fill_price(
+                estimate_credit_value(CALL_CREDIT_SPREAD, short, long_, spot, mins), "sell")
+            if credit <= 0.02:
+                continue
+            # The session high as it stood when the position was opened.
+            high_col = "High" if "High" in bars else "Close"
+            high_at_entry = float(bars[high_col].iloc[:i + 1].max())
+            ups, pnl, reason = 0, None, None
+            prev = spot
+            for j in range(i + 1, len(bars)):
+                ts = bars.index[j]
+                if ts.time() > dtime(15, 45):
+                    break
+                sp = float(bars["Close"].iloc[j])
+                m = broker_mod.minutes_to_expiry(ts.to_pydatetime())
+                cost = fill_price(
+                    estimate_credit_value(CALL_CREDIT_SPREAD, short, long_, sp, m), "buy")
+                ups = ups + 1 if sp > prev else 0
+                prev = sp
+                pnl, reason = (credit - cost) * 100, "FORCE_CLOSE"
+                if cost <= credit * 0.50:
+                    reason = "TARGET"
+                    break
+                if rule == "stop2" and cost >= credit * 2.0:
+                    reason = "STOP"
+                    break
+                if rule == "stop6" and cost >= credit * 6.0:
+                    reason = "STOP"
+                    break
+                if rule == "newhigh" and float(bars[high_col].iloc[j]) > high_at_entry:
+                    reason = "NEW_HIGH"
+                    break
+                if rule == "up3" and ups >= 3:
+                    reason = "THREE_UP"
+                    break
+            if pnl is not None:
+                out.append({"pnl": round(pnl, 2), "reason": reason,
+                            "pct": round((pnl / 100) / credit * 100, 2)})
+        return out
+
+    for rule, label in (
+        (None, "hold to close, no stop"),
+        ("stop6", "stop at 6x credit (live)"),
+        ("stop2", "stop at 2x credit"),
+        ("newhigh", "exit on new session high"),
+        ("up3", "exit on 3 rising bars"),
+    ):
+        _report(label, run(rule), len(sessions))
+
+
 def sweep_handoff(sessions: dict):
     """Should the morning winner still hand its slot to the credit window?
 
@@ -2037,6 +2134,8 @@ def main():
         sweep_target(sessions)
     if which in ("creditstop", "all"):
         sweep_creditstop(sessions)
+    if which in ("strength", "all"):
+        sweep_strength(sessions)
     if which in ("mincredit", "all"):
         sweep_mincredit(sessions)
     if which in ("handoff", "all"):

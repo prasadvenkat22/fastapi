@@ -1055,3 +1055,55 @@ old file or the new one:
 
 Harmless here because the market was shut. During a session it would have
 been a minute in which a live position was not managed.
+
+--------------------------------------------------------------------------------
+23. CUTTING FASTER ON STRENGTH -- PROPOSED, MEASURED, REFUTED  (2026-08-27)
+--------------------------------------------------------------------------------
+
+The proposal: a bullish session is where a call credit spread gets hurt, so
+exit early when QQQ keeps printing new highs rather than waiting for a
+percentage stop.
+
+The premise is right about the day. 2026-08-27 closed +0.58%, the strongest
+up-close in twelve sessions, and it finished at 721.11 against a 721.35 high.
+
+And today it would have WORKED. The live 721/723 was ratcheted out at $0.00
+and QQQ closed at 721.11, so holding to expiry settles the short at 0.11
+against a 0.05 credit -- about -$18 on three contracts. Cutting saved money
+on the day it was proposed.
+
+Over 60 sessions it does not. Same strikes, same entry minute, same sessions,
+exit rule the only variable, chain-priced on the penny grid:
+
+    hold to close, no stop      93% win   +4.55/tr   halves  +4.87/+4.23
+    stop at 6x credit (live)    87% win   -2.38/tr   halves  -2.13/-2.63
+    exit on new session high    78% win   -2.00/tr   halves  +0.57/-4.57
+    exit on 3 rising bars       62% win   -2.22/tr   halves  -2.10/-2.33
+    stop at 2x credit           45% win   -8.32/tr   halves -10.97/-5.67
+
+Every rule that cuts faster ranks below holding, and holding is the only arm
+positive in both halves. The new-high rule fired 11 times in 60 sessions,
+still lost, and its halves flip sign -- an unstable rule on a small count.
+
+WHY, AND IT IS THE SAME REASON AS SECTION 15. A credit spread's loss is
+ALREADY capped at width-minus-credit by the long leg. No exit rule lowers
+that ceiling; it can only convert unrealised noise into realised loss earlier.
+The tape making a new high is not information about where the spread settles
+-- it is the noise the long leg was bought to absorb.
+
+This is the third time the same shape of idea has been tested and refuted:
+sell into strength (17), the upper-band fade (18), and now the strength exit.
+All three read a bullish tape as a signal to act, and all three found that
+the signal is already in the price.
+
+THE HARNESS CAVEAT, WHICH MATTERS HERE. This arm holds one contract with no
+ratchet and no re-entry, and it reports +4.55/tr for holding while the full
+engine replay in section 21 reports the credit window losing at every floor.
+They disagree on LEVEL and that disagreement is not resolved. What survives
+is the RANKING, which is consistent and one-directional across all four
+cutting rules. Rank entry and exit rules with this; never size the benefit.
+
+WHAT IT ARGUES. The live -600% stop is the second-best arm and no stop is the
+best. That is a live config question and not a sweep's to decide, but the
+direction is clear: if the credit window stays on, it should be cut LESS, not
+more.

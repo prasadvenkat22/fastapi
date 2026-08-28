@@ -8,7 +8,9 @@ whenever a position fully closes, so without writing a TradeHistory row here
 first, the result of that trade (profit or loss) would simply disappear."""
 
 import logging
+import os
 import time
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -24,6 +26,17 @@ from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
 from .setup_vector_store import store_trade_setup
 from . import tradier_orders, weekly_shadow
 from .state import TradingState
+
+# The only underlying this engine trades. Used to scope the broker
+# reconciliation, because the account is shared with manual positions in
+# other names and those are not the engine's business to report on.
+ENGINE_UNDERLYING = os.getenv("TRADING_UNDERLYING", "QQQ").strip().upper()
+
+# How long after an entry to let the broker's position list catch up
+# before treating a missing leg as a divergence. One cron cycle is 60s;
+# 90 gives the acknowledgement-to-position lag room without hiding a
+# fill that genuinely never arrived.
+RECONCILE_GRACE_SECONDS = float(os.getenv("TRADING_RECONCILE_GRACE", "90"))
 
 logger = logging.getLogger(__name__)
 
@@ -143,13 +156,35 @@ def _reconcile(open_row) -> None:
         return
     try:
         if open_row is None:
-            held = tradier_orders.open_positions()
+            # Only the engine's OWN underlying. The account is shared with a
+            # human who trades other names in it, and before this filter every
+            # manual position raised RECONCILE at ERROR once a minute -- which
+            # is worse than useless, because a real engine/broker divergence
+            # would then arrive in a stream of alerts already known to be
+            # noise. Observed 2026-08-28: MU, SNDK and MRVL put spreads, none
+            # of them the engine's, flagged on every cycle.
+            held = [
+                p for p in tradier_orders.open_positions()
+                if tradier_orders.occ_root(p.get("symbol")) == ENGINE_UNDERLYING
+            ]
             if held:
                 logger.error(
-                    "RECONCILE: the engine believes it is flat, the broker holds %d position(s): %s",
-                    len(held), [p.get("symbol") for p in held],
+                    "RECONCILE: the engine believes it is flat, the broker holds %d %s position(s): %s",
+                    len(held), ENGINE_UNDERLYING, [p.get("symbol") for p in held],
                 )
             return
+        # A just-submitted order is not a divergence. Tradier's position list
+        # lags its own order acknowledgement by more than the second between
+        # submitting and reconciling, so the first cycle after an entry
+        # reported "the broker holds neither leg" every time -- an ERROR for
+        # the ordinary case. Observed 2026-08-28 at 14:35:05, one second after
+        # the order that did fill. Anything still missing on the NEXT cycle is
+        # a real divergence and is reported as before.
+        opened_at = getattr(open_row, "opened_at", None)
+        if opened_at is not None:
+            age = (datetime.now(timezone.utc) - opened_at).total_seconds()
+            if age < RECONCILE_GRACE_SECONDS:
+                return
         call_put = option_type_for(open_row.strategy)
         short_sym = tradier_orders.occ_symbol("QQQ", today_expiry(), call_put, open_row.short_strike)
         long_sym = tradier_orders.occ_symbol("QQQ", today_expiry(), call_put, open_row.long_strike)

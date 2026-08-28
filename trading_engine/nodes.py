@@ -354,6 +354,20 @@ RIDE_RATCHET_ARM_PCT = float(os.getenv("TRADING_RIDE_RATCHET_ARM", "0"))
 RIDE_GIVEBACK = float(os.getenv("TRADING_RIDE_GIVEBACK", "0.20"))
 RIDE_MIN_GIVEBACK_PCT = float(os.getenv("TRADING_RIDE_MIN_GIVEBACK", "5.0"))
 
+# Whether a RIDE that ratchets out may re-enter the same session.
+#
+# The engine treats RATCHET as a winning exit and frees the slot, which is
+# right for the credit window -- it ratchets out of a spread that already
+# paid and the setup is still valid. For a RIDE it is a different bet: the
+# ride was truncated precisely because momentum turned, and re-entering
+# buys the same thinning trend a second time.
+#
+# It also confounds every ride-ratchet measurement taken so far. Armed arms
+# took 36 trades against 31 for off, so the arm's cost and the re-entries'
+# cost were summed into one number and reported as the arm's. True keeps
+# the behaviour that has always been live; False isolates the truncation.
+RIDE_RATCHET_REENTER = os.getenv("TRADING_RIDE_RATCHET_REENTER", "true").lower() == "true"
+
 # Least credit worth selling a spread for, per contract.
 #
 # Without a floor the engine will open a credit vertical that collects
@@ -1726,7 +1740,17 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     # position that armed above its target, so they are winning exits under
     # different names. Leaving them out cost the credit window a cycle every
     # time it trailed out instead of booking at the target.
-    may_reenter = position is None or exit_reason in ("TAKE_PROFIT", "RATCHET", "TRAIL_STOP")
+    # RIDE_RATCHET_REENTER=False withholds the slot after a RIDE ratchets
+    # out, without touching the credit window's own ratchet re-entry.
+    _ride_ratchet = (
+        exit_reason == "RATCHET"
+        and position is not None
+        and rides_to_close(position.playbook)
+    )
+    may_reenter = position is None or (
+        exit_reason in ("TAKE_PROFIT", "RATCHET", "TRAIL_STOP")
+        and not (_ride_ratchet and not RIDE_RATCHET_REENTER)
+    )
 
     # The 14:00 cutoff is a DEBIT rule: a bought spread needs enough day left
     # for the move it is paying for. A credit spread wants the opposite --

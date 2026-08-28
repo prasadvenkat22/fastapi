@@ -2139,6 +2139,73 @@ def sweep_rideratchet(sessions: dict):
         _report(label, trades, len(sessions))
     N.RIDE_RATCHET_ARM_PCT = 0.0
 
+    # HIGH ARMS, added 2026-08-28. Every level above was chosen to protect an
+    # ordinary winner, and section 10 rejected all of them for truncating the
+    # trades that pay for the stop-outs. Arming at +50% is a different rule:
+    # it cannot touch a small winner because it never engages on one. Whether
+    # that is protection or a sample too thin to read is what this measures.
+    print("")
+    print("  HIGH ARMS -- only engages on a position that is already a large winner")
+    for arm in (40.0, 50.0, 60.0, 75.0):
+        N.RIDE_RATCHET_ARM_PCT = arm
+        trades, _ = _run_arm(sessions, dtime(10, 15))
+        _report(f"arm at +{arm:.0f}%", trades, len(sessions))
+    N.RIDE_RATCHET_ARM_PCT = 0.0
+
+    # THE GIVEBACK, AT THE PROPOSED ARM. The arm decides WHETHER the rung
+    # engages; the giveback decides how much of the peak it surrenders first.
+    # 0.20 of a +50% peak books at +40%, 0.40 books at +30% -- which is the
+    # range the question was actually about.
+    print("")
+    print("  GIVEBACK AT A +50% ARM -- 0.20 books a +50% peak at +40%, 0.40 at +30%")
+    base_gb = N.RIDE_GIVEBACK
+    N.RIDE_RATCHET_ARM_PCT = 50.0
+    for gb in (0.15, 0.20, 0.30, 0.40):
+        N.RIDE_GIVEBACK = gb
+        trades, _ = _run_arm(sessions, dtime(10, 15))
+        _report(f"giveback {gb:.0%} (+50% peak books at +{50 * (1 - gb):.0f}%)",
+                trades, len(sessions))
+    N.RIDE_GIVEBACK = base_gb
+    N.RIDE_RATCHET_ARM_PCT = 0.0
+
+    # PER DAY, BOTH WINDOWS. The morning holds the single position slot, so a
+    # rung that ends a ride early also frees that slot early. Per-trade cannot
+    # see that; this is the frame the decision belongs in.
+    print("")
+    print("  PER DAY, BOTH LIVE WINDOWS -- the frame the decision belongs in")
+    for arm in (0.0, 32.0, 40.0, 50.0, 60.0):
+        N.RIDE_RATCHET_ARM_PCT = arm
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily("off (current)" if arm == 0 else f"arm at +{arm:.0f}%", per_day)
+    N.RIDE_RATCHET_ARM_PCT = 0.0
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+
+    # NO RE-ENTRY AFTER A RIDE RATCHET, added 2026-08-28. Every arm above was
+    # measured with the slot freed on a ratchet, so each armed row carries the
+    # cost of the truncation AND the cost of whatever it re-entered. 36 trades
+    # against 31 for off. This isolates the first from the second: same arms,
+    # ratchet books and the morning stands down.
+    print("")
+    print("  RATCHET WITHOUT RE-ENTRY -- books the ride and stands down")
+    base_re = N.RIDE_RATCHET_REENTER
+    N.RIDE_RATCHET_REENTER = False
+    for arm in (32.0, 40.0, 50.0, 60.0, 75.0):
+        N.RIDE_RATCHET_ARM_PCT = arm
+        trades, _ = _run_arm(sessions, dtime(10, 15))
+        _report(f"arm +{arm:.0f}%, no re-entry", trades, len(sessions))
+    print("")
+    print("  RATCHET WITHOUT RE-ENTRY -- per day, both live windows")
+    for arm in (0.0, 40.0, 50.0, 60.0):
+        N.RIDE_RATCHET_ARM_PCT = arm
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily("off (current)" if arm == 0 else f"arm +{arm:.0f}%, no re-entry",
+                      per_day)
+    N.RIDE_RATCHET_REENTER = base_re
+    N.RIDE_RATCHET_ARM_PCT = 0.0
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+
 
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.

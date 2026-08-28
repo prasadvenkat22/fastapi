@@ -234,6 +234,18 @@ def order_status(order_id: str) -> dict:
     return (r.json() or {}).get("order", {})
 
 
+def occ_root(symbol: str) -> str:
+    """The underlying an OCC option symbol belongs to.
+
+    An OCC symbol is ROOT + YYMMDD + C/P + an 8-digit strike, so the last
+    fifteen characters are fixed-width and everything before them is the
+    root. Parsed rather than prefix-matched: 'QQQ' as a prefix would also
+    claim any future ticker beginning with those letters.
+    """
+    sym = (symbol or "").strip().upper()
+    return sym[:-15] if len(sym) > 15 else sym
+
+
 def open_positions() -> list:
     """What the BROKER thinks is open, which is the only authority that counts.
 

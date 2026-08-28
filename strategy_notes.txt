@@ -1193,3 +1193,56 @@ are not interchangeable here and the difference is silent.
 Four minutes outside market hours, so it cost nothing. In a session it would
 have been a live position managed by an engine that believed it was on paper.
 ALWAYS pass both -f files, and ALWAYS verify LIVE_ORDERS after any recreate.
+
+--------------------------------------------------------------------------------
+25. AFTERNOON CREDIT, RE-SWEPT ON THREE KNOBS AT ONCE  (2026-08-27)
+--------------------------------------------------------------------------------
+
+The window stays on by decision, so the question became how to run it rather
+than whether. Entry time, width and floor had only ever been moved one at a
+time. Swept together, 60 sessions, chain-priced on the penny grid, at the
+deployed 0.25 short delta:
+
+    config                        n   win%   per trade   halves
+    13:30 $2 floor 0.05  48/60d  51   12%     -63.56    -77.78/-49.89   was live
+    13:30 $2 floor 0.20  14/60d  14   50%      -4.07     -6.69/ -1.46
+    13:30 $4 floor 0.05  49/60d  57   19%     -45.57
+    13:30 $4 floor 0.20  26/60d  27   44%     -30.70
+    14:00 $2 floor 0.05  45/60d  45    9%     -57.82
+    14:00 $2 floor 0.20   4/60d   4   50%      -8.80
+    14:00 $4 floor 0.05  46/60d  48   19%     -38.20
+    14:00 $4 floor 0.20  12/60d  13   62%      +2.22    -0.83/ +4.83   deployed
+
+THE CONFIGURATION THAT WAS LIVE ALL WEEK WAS THE WORST OF THE EIGHT. Not
+marginally -- -63.56 a trade against -4.07 for the same time and width with a
+higher floor.
+
+The floor helps in ALL FOUR pairings, which is the strongest single signal in
+the grid. Width helps in three of four, and 14:00 helps in three of four --
+the latter reproducing, independently, what the playbook comment block found
+in August on a different harness.
+
+14:00 / $4 / 0.20 is the only cell positive on total AND on the second half.
+It is the first credit configuration measured here that is positive at all.
+
+READ THE SAMPLE. 13 trades across 12 of 60 sessions. That is a ranking, not a
+forecast, and a cell that trades one session in five cannot be distinguished
+from a lucky twelve on this evidence. What justifies deploying it anyway is
+that it is not being chosen on its own number: it is the intersection of
+three moves each supported across the rest of the grid, and it replaces the
+worst cell of eight.
+
+WHY THE FLOOR IS THE ONE TO TRUST. Mechanical, not statistical. At a nickel
+of credit one penny is 20%, so every exit threshold sits below the resolution
+of the price grid -- the live 721/723 on 2026-08-27 ratcheted out at a
+measured +20% for exactly $0.00. A floor buys the exit logic room to express
+a decision. That reasoning stands whatever the sample says.
+
+DEPLOYED FOR 2026-08-28
+
+    MORNING_DRIFT     10:15-12:30  long $2 ITM / short $8 OTM ($10 wide)
+                      stop -10%, rides to 13:25, no target while riding
+    AFTERNOON_CREDIT  14:00-15:00  $4 wide, 0.25 delta, floor $0.20
+                      books 50%, stop -600%
+    both              30-min post-loss cooldown, 3-loss daily halt, 1 slice
+    orders            production 6YB90697, cap 3, budget $4,000

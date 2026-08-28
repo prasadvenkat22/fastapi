@@ -893,6 +893,50 @@ def sweep_package(sessions: dict):
         N.ENTRY_SLICES, N.ENTRY_SLICE_MINUTES = base_slices, base_mins
 
 
+def sweep_creditcfg(sessions: dict):
+    """What settings should AFTERNOON_CREDIT run tomorrow?
+
+    The window stays on by decision (2026-08-27), so the question is no
+    longer whether but how. Four knobs interact and have only ever been moved
+    one at a time: entry time, wing width, short delta, and the credit floor.
+
+    Everything measured on this window so far says the same thing -- the
+    playbook's own comment block, the floor sweep, the strength sweep -- so
+    the honest expectation is that every cell loses and the output is a
+    RANKING of least-bad. That is still worth having: a config that loses
+    $4 a trade and one that loses $64 are not the same decision.
+
+    The floor matters most and for a mechanical reason. At a nickel of credit
+    one penny is 20%, so every exit threshold sits below the resolution of
+    the price grid -- the live 721/723 on 2026-08-27 ratcheted out at a
+    measured +20% for exactly $0.00. A floor is what buys the exit logic room
+    to express a decision at all.
+    """
+    print("")
+    print("CREDIT CONFIG -- entry time x width x floor, on the deployed delta")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}"
+          f"    grid: {'PENNY/NICKEL TICKS' if TICK_PRICING else 'SMOOTH -- not real'}")
+    print("")
+    base_windows, base_floor = PB.WINDOWS, N.MIN_CREDIT
+    try:
+        for start_h, start_m in ((13, 30), (14, 0)):
+            for width in (2.0, 4.0):
+                for floor in (0.05, 0.20):
+                    N.MIN_CREDIT = floor
+                    PB.WINDOWS = tuple(
+                        replace(w, start=dtime(start_h, start_m), width=width)
+                        if w.name == "AFTERNOON_CREDIT" else w
+                        for w in base_windows
+                    )
+                    PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
+                    trades, per_day = _run_arm(sessions, dtime(start_h, start_m))
+                    traded = len([d for d in per_day if d["trades"]])
+                    _report(f"{start_h:02d}:{start_m:02d} ${width:.0f} wide floor {floor:.2f} "
+                            f"({traded}/{len(sessions)}d)", trades, len(sessions))
+    finally:
+        PB.WINDOWS, N.MIN_CREDIT = base_windows, base_floor
+
+
 def sweep_handoff(sessions: dict):
     """Should the morning winner still hand its slot to the credit window?
 
@@ -2209,6 +2253,8 @@ def main():
         sweep_target(sessions)
     if which in ("creditstop", "all"):
         sweep_creditstop(sessions)
+    if which in ("creditcfg", "all"):
+        sweep_creditcfg(sessions)
     if which in ("package", "all"):
         sweep_package(sessions)
     if which in ("strength", "all"):

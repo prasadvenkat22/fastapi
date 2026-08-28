@@ -1624,3 +1624,127 @@ market hours (Fri 16:13 ET)".
 
 So: `restart` for a code change on the bind mount, `up -d` with both files
 for an env change, and verify the whole table either way.
+
+--------------------------------------------------------------------------------
+31. SELLING CALLS AT 11:30, AND THE MACRO GATE TURNED BACK ON  (2026-08-28)
+--------------------------------------------------------------------------------
+
+Proposed after the session: QQQ ran 719 to 723.80 by 11:00, reversed on
+Jackson Hole headlines, and fell to 715.85 by 13:00. Sell call spreads into
+that reversal instead of waiting for 14:00, when the market offered two cents
+for a four-wide spread.
+
+THE PREMIUM IS IN THE MORNING, AND SO IS THE RISK. Today's shadow condors,
+market-priced, same $4 wing:
+
+    09:50 ET   mid 0.935   short deltas [+0.33,  -0.247]
+    10:15 ET   mid 0.660   short deltas [+0.391, -0.214]
+    13:30 ET   mid 0.220   short deltas [+0.113, -0.145]
+
+Four times the credit at 09:50 -- for a strike three times as likely to be
+touched. That is not a better price, it is a fair price for more risk.
+
+THE STANDING OBJECTION WAS INVALID AND HAD TO BE REPLACED. The 48%-vs-92%
+strike-survival figure in section 10 was measured at a FIXED $4 offset, and
+the credit window has placed strikes by DELTA since 2026-08-21. At a constant
+0.25 delta the strike moves further out as time-to-expiry grows, which is
+exactly the risk that figure was measuring. It cannot be used against this
+proposal. MORNING_CREDIT was not an answer either: it is defined 10:15-11:30,
+so it CLOSES when the proposal wants to open.
+
+SWEPT PROPERLY, 60 sessions, chain-priced, deployed floor 0.20 and delta 0.25:
+
+    solo, per trade                                   both windows, per day
+    opens 11:00  63 tr 38%  -24.65  worst -342.80       +2.96/day
+    opens 11:30  58 tr 41%  -25.23  worst -342.80       -6.07/day
+    opens 12:00  54 tr 43%  -21.86  worst -342.80       -7.32/day
+    opens 12:30  45 tr 47%  -18.89  worst -422.80      -13.81/day
+    opens 13:00  36 tr 31%  -10.55  worst -310.80       -1.30/day
+    opens 13:30  25 tr 40%  -31.64  worst -422.80       -6.53/day
+    opens 14:00  11 tr 64%   +6.22  worst  -10.80      +18.47/day   <- live
+
+11:30 is the second worst of seven and negative in both halves. 14:00 is the
+only positive arm in either frame.
+
+READ THE WORST-TRADE COLUMN. Morning arms lose $342 on their worst trade
+against $10.80 at 14:00 -- thirty-two times the damage. That is the breach
+risk the extra premium pays for, and it arrives whole rather than spread out.
+
+AND THE EXIT MIX SHOWS THE MECHANISM: at 11:30, 32 of 58 exits are RATCHET.
+The rung books the small winners while the losers run to the force close.
+More trades, lower average, fatter tail -- the section 16 signature again.
+
+Note the asymmetry in what this proves. That 11:30 LOSES is solid: 58 trades,
+both halves negative, consistent across 11:00/11:30/12:00/12:30. That 14:00
+WINS is thin: 11 trades in 60 sessions. Read it as "morning selling is
+measurably bad", not as "14:00 is measurably good".
+
+NO INDICATOR WAS MISSED. The engine labelled the reversal as it happened:
+UPPER_BAND at 10:45-10:55, OVERBOUGHT at 10:55-11:00, MACD and trend both
+flipping bearish at 11:35, BEAR_BAND by 11:40, a LOWER_BAND DOWN_PIERCE at
+11:55. What is absent is a WINDOW that can act on a bearish read before
+14:00, and the table above is why it is absent.
+
+This is the fourth test of "the top is in, sell calls": sell-into-strength
+(17), the upper-band fade (18), the new-high exit (23), and now the start
+time. All four refuted.
+
+THE MACRO LLM GATE, TURNED BACK ON
+
+Today the verdict was BAD on all 65 refreshes from 09:30 to the close, naming
+Warsh's Jackson Hole keynote and a sticky inflation print. It gated nothing:
+TRADING_MACRO_LLM_GATE was false, so sentiment was the four objective terms
+only, breadth ticked positive at 10:35, and a bullish CLEAN entry opened into
+it and lost $106.
+
+Every live trade since 08-18 joined to the verdict active at its entry minute:
+
+    2026-08-19 10:54  BULL_CALL   GOOD  allows    -19.34
+    2026-08-19 12:08  BULL_CALL   BAD   REFUSES   -25.28
+    2026-08-19 12:54  BEAR_PUT    GOOD  allows   +111.95
+    2026-08-20 13:30  CALL_CREDIT BAD   allows    +62.43
+    2026-08-21 11:01  BULL_CALL   GOOD  allows    +56.27
+    2026-08-21 14:29  CALL_CREDIT BAD   allows    +15.12
+    2026-08-24 13:30  CALL_CREDIT BAD   allows     +0.00
+    2026-08-25 14:34  CALL_CREDIT BAD   allows    -23.00
+    2026-08-27 10:52  BULL_CALL   GOOD  allows   -142.00
+    2026-08-27 14:05  CALL_CREDIT GOOD  allows     +3.00
+    2026-08-27 14:33  CALL_CREDIT BAD   allows     +0.00
+    2026-08-28 10:35  BULL_CALL   BAD   REFUSES  -106.00
+
+    as traded -66.85    with the gate on +64.43    net +131.28
+
+Two refusals in ten sessions, both losers. That is a sign, not a measurement:
+n=2, and the gate MISSES the largest loser in the record -- the -142.00 on
+08-27 was entered on a GOOD verdict.
+
+WHAT TURNING IT ON COSTS, stated plainly because it is the argument that
+switched it off. Every parameter in this file was measured with
+market_sentiment hardcoded GOOD. With the gate on, the deployed engine is
+again more restrictive than anything ever measured, and the stop, width,
+credit start and the new +50% rung were all chosen for a larger trade
+population than the engine will now take. That gap is the price of the
+headline read.
+
+Deployed anyway, by decision: it blocks longs only, the morning long is where
+the tail lives (all eight worst sessions contain a MORNING_DRIFT stop-out),
+and it is one environment variable to revert.
+
+WINDOWS ARE NOW LESS HARDCODED THAN THEY WERE
+
+Raised in the same conversation, and half right. Every window's TIMES and
+WIDTHS were already environment-driven, which is why they have been swept
+repeatedly. Its TIER LIST and its DIRECTION were literals, so asking "may the
+morning take a looser tier" required a code edit and a redeploy.
+
+That asymmetry was quietly deciding which questions got asked. entry_tiers
+now reads TRADING_MORNING_TIERS (a comma-separated list, or ALL to remove the
+restriction) and MORNING_CREDIT's bearish_only reads
+TRADING_MORNING_CREDIT_BEARISH_ONLY. Defaults are unchanged, so no live
+behaviour moves; what changes is that the restriction can be re-measured
+without touching code.
+
+The restriction itself still has evidence behind it -- the same ITM structure
+earned +18.74 a trade when the full bullish stack held and -4.49 when it did
+not -- but a restriction should be defended by a measurement, not by the cost
+of running one.

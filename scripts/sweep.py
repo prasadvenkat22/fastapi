@@ -2397,6 +2397,62 @@ def sweep_ridetight(sessions: dict):
     PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
 
 
+def sweep_creditstart(sessions: dict):
+    """When may the engine start selling calls -- 11:30, or must it wait to 14:00?
+
+    Asked 2026-08-28, after a session that rose to 723.80 by 11:00, fell to
+    715.85 by 13:00, and then offered two cents for a 4-wide call spread when
+    the window finally opened at 14:00. The premium was in the morning and the
+    window was in the afternoon.
+
+    NOT ALREADY ANSWERED, which is why this exists. MORNING_CREDIT is defined
+    10:15-11:30 -- it CLOSES at 11:30, so "sell at 11:30" has never been an
+    arm. Section 25 compared 13:30 against 14:00 and nothing earlier. The
+    standing 48%-vs-92% strike-survival figure is from sweep breach at a fixed
+    $4 offset, not at the deployed 0.25 delta, and it says nothing about what
+    the extra premium is worth against the extra risk.
+
+    THE TRADE-OFF THIS MEASURES. Earlier means more time value collected and
+    more time for the short strike to be reached. Those pull in opposite
+    directions and the net is an empirical question, not an argument.
+
+    Two frames. CREDIT SOLO isolates the start time. BOTH WINDOWS is what
+    would actually run, and it matters here more than usual: MORNING_DRIFT
+    holds the single position slot until the 13:25 handoff, so a credit window
+    opening at 11:30 is frequently locked out by a trade already running.
+    """
+    print("")
+    print("CREDIT WINDOW START -- is the premium in the morning?")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print(f"  floor {N.MIN_CREDIT:.2f}, short delta {N.CREDIT_SHORT_DELTA:.2f}")
+    print("")
+    base = PB.WINDOWS
+    starts = (dtime(11, 0), dtime(11, 30), dtime(12, 0), dtime(12, 30),
+              dtime(13, 0), dtime(13, 30), dtime(14, 0))
+
+    def _with(start):
+        return tuple(replace(w, start=start) if w.name == "AFTERNOON_CREDIT" else w
+                     for w in base)
+
+    print("  CREDIT WINDOW SOLO -- per trade")
+    for st in starts:
+        PB.WINDOWS = _with(st)
+        PB.ENABLED_WINDOWS = frozenset({"AFTERNOON_CREDIT"})
+        trades, _ = _run_arm(sessions, st)
+        _report(f"opens {st.strftime('%H:%M')}" + (" (live)" if st == dtime(14, 0) else ""),
+                trades, len(sessions))
+
+    print("")
+    print("  BOTH LIVE WINDOWS -- per day, what would actually run")
+    for st in starts:
+        PB.WINDOWS = _with(st)
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily(f"credit opens {st.strftime('%H:%M')}" +
+                      (" (live)" if st == dtime(14, 0) else ""), per_day)
+    PB.WINDOWS = base
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -2691,6 +2747,8 @@ def main():
         sweep_rideguard(sessions)
     if which in ("ridetight", "all"):
         sweep_ridetight(sessions)
+    if which in ("creditstart", "all"):
+        sweep_creditstart(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

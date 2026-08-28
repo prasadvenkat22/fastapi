@@ -56,6 +56,35 @@ def _env_float(var: str, default: "float | None") -> "float | None":
         return default
 
 
+def _env_tiers(var: str, default: "frozenset[str] | None") -> "frozenset[str] | None":
+    """Which entry tiers a window accepts, from the environment.
+
+    Configurable because it was not, and that asymmetry was costing real
+    questions. Every window's TIMES and WIDTHS could be swept from the
+    environment, so those got tested repeatedly; its tier list and its
+    direction were literals, so testing 'may the morning take a looser
+    tier' meant editing code and redeploying. Difficulty of asking is not
+    evidence about the answer, and the restriction should be defended by a
+    measurement rather than by the cost of running one.
+
+    A comma-separated list sets it; ALL removes the restriction entirely;
+    unset keeps the default the window was measured with.
+    """
+    raw = os.getenv(var)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    if raw.upper() in ("ALL", "*", ""):
+        return None
+    names = frozenset(t.strip().upper() for t in raw.split(",") if t.strip())
+    return names or default
+
+
+def _env_bool(var: str, default: bool) -> bool:
+    raw = os.getenv(var)
+    return default if raw is None else raw.strip().lower() == "true"
+
+
 # How the long leg sits relative to the ATM short strike.
 ITM = "ITM"       # debit, long leg in the money  — high win rate, capped upside
 ATM = "ATM"       # debit, long leg at the money  — lower win rate, larger upside
@@ -489,7 +518,12 @@ WINDOWS = (
         # wired and unused, so the next person can re-run this in one line
         # when the sample is bigger.
         min_session_drawdown_pct=None,
-        entry_tiers=frozenset({"CLEAN"}),
+        # CLEAN only by measurement, not by preference: the same ITM
+        # structure earned +18.74 a trade when the full bullish stack held
+        # and -4.49 when it did not. TRADING_MORNING_TIERS overrides it --
+        # 'ALL' removes the restriction -- so the claim can be re-tested
+        # without a code change.
+        entry_tiers=_env_tiers("TRADING_MORNING_TIERS", frozenset({"CLEAN"})),
         # Long only. CLEAN is symmetric and its bear side opens a bear put
         # spread, which was never measured before it shipped. Measured now, on
         # the 16 bearish-stack mornings at a 10:15 entry: ITM -15.52 a trade
@@ -618,7 +652,7 @@ WINDOWS = (
         take_profit_pct=50.0, final_take_profit_pct=90.0,
         stop_loss_pct=-100.0, risk_off_pct=-60.0,
         risk_share=0.50, ratchet_giveback=0.30,
-        bearish_only=True,
+        bearish_only=_env_bool("TRADING_MORNING_CREDIT_BEARISH_ONLY", True),
         close_by=time(13, 25),
         exempt_from_streak_halt=True,
         note="The bad-morning counterpart to MORNING_DRIFT. Sells the side the "

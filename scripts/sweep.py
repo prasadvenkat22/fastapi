@@ -37,6 +37,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py creditgate  # does the credit window need a directional tier?
     python scripts/sweep.py rideratchet # profit protection for a riding position
     python scripts/sweep.py retries     # morning window length: does a second entry pay?
+    python scripts/sweep.py mstart      # may the morning open at 09:45 instead of 10:15?
     python scripts/sweep.py handoff     # should the morning still hand its slot over at 13:25?
     python scripts/sweep.py daydrop     # does the morning long want the day to have fallen first?
     python scripts/sweep.py breach      # model-free: how often a strike distance holds
@@ -1045,6 +1046,68 @@ def sweep_retries(sessions: dict):
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
         trades, _ = _run_arm(sessions, dtime(10, 15))
         _report(f"entries until {end.strftime('%H:%M')}", trades, len(sessions))
+    PB.WINDOWS = base
+
+
+def sweep_mstart(sessions: dict):
+    """May MORNING_DRIFT open at 09:45 instead of 10:15?
+
+    Asked 2026-08-28. The 09:45-10:15 half hour is empty -- ATM_MOMENTUM is
+    defined there and switched off -- and 09:45 is the earliest an entry can
+    legally fire, since _is_within_opening_warmup() refuses every entry before
+    it. So this is a start time with nothing in its way, not a new window.
+
+    TWO FRAMES, AND THE SECOND IS THE ONE THAT DECIDES. An earlier start can
+    only add trades, and section 16 caught five separate variants that added
+    trades and lost money doing it. Per-trade P&L alone would let an arm look
+    good while earning less per DAY, so both are printed and the daily block
+    is the verdict.
+
+    RUN WITH THE CREDIT WINDOW TOO. MORNING_DRIFT rides to the 13:25 handoff
+    and there is one position slot, so an earlier entry does not just add a
+    trade -- it occupies the slot sooner and can push the whole day around.
+    The solo block isolates the start time; the combined block is what would
+    actually run.
+    """
+    print("")
+    print("MORNING_DRIFT START TIME -- 09:45 is the earliest the warmup allows")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL (see docstring)'}")
+    print("")
+    base = PB.WINDOWS
+    starts = (dtime(9, 45), dtime(10, 0), dtime(10, 15), dtime(10, 30), dtime(11, 0))
+
+    print("  MORNING_DRIFT SOLO -- per trade")
+    for start in starts:
+        PB.WINDOWS = tuple(
+            replace(w, start=start) if w.name == "MORNING_DRIFT" else w for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+        trades, per_day = _run_arm(sessions, start)
+        label = f"opens {start.strftime('%H:%M')}"
+        _report(label + (" (live)" if start == dtime(10, 15) else ""), trades, len(sessions))
+
+    print("")
+    print("  MORNING_DRIFT SOLO -- per day")
+    for start in starts:
+        PB.WINDOWS = tuple(
+            replace(w, start=start) if w.name == "MORNING_DRIFT" else w for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+        _, per_day = _run_arm(sessions, start)
+        _report_daily(f"opens {start.strftime('%H:%M')}" +
+                      (" (live)" if start == dtime(10, 15) else ""), per_day)
+
+    print("")
+    print("  BOTH LIVE WINDOWS -- per day, which is what would run")
+    for start in starts:
+        PB.WINDOWS = tuple(
+            replace(w, start=start) if w.name == "MORNING_DRIFT" else w for w in base
+        )
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, start)
+        _report_daily(f"opens {start.strftime('%H:%M')}" +
+                      (" (live)" if start == dtime(10, 15) else ""), per_day)
+
     PB.WINDOWS = base
 
 
@@ -2315,6 +2378,8 @@ def main():
         sweep_handoff(sessions)
     if which in ("retries", "all"):
         sweep_retries(sessions)
+    if which in ("mstart", "all"):
+        sweep_mstart(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
     if which in ("forceclose", "all"):

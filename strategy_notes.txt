@@ -38,8 +38,10 @@ ever re-enabled.
 
   09:30  Market opens. No entries for 15 minutes - the opening auction
          produces whipsaws the indicators read as trend.
-  09:45  Warmup ends. Short entries become possible (long entries are not
-         restricted by this).
+  09:45  Warmup ends. Entries become possible in BOTH directions - the
+         warmup gates the whole entry branch, not the short side only.
+         This is the earliest minute any entry can fire; section 27
+         swept opening MORNING_DRIFT here and it is the worst of five.
   10:15  MORNING_DRIFT opens.
   11:30  MORNING_DRIFT closes to new entries. A position already open keeps
          running.
@@ -1296,3 +1298,87 @@ LEFT OFF. -10% flat is the best cell on total and has by far the best second
 half (-27.15 against -98 to -171 for every guarded arm). The knob exists now
 if a regime ever argues for it, and the default is None so live behaviour is
 unchanged until someone sets it deliberately.
+
+--------------------------------------------------------------------------------
+27. THE MORNING START TIME -- 09:45 PROPOSED, MEASURED, REFUTED  (2026-08-28)
+--------------------------------------------------------------------------------
+
+Asked: may MORNING_DRIFT open at 09:45 instead of 10:15? The half hour is
+empty -- ATM_MOMENTUM is defined across exactly 09:45-10:15 and switched off
+-- so this is a start time with nothing in its way, not a new window.
+
+09:45 IS THE FLOOR, AND SECTION 2 DESCRIBES IT WRONG. Entries before it are
+refused by _is_within_opening_warmup(), which nodes.py:1746 applies to the
+whole entry branch. Section 2 of this file says short entries become possible
+at 09:45 and long entries are not restricted by the warmup. That is not what
+the code does: the warmup blocks BOTH directions, and 09:45 is the first
+minute any entry can fire. Nothing was mis-traded on the strength of it --
+the live window opens half an hour later either way -- but the line is wrong
+and this is the correction.
+
+SWEPT AT TWO CONFIGURATIONS, DELIBERATELY. The harness reads playbook code
+defaults, and the deployed values live in .env.production on the droplet, so
+a single run would have measured a configuration nobody trades. Both are
+below. 60 and 59 sessions -- yfinance's rolling window moved by a day between
+the runs -- chain-priced on the penny grid.
+
+Per trade, MORNING_DRIFT alone, code defaults ($6 wide, -20% stop):
+
+    opens 09:45   41 tr  24% win   -66.28/tr   31 stops   halves -32.44/ -98.51
+    opens 10:00   36 tr  31% win    +5.37/tr   25 stops
+    opens 10:15   30 tr  33% win   +19.63/tr   20 stops   <- live
+    opens 10:30   26 tr  38% win   +20.34/tr   16 stops
+    opens 11:00   21 tr  43% win    -6.00/tr   12 stops
+
+Per trade, deployed settings ($10 wide, $2 ITM, -10% stop, credit floor 0.20
+at 0.25 delta):
+
+    opens 09:45   40 tr  20% win   -38.23/tr   32 stops   halves +49.87/-126.34
+    opens 10:00   37 tr  27% win   +86.40/tr   27 stops
+    opens 10:15   31 tr  35% win  +160.38/tr   20 stops   <- live
+    opens 10:30   29 tr  34% win    +0.97/tr   19 stops
+    opens 11:00   23 tr  43% win  +113.02/tr   13 stops
+
+Per DAY with both live windows on -- the frame the decision belongs in, since
+the morning holds the single position slot until the 13:25 handoff:
+
+                  code defaults        deployed settings
+    opens 09:45     -51.23/day           -25.25/day
+    opens 10:00     -11.42/day           +53.51/day
+    opens 10:15      +0.42/day           +85.30/day   <- live
+    opens 10:30      -7.96/day            +1.45/day
+    opens 11:00     -12.41/day           +45.04/day
+
+09:45 IS THE WORST ARM AND THE ONLY LOSING ONE, in both configurations and
+in all three frames. Not moved.
+
+IT FAILS BY THE SECTION 16 SIGNATURE, READ OFF THE EXIT MIX. At deployed
+settings 09:45 takes 40 trades against 31 and stops out of 32 of them -- 80%,
+against 65% at 10:15 -- while the win rate falls 35% to 20%. It is not
+finding earlier versions of the same trades. It is adding nine trades that
+are almost all stop-outs, in the half hour whose 5-minute bars span $1.78
+against the midday $0.83 (measured in the ATM_MOMENTUM comment block).
+
+That is the tail described at the end of section 10 arriving on purpose:
+every one of the eight worst sessions contains a MORNING_DRIFT stop-out, four
+of them on days that closed UP. An earlier start buys more of exactly that.
+The warmup exists because the opening auction produces whipsaws the
+indicators read as trend; 09:45 is the first legal minute, not the first
+reliable one.
+
+ONE CLAIM DID NOT SURVIVE THE SECOND RUN, AND IT WAS CITED FIRST. At code
+defaults 09:45 is negative in both sample halves, which is this file's
+standing bar for a result being about the rule. At deployed settings its
+first half is +49.87 and only the second is negative. The halves test was
+config-dependent here and should not have been leaned on before the
+confirming run existed. What survives both configurations is the ranking, the
+stop-out ratio and the sign.
+
+AND THE MIDDLE OF THE CURVE IS NOISE. 10:30 is co-best at code defaults
+(+20.34/tr) and near-worst deployed (+0.97/tr); 11:00 is negative at defaults
+and +113.02 deployed. On 23-40 trades those cells cannot be told apart. The
+endpoint is the only stable finding: not earlier. Nothing here argues for a
+LATER start either -- 10:30 loses to 10:15 in the combined frame in both
+configurations, which is the frame that decides.
+
+Reproduce with: python scripts/sweep.py mstart

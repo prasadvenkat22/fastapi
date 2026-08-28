@@ -1533,3 +1533,94 @@ Nothing was applied while the history was forked -- alembic refused before
 running anything -- so the failure cost a round trip and no data. Detect
 heads with `alembic heads` against the deployed tree, not with a regex over
 the files.
+
+--------------------------------------------------------------------------------
+30. A PROFIT RUNG FOR THE RIDE -- DEPLOYED AGAINST THE MEASUREMENT  (2026-08-28)
+--------------------------------------------------------------------------------
+
+Section 28 established the hole: a riding position has a -10% stop under it
+and a ceiling at 90% of MAX return, which on the deployed $10-wide is near
++195% and unreachable. Between them, nothing. That is how a +59.0% peak
+became a -18.1% stop-out.
+
+Two mechanisms could fill it, and they fail differently. A RATCHET reads a
+peak and a giveback, so it always surrenders part of the move and can fire on
+noise -- the position printed +46.6/+59.0/+54.3 on three consecutive minutes.
+An ABSOLUTE take-profit fires the first time a level is reached and gives
+nothing back. Both measured, 60 sessions, chain-priced, per day with both
+live windows, which is the frame the decision belongs in:
+
+    off (current)              +79.43/day  20% green  worst -985.80  +165.55/ -6.69
+    book at +75%               +46.05/day  22% green  worst -825.20  +102.46/-10.35
+    book at +100%              +37.42/day  18% green  worst -825.20   +72.15/ +2.68
+    book at +50%               +18.47/day  23% green  worst -717.60   +42.67/ -5.74
+    ratchet +60%               +18.09/day  22% green  worst -717.60   +55.76/-19.59
+    arm +40%, giveback 20->5%  +15.56/day  27% green  worst -717.60   +37.75/ -6.63
+    ratchet +40%               +13.55/day  25% green  worst -717.60   +37.75/-10.65
+    ratchet +40%, stands down  +10.13/day  27% green  worst -717.60   +27.25/ -6.99
+
+A HYPOTHESIS OF MINE, REFUTED. Every earlier ride-ratchet arm freed the
+position slot on its exit and took more trades than off, so the arm's cost
+and the re-entries' cost were summed and reported as the arm's. Standing the
+session down instead measures +10.13/day against +13.55 with re-entry --
+slightly WORSE. The re-entries were never the problem. The truncation itself
+is the cost, and the confound I spent a knob and two sweeps chasing did not
+exist.
+
+THE DYNAMIC GIVEBACK WORKS, WITHIN ITS CLASS. Tightening the giveback with
+the CLOCK -- 20% of peak at the window's open decaying to 5% at the 13:25
+deadline -- is the best ratchet variant at +15.56/day against +13.55 flat,
+and its second half improves from -10.65 to -6.63. The reasoning holds: early
+in a ride a dip has hours to recover and near the handoff it has minutes. It
+is still far below leaving the ride alone.
+
+WHAT DECIDED IT, AND IT IS NOT THE TOP ROW. Two readings matter more than the
+ordering.
+
+  OFF NO LONGER CLEARS THIS FILE'S OWN BAR. Its second half is -6.69/day.
+  Section 11 requires a cell to win in both halves; the incumbent now fails
+  that, and book at +100% is the only arm that passes.
+
+  THE ENTIRE CASE FOR OFF LIVES IN THE FIRST HALF. Over the most recent 30
+  sessions off earns -6.69/day and book at +50% earns -5.74. The guarded arms
+  are not worse recently. They are worse across the older half only. On 32-39
+  morning trades that is not a regime change, but it does mean the 61 dollars
+  a day that protection appears to cost is not something the recent data
+  demonstrates.
+
+DEPLOYED: TRADING_RIDE_TAKE_PROFIT=50.
+
+This is NOT the expectancy-maximising cell and the file should say so
+plainly. It gives up about 61 dollars a day of measured average against
+leaving the rung out. It was chosen deliberately, as a risk preference: it is
+the only deployed-candidate arm that would have acted on 2026-08-28, booking
+near +$293 on two contracts instead of realising -$106, and it has the best
+worst day of any arm tested (-717.60 against -985.80). Every other arm that
+measures better would not have fired at all on a +59% peak.
+
+Revisit when forward data grows. The specific thing to watch is whether the
+first-half advantage of off reappears; if it does, this rung is costing real
+money and should come out.
+
+A RESTART DOES NOT PICK UP AN ENV CHANGE
+
+Section 24 recorded that `docker compose up -d` without both -f files
+silently drops to paper mode, and that `restart` preserves configuration.
+Both are true, and the second has a consequence that was not written down:
+`restart` preserves the container's ORIGINAL environment, so it cannot apply
+a new variable at all. Adding TRADING_RIDE_TAKE_PROFIT to .env.production and
+restarting left the container without it, silently and with no error.
+
+Applying an env change requires RECREATING the container, which means `up -d`
+WITH both -f files:
+
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d app
+
+Done after the close with no position open, and every value verified
+afterwards rather than assumed: LIVE_ORDERS true, PREVIEW_ONLY false, stop
+-10, width 10.0, credit start 14:00, floor 0.20, budget 4000, cap 3, and the
+new rung at 50. A cycle was then run by hand and returned "skipped -- outside
+market hours (Fri 16:13 ET)".
+
+So: `restart` for a code change on the bind mount, `up -d` with both files
+for an env change, and verify the whole table either way.

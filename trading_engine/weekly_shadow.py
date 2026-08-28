@@ -63,6 +63,7 @@ from zoneinfo import ZoneInfo
 from models_pgdb.trading_models import WeeklyShadow
 
 from .data_feed import chain_vertical, fetch_option_chain, fetch_spot, strike_for_delta
+from . import weekly_signals
 
 logger = logging.getLogger(__name__)
 
@@ -290,13 +291,20 @@ def _maybe_open(db, now: datetime, symbol: str) -> None:
             continue
 
         short_leg = chain.get(("call", float(cs))) if cs else chain.get(("put", float(ps)))
+        short_iv = (round(short_leg.iv, 4)
+                    if short_leg and short_leg.iv is not None else None)
+        # Notes beside the row, never a gate. weekly_signals returns {} when
+        # the daily bars are unavailable, so a data outage writes nulls rather
+        # than losing the observation -- the credit and the strikes are the
+        # part that cannot be reconstructed later.
+        signals = weekly_signals.entry_signals(symbol, short_iv, now.date())
         db.add(WeeklyShadow(
             symbol=symbol, expiration=expiry, strategy=f"WEEKLY_{variant}",
             short_strike=cs, long_strike=cl,
             put_short_strike=ps, put_long_strike=pl,
             width=width, spot_at_entry=round(spot, 2),
             short_delta=round(short_leg.delta, 4) if short_leg and short_leg.delta is not None else None,
-            short_iv=round(short_leg.iv, 4) if short_leg and short_leg.iv is not None else None,
+            short_iv=short_iv, **signals,
             entry_credit_mid=round(priced["mid"], 4),
             entry_credit_natural=round(max(priced["natural_sell"], 0.0), 4),
             entry_spread_width=round(priced["cross"], 4),

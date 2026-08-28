@@ -255,3 +255,34 @@ class WeeklyShadow(Base):
     expiry_value = Column(Float, nullable=True)
     expiry_return_pct = Column(Float, nullable=True)
     notes = Column(String, nullable=True)
+
+    # Market state this row was opened into, on DAILY bars (see
+    # trading_engine/weekly_signals.py). Recorded, never acted on: the book is
+    # still shadow-only and every structure is still opened on every symbol.
+    # These exist so that "should the weekly book be gated on trend, Bollinger
+    # position or realised-against-implied vol" becomes a question the record
+    # can answer in ten Fridays instead of an argument. Weekly option prices
+    # have no historical feed, so there is no other route to the answer.
+    #
+    # Labels AND numbers: the label is what a gate would read, the number is
+    # what lets a different threshold be tested without re-collecting.
+    sig_trend = Column(String, nullable=True)          # ABOVE_BOTH/BELOW_BOTH/MIXED
+    sig_ema_cross = Column(String, nullable=True)      # EMA9 vs EMA20
+    sig_bb_zone = Column(String, nullable=True)        # UPPER_BAND/LOWER_BAND/NORMAL
+    sig_bb_sd = Column(Float, nullable=True)
+    sig_rsi14 = Column(Float, nullable=True)
+    sig_sma20 = Column(Float, nullable=True)
+    sig_sma50 = Column(Float, nullable=True)
+    sig_ema20 = Column(Float, nullable=True)
+    sig_move_5d_pct = Column(Float, nullable=True)
+    sig_rv20 = Column(Float, nullable=True)            # annualised realised vol
+    # Above 1.0 the name realises more than it charges -- the wrong side of the
+    # variance risk premium, and the reading that decides whether any of the
+    # rest matters. Per VARIANT, since the call and the put quote at different
+    # vols and one ratio per symbol would hide the skew.
+    sig_rv_iv_ratio = Column(Float, nullable=True)
+    sig_index_symbol = Column(String, nullable=True)
+    sig_index_trend = Column(String, nullable=True)
+    sig_index_bb_zone = Column(String, nullable=True)
+    sig_index_rsi14 = Column(Float, nullable=True)
+    sig_index_move_5d_pct = Column(Float, nullable=True)

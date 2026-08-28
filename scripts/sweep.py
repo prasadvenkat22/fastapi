@@ -36,6 +36,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py creditexit  # giveback and window length for the credit trade
     python scripts/sweep.py creditgate  # does the credit window need a directional tier?
     python scripts/sweep.py rideratchet # profit protection for a riding position
+    python scripts/sweep.py rideguard   # ratchet vs absolute take-profit on a ride
     python scripts/sweep.py retries     # morning window length: does a second entry pay?
     python scripts/sweep.py mstart      # may the morning open at 09:45 instead of 10:15?
     python scripts/sweep.py handoff     # should the morning still hand its slot over at 13:25?
@@ -2207,6 +2208,86 @@ def sweep_rideratchet(sessions: dict):
     PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
 
 
+def sweep_rideguard(sessions: dict):
+    """The two candidate rungs for a riding position, measured side by side.
+
+    2026-08-28 peaked at +59% and booked -18% because a ride has exactly one
+    live rule under it. Two mechanisms could put a rung there, and they fail
+    differently, so they are measured together rather than one after the other.
+
+    A RATCHET reads a peak and a giveback. It always surrenders part of the
+    move by construction, and on a position that prints +46.6/+59.0/+54.3 on
+    three consecutive minutes it can fire on noise. Measured here WITHOUT
+    re-entry: every earlier ride-ratchet arm freed the slot on a RATCHET exit
+    and took 36 trades against 31 for off, so the arm's cost and the
+    re-entries' cost were summed and reported as the arm's.
+
+    An ABSOLUTE take-profit fires the first time a level is reached and gives
+    nothing back. Section 10 rejected fixed targets on rides -- +18.82 a trade
+    against +36.40 for running -- but at the old width, the old -20% stop and
+    model pricing, so it is re-measured at the deployed configuration.
+
+    Read the per-DAY block, not the per-trade one. The morning holds the single
+    position slot to 13:25, so a rung that ends a ride early also changes what
+    the rest of the day can do.
+    """
+    print("")
+    print("RIDE GUARD -- what belongs between the stop and an unreachable ceiling")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base_arm, base_re, base_tp = (N.RIDE_RATCHET_ARM_PCT, N.RIDE_RATCHET_REENTER,
+                                  N.RIDE_TAKE_PROFIT_PCT)
+
+    def _reset():
+        N.RIDE_RATCHET_ARM_PCT, N.RIDE_TAKE_PROFIT_PCT = 0.0, 0.0
+        N.RIDE_RATCHET_REENTER = True
+
+    print("  BASELINE")
+    _reset()
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+    trades, _ = _run_arm(sessions, dtime(10, 15))
+    _report("off (current)", trades, len(sessions))
+
+    print("")
+    print("  RATCHET, NO RE-ENTRY -- books the ride and stands down")
+    for arm in (32.0, 40.0, 50.0, 60.0, 75.0):
+        _reset()
+        N.RIDE_RATCHET_ARM_PCT, N.RIDE_RATCHET_REENTER = arm, False
+        trades, _ = _run_arm(sessions, dtime(10, 15))
+        _report(f"ratchet arm +{arm:.0f}%, no re-entry", trades, len(sessions))
+
+    print("")
+    print("  ABSOLUTE TAKE-PROFIT -- books outright the first time it is reached")
+    for tp in (40.0, 50.0, 75.0, 100.0, 150.0):
+        _reset()
+        N.RIDE_TAKE_PROFIT_PCT = tp
+        trades, _ = _run_arm(sessions, dtime(10, 15))
+        _report(f"book at +{tp:.0f}%", trades, len(sessions))
+
+    print("")
+    print("  PER DAY, BOTH LIVE WINDOWS -- the frame the decision belongs in")
+    _reset()
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    _, per_day = _run_arm(sessions, dtime(10, 15))
+    _report_daily("off (current)", per_day)
+    for arm in (40.0, 50.0, 60.0):
+        _reset()
+        N.RIDE_RATCHET_ARM_PCT, N.RIDE_RATCHET_REENTER = arm, False
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily(f"ratchet +{arm:.0f}%, no re-entry", per_day)
+    for tp in (50.0, 75.0, 100.0):
+        _reset()
+        N.RIDE_TAKE_PROFIT_PCT = tp
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily(f"book at +{tp:.0f}%", per_day)
+
+    N.RIDE_RATCHET_ARM_PCT, N.RIDE_RATCHET_REENTER, N.RIDE_TAKE_PROFIT_PCT = (
+        base_arm, base_re, base_tp)
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -2497,6 +2578,8 @@ def main():
         sweep_creditgate(sessions)
     if which in ("rideratchet", "all"):
         sweep_rideratchet(sessions)
+    if which in ("rideguard", "all"):
+        sweep_rideguard(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

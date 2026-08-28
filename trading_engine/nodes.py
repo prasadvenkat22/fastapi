@@ -368,6 +368,23 @@ RIDE_MIN_GIVEBACK_PCT = float(os.getenv("TRADING_RIDE_MIN_GIVEBACK", "5.0"))
 # the behaviour that has always been live; False isolates the truncation.
 RIDE_RATCHET_REENTER = os.getenv("TRADING_RIDE_RATCHET_REENTER", "true").lower() == "true"
 
+# An ABSOLUTE take-profit for a riding position, in percent of premium paid.
+#
+# RIDE_CEILING_FRACTION is a share of MAX return, and max return on the
+# deployed $10-wide bought near $2.93 is +217%, putting the ceiling around
+# +195% -- unreachable before expiry. So the ride's only live rung is its
+# stop, which is how 2026-08-28 peaked at +59% and booked -18%.
+#
+# This is the other candidate rung, and it differs from the ratchet in what
+# it reads: a ratchet needs a peak and a giveback, so it always surrenders
+# part of the move and can fire on noise. An absolute level fires the first
+# time the number is reached and never gives anything back. Section 10
+# rejected fixed targets on rides, but at the old width, the old -20% stop
+# and model pricing; this is measured again at the deployed configuration.
+#
+# Zero disables it, which is the shipped default.
+RIDE_TAKE_PROFIT_PCT = float(os.getenv("TRADING_RIDE_TAKE_PROFIT", "0"))
+
 # Least credit worth selling a spread for, per contract.
 #
 # Without a floor the engine will open a credit vertical that collects
@@ -1561,7 +1578,15 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 if position.entry_net_debit > 0 else 0.0
             )
             ceiling_pct = RIDE_CEILING_FRACTION * max_return_pct
-            if max_return_pct > 0 and return_pct >= ceiling_pct:
+            if RIDE_TAKE_PROFIT_PCT > 0 and return_pct >= RIDE_TAKE_PROFIT_PCT:
+                logger.info(
+                    "Ride take-profit: %s at %+.1f%% reached the absolute +%.0f%% "
+                    "level — booking outright.",
+                    position.strategy, return_pct, RIDE_TAKE_PROFIT_PCT,
+                )
+                broker.sell_all(position.underlying)
+                action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
+            elif max_return_pct > 0 and return_pct >= ceiling_pct:
                 logger.info(
                     "Ride ceiling: %s at %+.1f%% is %.0f%% of the %+.1f%% this structure "
                     "can pay — booking rather than holding for the last few cents.",

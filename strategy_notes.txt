@@ -1462,3 +1462,74 @@ Verified after the rename: the following cycle logged "cycle ok" with no
 RECONCILE line, against the two cycles before it that carried one. Neither
 symbol list is overridden in the container environment, so the code defaults
 are the live configuration.
+
+--------------------------------------------------------------------------------
+29. THE WEEKLY BOOK LEARNS WHAT MARKET IT WAS OPENED INTO  (2026-08-28)
+--------------------------------------------------------------------------------
+
+Asked: should the weekly single-name spreads be traded off the overall market
+(QQQ), RV/IV, Bollinger, the moving averages and VWAP -- the way the 0DTE
+engine reads a setup?
+
+The book stays SHADOW ONLY. What changed is that the question became
+answerable: every weekly_shadow row now records the market state it was
+opened into, in sixteen sig_ columns. Nothing gates an entry; every structure
+is still opened on every symbol.
+
+WHY RECORDING RATHER THAN GATING. Weekly option prices have no historical
+feed, so a gate cannot be backtested -- the same wall the 0DTE condor and
+this book already hit. The rows as they stood held strikes, deltas and
+credits and nothing about the market around them, so "would gating on trend
+have helped" could not be asked even in hindsight. Eight to ten Fridays of
+these columns makes it answerable against real marks, and each row already
+records both outcomes -- the 25% target and hold-to-expiry.
+
+THREE THINGS THE PROPOSAL GOT CHANGED ON THE WAY IN.
+
+  VWAP IS NOT RECORDED. It is session-scoped and a weekly position spans five
+  sessions and five VWAPs. Friday afternoon's value says nothing about the
+  hold. It belongs to the 0DTE engine and does not transfer.
+
+  DAILY BARS, NOT 5-MINUTE ONES. A 20-period Bollinger band on 5-minute bars
+  describes ninety minutes; on a five-day hold that is noise. Same indicator
+  names, different timescale, and the timescale is the point.
+
+  THE CALL SIDE IS THE MEASURED-NEGATIVE WING, at least on QQQ: over 5 years
+  of 5-day outcomes the 0.12-delta call finished ITM 20.9% against 11.7%
+  priced (EV -11.00 a contract) while the put was 12.3% against 11.4% (EV
+  +8.14). Delta is priced driftless and the index drifts up. Whether a single
+  name shares that drift is open and per-name, which is why the wings are
+  recorded separately. Nothing here commits to a side.
+
+sig_rv_iv_ratio IS THE COLUMN THAT DECIDES WHETHER THE REST MATTERS. Above
+1.0 the name realises more than it charges -- the wrong side of the variance
+risk premium. It is stored PER VARIANT, not per symbol, because the call and
+the put quote at different vols and one ratio would hide exactly the skew the
+wings exist to expose. A rough run on 2026-08-27 put ten of eleven names above
+1.0. If that survives period-matched measurement, no technical gate rescues
+the structure: section 21 reached the identical conclusion about the credit
+floor, which turned a large loss into a small one by trading a quarter as
+often and never into a profit.
+
+Labels AND numbers are stored, so a different threshold can be tested later
+without waiting another ten Fridays to collect the data again.
+
+DEPLOYED 2026-08-28, after the close. Migration c8e2a94f6b71 applied to
+production and all sixteen columns verified present; weekly_signals.py,
+weekly_shadow.py, trading_models.py and nodes.py copied up by the atomic
+rename. Verified in the container afterwards: twelve weekly symbols including
+MRVL, sixteen signal columns on the model, and every ride knob still zero.
+
+A MIGRATION FOOTGUN, AND IT WAS MINE. The first version chained onto
+b7f4d3c81a26, which already had a child, so production came back with TWO
+alembic heads and `alembic upgrade head` refused to run at all. The cause was
+the script that found the head: its regex matched only single-quoted
+down_revision values, and c8a2f6d40b71 declares its parent in double quotes,
+so that file was invisible and its parent looked like a leaf. Reparented onto
+b9d3e05a7c14, the last weekly_shadow migration, which is also the right
+parent on the merits.
+
+Nothing was applied while the history was forked -- alembic refused before
+running anything -- so the failure cost a round trip and no data. Detect
+heads with `alembic heads` against the deployed tree, not with a regex over
+the files.

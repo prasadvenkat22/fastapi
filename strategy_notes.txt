@@ -439,6 +439,15 @@ the parameter. Four of the last five ideas tested failed that bar.
     not consulted by anything. It waits for enough trades that "three similar
     setups all lost" is signal rather than noise.
   - The morning window's entire record is 24 backtested trades.
+  - The live account is SHARED with manual trading. Positions in other
+    underlyings appear in the broker's list and are not the engine's; the
+    reconciliation is scoped to ENGINE_UNDERLYING so they are ignored. A
+    manual QQQ position WOULD still be reported, and correctly so.
+  - Log timestamps are UTC (the droplet is Etc/UTC) while every rule is
+    America/New_York -- a four-hour offset in summer. See section 28.
+  - There is no reachable take-profit on a riding position: the ride ceiling
+    is 90% of MAX return, which on the deployed $10-wide is near +195%. The
+    stop is the only rung that fires. See sections 28 and 29.
 
 --------------------------------------------------------------------------------
 13. FIRST LIVE SESSIONS, 2026-08-24 and 2026-08-25
@@ -1382,3 +1391,74 @@ LATER start either -- 10:30 loses to 10:15 in the combined frame in both
 configurations, which is the frame that decides.
 
 Reproduce with: python scripts/sweep.py mstart
+
+--------------------------------------------------------------------------------
+28. A +59% MORNING THAT BOOKED -18%, AND TWO FALSE ALARMS  (2026-08-28)
+--------------------------------------------------------------------------------
+
+The first session under the -10% stop deployed yesterday. It is also the
+clearest example yet of the hole in the ride, so the numbers are recorded in
+full.
+
+    14:35:05 UTC  Entering BULL via MORNING_DRIFT:CLEAN: ITM 2 contracts,
+                  long 719.0 / short 729.0 at $2.93 (equity $4039.15)
+    15:26 UTC     peak +59.0%          mid ~4.66     +$346 unrealised
+    15:40 UTC     +12.5%               mid  3.295
+    15:41 UTC     STOP_LOSS, natural 2.400, order 143856601    -$106 realised
+
+Peak to realised is a 77-point round trip on one position, about $450 of
+swing on two contracts. It decomposes into three separate defects, and they
+have three different answers.
+
+THE STOP OVERSHOT BY EIGHT POINTS. Set at -10%, filled at -18.1%. The
+position went from +12.5% to past the stop inside one cron minute, and the
+exit could not act until the next one. This is the first item in section 12
+arriving with a price on it: about $47 here. It is not a strategy failure and
+no ratchet would have prevented it. The obvious answer -- a resting stop at
+the broker -- is NOT established as available: submit_vertical sends a
+multileg order with type debit/credit, and whether Tradier accepts a stop
+type on a multileg spread has not been checked against their API. Until it
+has, the realistic mitigation is a shorter exit-check interval, not a resting
+order, and neither has been built.
+
+THE RIDE HAS NO REACHABLE PROFIT RUNG. RIDE_CEILING_FRACTION is 90% of MAX
+return, and max return on a $10-wide bought at 2.93 is +217%, so the ceiling
+sits near +195%. It cannot fire before expiry on this structure. Between that
+and the -10% stop there is nothing at all: the ride is not "letting a winner
+run", it is holding an unmanaged position with a single rule underneath it.
+The measurement of what to put there is section 29.
+
+TWO RECONCILE FALSE ALARMS, BOTH FIXED THE SAME DAY.
+
+  The account is shared with manual trading. The flat-side check reported
+  every position the broker held, so MU, SNDK and MRVL put spreads -- none of
+  them the engine's -- raised ERROR once a minute. Now scoped to
+  ENGINE_UNDERLYING through a new occ_root(), which parses the root off the
+  fixed-width OCC tail rather than prefix-matching.
+
+  A fresh entry is not a divergence. Tradier's position list lags its own
+  order acknowledgement, so the first cycle after every entry reported "the
+  broker holds neither leg" -- logged at 14:35:05, one second after the order
+  that did fill. A 90-second grace skips it; the next cycle reports as before.
+
+  Both were ERROR level, and that is the actual damage: a genuine divergence
+  would have arrived inside a stream of alerts already known to be noise.
+
+LOG TIMESTAMPS ARE UTC, AND THE ENGINE IS NOT. /etc/timezone on the droplet
+is Etc/UTC, so /var/log/qqq-trading.log is stamped in UTC while every rule in
+the engine is America/New_York. In August that is a four-hour offset: 15:41
+in the log is 11:41 to the playbook. This was misread once during the session
+-- a 13:25 handoff was called "already passed" when it was two hours away --
+so read the log with TZ=America/New_York date beside it.
+
+DEPLOYED THIS SESSION, all by scp to a temporary name and an atomic rename,
+per the lesson in section 22:
+
+    MRVL added to TRADING_WEEKLY_SYMBOLS and CHAIN_CAPTURE_SYMBOLS
+    the two RECONCILE fixes
+    RIDE_RATCHET_REENTER, default true and behaviour-neutral
+
+Verified after the rename: the following cycle logged "cycle ok" with no
+RECONCILE line, against the two cycles before it that carried one. Neither
+symbol list is overridden in the container environment, so the code defaults
+are the live configuration.

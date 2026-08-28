@@ -119,7 +119,7 @@ SYMBOLS = tuple(
     v.strip().upper()
     for v in os.getenv(
         "TRADING_WEEKLY_SYMBOLS",
-        "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN"
+        "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN,MRVL"
     ).split(",")
     if v.strip()
 )

@@ -90,7 +90,7 @@ MIN_ABS_DELTA, MAX_ABS_DELTA = 0.03, 0.97
 # the credit-to-risk ratio whatever the premium looks like.
 CAPTURE_SYMBOLS = [s.strip().upper() for s in os.getenv(
     "CHAIN_CAPTURE_SYMBOLS",
-    "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN"
+    "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN,MRVL"
 ).split(",") if s.strip()]
 
 

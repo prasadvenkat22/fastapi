@@ -1,7 +1,7 @@
 """record the market state each weekly shadow row was opened into
 
 Revision ID: c8e2a94f6b71
-Revises: b7f4d3c81a26
+Revises: b9d3e05a7c14
 Create Date: 2026-08-28 00:00:00.000000
 
 The weekly single-name book is to be gated on index direction, moving
@@ -35,7 +35,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'c8e2a94f6b71'
-down_revision: Union[str, None] = 'b7f4d3c81a26'
+down_revision: Union[str, None] = 'b9d3e05a7c14'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -156,6 +156,16 @@ def _patch_ticks():
 COMMISSION_ROUNDTRIP = 0.014
 
 
+# Stand the session down after a RIDE ratchets out, instead of freeing the
+# slot. Lives HERE and not in nodes.py: the engine's may_reenter is a
+# per-cycle decision and a ride's re-entry happens on a LATER cycle, where
+# `position is None` short-circuits it -- a knob added there measured
+# byte-identical results and was removed. Standing a window down across
+# cycles is session state, and for a diagnostic the harness is the right
+# place for it.
+STAND_DOWN_AFTER_RIDE_RATCHET = False
+
+
 class _Clock:
     """The simulated 'now', shared by every patched time function."""
     now = datetime(2026, 1, 1, 9, 45, tzinfo=NY)
@@ -457,6 +467,9 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
             _Cooldown.book(closed["strategy"], closed["pnl"], ts)
             trades.append(closed)
             entry = None
+            if STAND_DOWN_AFTER_RIDE_RATCHET and closed["reason"] == "RATCHET":
+                # Nothing is open, so ending the day IS standing down.
+                break
 
     position = broker.get_open_position()
     if position is not None and entry is not None:
@@ -2189,8 +2202,6 @@ def sweep_rideratchet(sessions: dict):
     # ratchet books and the morning stands down.
     print("")
     print("  RATCHET WITHOUT RE-ENTRY -- books the ride and stands down")
-    base_re = N.RIDE_RATCHET_REENTER
-    N.RIDE_RATCHET_REENTER = False
     for arm in (32.0, 40.0, 50.0, 60.0, 75.0):
         N.RIDE_RATCHET_ARM_PCT = arm
         trades, _ = _run_arm(sessions, dtime(10, 15))
@@ -2203,7 +2214,6 @@ def sweep_rideratchet(sessions: dict):
         _, per_day = _run_arm(sessions, dtime(10, 15))
         _report_daily("off (current)" if arm == 0 else f"arm +{arm:.0f}%, no re-entry",
                       per_day)
-    N.RIDE_RATCHET_REENTER = base_re
     N.RIDE_RATCHET_ARM_PCT = 0.0
     PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
 
@@ -2235,12 +2245,11 @@ def sweep_rideguard(sessions: dict):
     print("RIDE GUARD -- what belongs between the stop and an unreachable ceiling")
     print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
     print("")
-    base_arm, base_re, base_tp = (N.RIDE_RATCHET_ARM_PCT, N.RIDE_RATCHET_REENTER,
-                                  N.RIDE_TAKE_PROFIT_PCT)
+    base_arm, base_tp = N.RIDE_RATCHET_ARM_PCT, N.RIDE_TAKE_PROFIT_PCT
 
     def _reset():
         N.RIDE_RATCHET_ARM_PCT, N.RIDE_TAKE_PROFIT_PCT = 0.0, 0.0
-        N.RIDE_RATCHET_REENTER = True
+        N.RIDE_GIVEBACK_LATE = 0.0
 
     print("  BASELINE")
     _reset()
@@ -2249,12 +2258,12 @@ def sweep_rideguard(sessions: dict):
     _report("off (current)", trades, len(sessions))
 
     print("")
-    print("  RATCHET, NO RE-ENTRY -- books the ride and stands down")
+    print("  RATCHET -- peak giveback, slot freed on the exit (as the engine runs)")
     for arm in (32.0, 40.0, 50.0, 60.0, 75.0):
         _reset()
-        N.RIDE_RATCHET_ARM_PCT, N.RIDE_RATCHET_REENTER = arm, False
+        N.RIDE_RATCHET_ARM_PCT = arm
         trades, _ = _run_arm(sessions, dtime(10, 15))
-        _report(f"ratchet arm +{arm:.0f}%, no re-entry", trades, len(sessions))
+        _report(f"ratchet arm +{arm:.0f}%", trades, len(sessions))
 
     print("")
     print("  ABSOLUTE TAKE-PROFIT -- books outright the first time it is reached")
@@ -2265,6 +2274,30 @@ def sweep_rideguard(sessions: dict):
         _report(f"book at +{tp:.0f}%", trades, len(sessions))
 
     print("")
+    print("  RATCHET, GENUINELY NO RE-ENTRY -- session stands down on a ratchet")
+    global STAND_DOWN_AFTER_RIDE_RATCHET
+    for arm in (40.0, 50.0, 60.0):
+        _reset()
+        N.RIDE_RATCHET_ARM_PCT = arm
+        STAND_DOWN_AFTER_RIDE_RATCHET = True
+        trades, _ = _run_arm(sessions, dtime(10, 15))
+        STAND_DOWN_AFTER_RIDE_RATCHET = False
+        _report(f"arm +{arm:.0f}%, stands down", trades, len(sessions))
+
+    print("")
+    print("  DYNAMIC GIVEBACK -- tightens with the CLOCK, not with the peak")
+    base_gb = N.RIDE_GIVEBACK
+    for arm in (40.0, 50.0):
+        for early, late in ((0.30, 0.05), (0.20, 0.05), (0.30, 0.10)):
+            _reset()
+            N.RIDE_RATCHET_ARM_PCT = arm
+            N.RIDE_GIVEBACK, N.RIDE_GIVEBACK_LATE = early, late
+            trades, _ = _run_arm(sessions, dtime(10, 15))
+            _report(f"arm +{arm:.0f}%, giveback {early:.0%}->{late:.0%}",
+                    trades, len(sessions))
+    N.RIDE_GIVEBACK, N.RIDE_GIVEBACK_LATE = base_gb, 0.0
+
+    print("")
     print("  PER DAY, BOTH LIVE WINDOWS -- the frame the decision belongs in")
     _reset()
     PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
@@ -2272,10 +2305,26 @@ def sweep_rideguard(sessions: dict):
     _report_daily("off (current)", per_day)
     for arm in (40.0, 50.0, 60.0):
         _reset()
-        N.RIDE_RATCHET_ARM_PCT, N.RIDE_RATCHET_REENTER = arm, False
+        N.RIDE_RATCHET_ARM_PCT = arm
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
         _, per_day = _run_arm(sessions, dtime(10, 15))
-        _report_daily(f"ratchet +{arm:.0f}%, no re-entry", per_day)
+        _report_daily(f"ratchet +{arm:.0f}%", per_day)
+    for arm in (40.0, 50.0):
+        _reset()
+        N.RIDE_RATCHET_ARM_PCT = arm
+        STAND_DOWN_AFTER_RIDE_RATCHET = True
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        STAND_DOWN_AFTER_RIDE_RATCHET = False
+        _report_daily(f"ratchet +{arm:.0f}%, stands down", per_day)
+    for early, late in ((0.30, 0.05), (0.20, 0.05)):
+        _reset()
+        N.RIDE_RATCHET_ARM_PCT = 40.0
+        N.RIDE_GIVEBACK, N.RIDE_GIVEBACK_LATE = early, late
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily(f"arm +40%, giveback {early:.0%}->{late:.0%}", per_day)
+    N.RIDE_GIVEBACK, N.RIDE_GIVEBACK_LATE = 0.20, 0.0
     for tp in (50.0, 75.0, 100.0):
         _reset()
         N.RIDE_TAKE_PROFIT_PCT = tp
@@ -2283,8 +2332,7 @@ def sweep_rideguard(sessions: dict):
         _, per_day = _run_arm(sessions, dtime(10, 15))
         _report_daily(f"book at +{tp:.0f}%", per_day)
 
-    N.RIDE_RATCHET_ARM_PCT, N.RIDE_RATCHET_REENTER, N.RIDE_TAKE_PROFIT_PCT = (
-        base_arm, base_re, base_tp)
+    N.RIDE_RATCHET_ARM_PCT, N.RIDE_TAKE_PROFIT_PCT = base_arm, base_tp
     PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
 
 

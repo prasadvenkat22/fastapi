@@ -354,20 +354,6 @@ RIDE_RATCHET_ARM_PCT = float(os.getenv("TRADING_RIDE_RATCHET_ARM", "0"))
 RIDE_GIVEBACK = float(os.getenv("TRADING_RIDE_GIVEBACK", "0.20"))
 RIDE_MIN_GIVEBACK_PCT = float(os.getenv("TRADING_RIDE_MIN_GIVEBACK", "5.0"))
 
-# Whether a RIDE that ratchets out may re-enter the same session.
-#
-# The engine treats RATCHET as a winning exit and frees the slot, which is
-# right for the credit window -- it ratchets out of a spread that already
-# paid and the setup is still valid. For a RIDE it is a different bet: the
-# ride was truncated precisely because momentum turned, and re-entering
-# buys the same thinning trend a second time.
-#
-# It also confounds every ride-ratchet measurement taken so far. Armed arms
-# took 36 trades against 31 for off, so the arm's cost and the re-entries'
-# cost were summed into one number and reported as the arm's. True keeps
-# the behaviour that has always been live; False isolates the truncation.
-RIDE_RATCHET_REENTER = os.getenv("TRADING_RIDE_RATCHET_REENTER", "true").lower() == "true"
-
 # An ABSOLUTE take-profit for a riding position, in percent of premium paid.
 #
 # RIDE_CEILING_FRACTION is a share of MAX return, and max return on the
@@ -384,6 +370,22 @@ RIDE_RATCHET_REENTER = os.getenv("TRADING_RIDE_RATCHET_REENTER", "true").lower()
 #
 # Zero disables it, which is the shipped default.
 RIDE_TAKE_PROFIT_PCT = float(os.getenv("TRADING_RIDE_TAKE_PROFIT", "0"))
+
+# A giveback that tightens as the ride runs out of DAY, rather than as it
+# runs out of upside.
+#
+# The flat ratchet surrenders the same share of the peak at 10:20 as at
+# 13:20, and those are not the same situation: early in a ride a dip has
+# hours to recover, and near the handoff it has minutes. GIVEBACK_TAPER
+# already scales a giveback by PROGRESS TOWARD THE CEILING and measured
+# monotonically worse (section 10) -- this scales by elapsed time instead,
+# which is a different quantity and an untested one.
+#
+# The giveback runs from RIDE_GIVEBACK at the window's open down to
+# RIDE_GIVEBACK_LATE at the ride deadline, linearly in wall-clock time.
+# Zero disables it and the flat giveback applies throughout, which is the
+# shipped default.
+RIDE_GIVEBACK_LATE = float(os.getenv("TRADING_RIDE_GIVEBACK_LATE", "0"))
 
 # Least credit worth selling a spread for, per contract.
 #
@@ -1395,6 +1397,30 @@ def is_past_force_close(hour: int = None, minute: int = None) -> bool:
     return (now_est.hour, now_est.minute) >= (hour, minute)
 
 
+def _ride_giveback(deadline) -> float:
+    """The share of peak a ride may hand back, at this moment.
+
+    Flat at RIDE_GIVEBACK unless RIDE_GIVEBACK_LATE is set, in which case
+    it interpolates from RIDE_GIVEBACK at the morning window's open to
+    RIDE_GIVEBACK_LATE at the ride deadline. Outside that span it clamps to
+    the nearer end, so a position opened before the window or held past the
+    deadline still gets a defined number rather than an extrapolated one.
+    """
+    if RIDE_GIVEBACK_LATE <= 0 or deadline is None:
+        return RIDE_GIVEBACK
+    window = window_for()
+    start = window.start if window is not None else None
+    if start is None:
+        return RIDE_GIVEBACK
+    now_t = datetime.now(NY).time()
+    span = (deadline.hour * 60 + deadline.minute) - (start.hour * 60 + start.minute)
+    if span <= 0:
+        return RIDE_GIVEBACK
+    elapsed = (now_t.hour * 60 + now_t.minute) - (start.hour * 60 + start.minute)
+    frac = min(1.0, max(0.0, elapsed / span))
+    return RIDE_GIVEBACK * (1.0 - frac) + RIDE_GIVEBACK_LATE * frac
+
+
 def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -> dict:
     if os.path.exists(KILL_SWITCH_PATH):
         logger.warning("KILL_SWITCH.txt present — halting all algorithmic execution.")
@@ -1600,8 +1626,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             elif (
                 RIDE_RATCHET_ARM_PCT > 0
                 and peak_return >= RIDE_RATCHET_ARM_PCT
-                and return_pct <= peak_return - max(peak_return * RIDE_GIVEBACK,
-                                                    RIDE_MIN_GIVEBACK_PCT)
+                and return_pct <= peak_return - max(
+                    peak_return * _ride_giveback(deadline), RIDE_MIN_GIVEBACK_PCT)
             ):
                 logger.info(
                     "Ride ratchet: peaked at %+.1f%%, now %+.1f%% — booking the ride "
@@ -1765,17 +1791,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     # position that armed above its target, so they are winning exits under
     # different names. Leaving them out cost the credit window a cycle every
     # time it trailed out instead of booking at the target.
-    # RIDE_RATCHET_REENTER=False withholds the slot after a RIDE ratchets
-    # out, without touching the credit window's own ratchet re-entry.
-    _ride_ratchet = (
-        exit_reason == "RATCHET"
-        and position is not None
-        and rides_to_close(position.playbook)
-    )
-    may_reenter = position is None or (
-        exit_reason in ("TAKE_PROFIT", "RATCHET", "TRAIL_STOP")
-        and not (_ride_ratchet and not RIDE_RATCHET_REENTER)
-    )
+    may_reenter = position is None or exit_reason in ("TAKE_PROFIT", "RATCHET", "TRAIL_STOP")
 
     # The 14:00 cutoff is a DEBIT rule: a bought spread needs enough day left
     # for the move it is paying for. A credit spread wants the opposite --

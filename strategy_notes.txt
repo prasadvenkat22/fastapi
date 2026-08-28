@@ -1246,3 +1246,53 @@ DEPLOYED FOR 2026-08-28
                       books 50%, stop -600%
     both              30-min post-loss cooldown, 3-loss daily halt, 1 slice
     orders            production 6YB90697, cap 3, budget $4,000
+
+--------------------------------------------------------------------------------
+26. THE TREND-DEFERRED STOP -- BUILT, MEASURED, LEFT OFF  (2026-08-27)
+--------------------------------------------------------------------------------
+
+Asked after the -10% stop was deployed: if the longer moving average is still
+up, should the stop wait for the TREND to break rather than fire on a fixed
+percentage? The motivating case is the same session -- stopped at 11:39 on
+the dip to 716.67, ran to 720.53 by 13:15.
+
+Built as PlaybookWindow.stop_defers_to_trend, two readings, off by default:
+
+    ema_cross   the 9 EMA still the right side of the 20 SMA (structural)
+    ema9        price still the right side of the 9 EMA (faster to release)
+
+Swept at three stop widths, because a guard and a width are not independent
+-- a guard that holds through dips might make a TIGHTER stop affordable, and
+testing only at the deployed width would miss that:
+
+    stop  guard        n  win%   per trade   worst    halves
+    -10%  none        24   33%    +296.73   -1614   +620.60/ -27.15  deployed
+    -10%  ema_cross   22   45%    +239.80   -2526   +650.58/-170.98
+    -10%  ema9        24   38%    +260.12   -2016   +617.80/ -97.57
+    -20%  none        25   32%    +141.40   -1435   +433.10/-127.86
+    -20%  ema_cross   22   50%    +254.10   -2526   +650.58/-142.38
+    -20%  ema9        25   36%    +123.64   -1747   +434.07/-162.91
+     -5%  none        24   25%    +231.98   -1614   +634.70/-170.75
+     -5%  ema_cross   22   45%    +252.53   -2526   +650.58/-145.53
+     -5%  ema9        24   38%    +288.45   -2016   +617.80/ -40.90
+
+THE GUARD REPLACES THE STOP RATHER THAN MODIFYING IT. Every ema_cross row has
+the SAME first half, +650.58, at -5%, -10% and -20%; every ema9 row has
++617.80. The percentage is nearly irrelevant once the guard is on, because
+the guard is what ends the trade. A guarded -10% is not a tight stop with a
+filter, it is "exit when the trend breaks" wearing a percentage.
+
+IT DOES RESCUE A BADLY SET STOP. At -20% the guard takes +141.40 to +254.10,
+so the reasoning behind it is sound. A correctly tight stop simply captures
+the same gain more cheaply and keeps it.
+
+AND IT DEEPENS THE WORST DAY AT EVERY WIDTH, -1614 to -2526, a 56% deeper
+hole. That is the mechanism working as designed: holding through dips means
+that when the trend does break, the position has fallen much further. Win
+rate up 33% to 45%, worst day and second half both worse -- the same
+trade-off as the $5 ITM placement in section 24, arriving from the exit side.
+
+LEFT OFF. -10% flat is the best cell on total and has by far the best second
+half (-27.15 against -98 to -171 for every guarded arm). The knob exists now
+if a regime ever argues for it, and the default is None so live behaviour is
+unchanged until someone sets it deliberately.

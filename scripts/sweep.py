@@ -937,6 +937,54 @@ def sweep_creditcfg(sessions: dict):
         PB.WINDOWS, N.MIN_CREDIT = base_windows, base_floor
 
 
+def sweep_trendstop(sessions: dict):
+    """Should the morning stop defer to the trend instead of firing on price?
+
+    Asked 2026-08-27, after a session that stopped out at 11:39 on the dip to
+    716.67 -- the local bottom -- and ran to 720.53 by 13:15. The idea: if the
+    longer moving average is still up, the dip is noise and the stop should
+    wait for the TREND to break rather than for the position to fall a fixed
+    percentage.
+
+    Two readings of "trend still up", because they behave differently:
+
+        ema_cross   the 9 EMA is still above the 20 SMA. Structural, slower
+                    to flip, so it holds the stop off through deeper dips.
+        ema9        price is still above the 9 EMA. Faster, releases the stop
+                    back almost immediately on a real turn.
+
+    Swept at three stop widths, because a trend guard and a stop width are
+    not independent: a guard that holds through dips may make a TIGHTER stop
+    affordable, which is the interesting version of the question. A guard
+    tested only at the deployed width would miss that entirely.
+
+    The downside stays bounded -- a debit spread's loss is capped at the
+    premium, the 13:25 ride deadline and force close still end the trade, and
+    the risk-off rule still owns its band when macro turns BAD.
+    """
+    print("")
+    print("TREND-DEFERRED STOP -- fire on price, or wait for the trend to break?")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}"
+          f"    grid: {'PENNY/NICKEL TICKS' if TICK_PRICING else 'SMOOTH -- not real'}")
+    print("")
+    base = PB.WINDOWS
+    try:
+        for stop in (-10.0, -20.0, -5.0):
+            for guard in (None, "ema_cross", "ema9"):
+                PB.WINDOWS = tuple(
+                    replace(w, stop_loss_pct=stop, stop_defers_to_trend=guard)
+                    if w.name == "MORNING_DRIFT" else w
+                    for w in base
+                )
+                PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+                trades, _ = _run_arm(sessions, dtime(10, 15))
+                label = f"stop {stop:+.0f}% guard {guard or 'none (live)'}"
+                _report(label, trades, len(sessions))
+            print("")
+    finally:
+        PB.WINDOWS = base
+
+
 def sweep_handoff(sessions: dict):
     """Should the morning winner still hand its slot to the credit window?
 
@@ -2253,6 +2301,8 @@ def main():
         sweep_target(sessions)
     if which in ("creditstop", "all"):
         sweep_creditstop(sessions)
+    if which in ("trendstop", "all"):
+        sweep_trendstop(sessions)
     if which in ("creditcfg", "all"):
         sweep_creditcfg(sessions)
     if which in ("package", "all"):

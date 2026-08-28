@@ -28,6 +28,7 @@ from .macro_calendar import blackout_active as event_blackout_active, describe a
 from .playbook import (
     CREDIT, close_deadline, credit_strikes_for, final_take_profit_for,
     ratchet_giveback_for, ride_deadline, rides_to_close, risk_share_for,
+    stop_trend_guard_for,
     strikes_for, thresholds_for, window_for, window_for_direction,
 )
 from .broker import (
@@ -1459,6 +1460,20 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
 
         ride = rides_to_close(position.playbook)
 
+        # Does the trend still hold the stop off? Off unless the window asks
+        # for it. The test is directional: for a long structure the trend is
+        # intact while the fast MA leads, and the mirror for a short one.
+        stop_held_by_trend = False
+        guard = stop_trend_guard_for(position.playbook)
+        if guard:
+            long_side = position.strategy in (BULL_CALL_SPREAD, PUT_CREDIT_SPREAD)
+            if guard == "ema9":
+                stop_held_by_trend = (
+                    ema9_side == ("ABOVE_EMA9" if long_side else "BELOW_EMA9"))
+            else:
+                stop_held_by_trend = (
+                    ema_cross == ("EMA9_ABOVE_SMA20" if long_side else "EMA9_BELOW_SMA20"))
+
         # Profit ratchet. What matters is whether this position HAS been up,
         # not whether it still is: `gave_back` is only ever evaluated inside
         # the take-profit branch or this one, so a peak that no branch owns is
@@ -1540,7 +1555,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 )
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
-            elif return_pct <= stop_pct:
+            elif return_pct <= stop_pct and not stop_held_by_trend:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "STOP_LOSS"
             elif (
@@ -1642,7 +1657,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "RATCHET"
         # Rule B / C: Stop Loss vs. Buy More
-        elif return_pct <= stop_pct:
+        elif return_pct <= stop_pct and not stop_held_by_trend:
             # place_buy_more adds `position.quantity` more contracts — it
             # doubles the position — so the affordability check has to price
             # that whole lot. Checking a single contract's cost (as this once

@@ -305,6 +305,23 @@ class PlaybookWindow:
     # credit trade, which is the larger edge by roughly three to one. A cheap
     # loss should not be able to cancel an expensive opportunity.
     exempt_from_streak_halt: bool = False
+    # A stop that defers to the trend, off by default.
+    #
+    # When set, the percentage stop only fires if the named trend test has
+    # ALSO broken; while the trend holds, the position rides through the stop
+    # level. The motivating case is 2026-08-27, where the morning stopped out
+    # at 11:39 on the dip to 716.67 -- the session's local bottom -- and QQQ
+    # ran to 720.53 by 13:15 without it.
+    #
+    #   "ema_cross"  the 9 EMA is still the right side of the 20 SMA. The
+    #                structural reading of "the trend is still up".
+    #   "ema9"       price is still the right side of the 9 EMA. Faster, so
+    #                it releases the stop back sooner.
+    #
+    # The downside is NOT unbounded: a debit spread's loss is capped at the
+    # premium paid, the ride deadline and force close still end the trade,
+    # and the risk-off rule still owns its band when macro turns BAD.
+    stop_defers_to_trend: "str | None" = None
     note: str = ""
 
     def allows_tier(self, tier: str) -> bool:
@@ -931,6 +948,15 @@ def ride_deadline(playbook_name: str) -> "time | None":
     for w in WINDOWS:
         if w.name == base:
             return w.ride_until
+    return None
+
+
+def stop_trend_guard_for(playbook_name: str) -> "str | None":
+    """Which trend test, if any, must also break before this window's stop fires."""
+    base = (playbook_name or "").split(":", 1)[0]
+    for w in WINDOWS:
+        if w.name == base:
+            return w.stop_defers_to_trend
     return None
 
 

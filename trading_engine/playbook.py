@@ -537,7 +537,10 @@ WINDOWS = (
         #
         # That also means +36.40 is the luckiest cell of the bullish sweep and
         # +9 to +36 is the honest range. The direction holds; the size does not.
-        bullish_only=True,
+        # Long only by measurement: the bear side ran 27% wins at -50.62 a
+        # trade, negative in both sample halves. TRADING_MORNING_BULLISH_ONLY
+        # overrides it so the claim can be re-tested without a code change.
+        bullish_only=_env_bool("TRADING_MORNING_BULLISH_ONLY", True),
         # One contract. At the global 0.10 this window would take 5, and a
         # single -30% stop would cost $274 against a $200 daily cap -- the
         # session would halt before 13:30 and forfeit the credit trade that

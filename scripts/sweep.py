@@ -2453,6 +2453,66 @@ def sweep_creditstart(sessions: dict):
     PB.WINDOWS = base
 
 
+def sweep_relaxed(sessions: dict):
+    """The clock-driven engine against a signal-driven one.
+
+    The architectural objection, raised 2026-08-28: the windows encode WHEN as
+    a proxy for WHAT CONDITIONS, a time-of-day rule standing in for a
+    market-state rule. Let the signal decide direction and let it trade
+    whenever it is valid, with risk controls rather than clock controls.
+
+    It is a fair objection and it has never been tested as a whole. The
+    individual relaxations have -- an earlier morning start (section 27), an
+    earlier credit start (section 31), a bearish morning (section 10), looser
+    morning tiers (the playbook comment) -- and each lost on its own. That is
+    not the same as testing the combination, because the argument is that the
+    restrictions are individually defensible and collectively too tight.
+
+    Decomposed the way section 24 decomposed the morning package: the full
+    relaxation, then each component alone, because a package that loses says
+    nothing about which part lost.
+
+    Per DAY with both windows, which is the only frame in which "trade more"
+    can be judged -- a rule that adds trades usually adds worse ones.
+    """
+    print("")
+    print("CLOCK-DRIVEN AGAINST SIGNAL-DRIVEN")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base = PB.WINDOWS
+
+    def _run(label, *, tiers=None, both_dirs=False, m_start=None, m_end=None,
+             c_start=None):
+        ws = []
+        for w in base:
+            if w.name == "MORNING_DRIFT":
+                w = replace(w,
+                            entry_tiers=None if tiers == "ALL" else w.entry_tiers,
+                            bullish_only=False if both_dirs else w.bullish_only,
+                            start=m_start or w.start, end=m_end or w.end)
+            elif w.name == "AFTERNOON_CREDIT" and c_start is not None:
+                w = replace(w, start=c_start)
+            ws.append(w)
+        PB.WINDOWS = tuple(ws)
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(9, 45))
+        _report_daily(label, per_day)
+
+    _run("deployed (clock-driven)")
+    print("")
+    print("  ONE RELAXATION AT A TIME")
+    _run("  morning: ALL tiers", tiers="ALL")
+    _run("  morning: both directions", both_dirs=True)
+    _run("  morning: opens 09:45", m_start=dtime(9, 45))
+    _run("  credit: opens 11:00", c_start=dtime(11, 0))
+    print("")
+    print("  COMBINED")
+    _run("  tiers + directions", tiers="ALL", both_dirs=True)
+    _run("  FULLY RELAXED (all four)", tiers="ALL", both_dirs=True,
+         m_start=dtime(9, 45), m_end=dtime(15, 0), c_start=dtime(11, 0))
+    PB.WINDOWS = base
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -2749,6 +2809,8 @@ def main():
         sweep_ridetight(sessions)
     if which in ("creditstart", "all"):
         sweep_creditstart(sessions)
+    if which in ("relaxed", "all"):
+        sweep_relaxed(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

@@ -1748,3 +1748,83 @@ The restriction itself still has evidence behind it -- the same ITM structure
 earned +18.74 a trade when the full bullish stack held and -4.49 when it did
 not -- but a restriction should be defended by a measurement, not by the cost
 of running one.
+
+--------------------------------------------------------------------------------
+32. THE CLOCK AGAINST THE SIGNAL -- AND AN INTERACTION NOBODY HAD SEEN
+    (2026-08-28)
+--------------------------------------------------------------------------------
+
+The architectural objection: the windows encode WHEN as a proxy for WHAT
+CONDITIONS. A time-of-day rule standing in for a market-state rule is crude.
+Let the signal decide direction and let it trade whenever it is valid, with
+risk controls instead of clock controls.
+
+The specific form of the claim is what made it worth testing: each
+restriction is individually defensible, but COLLECTIVELY they are too tight.
+Every earlier sweep in this file moved one knob, so the combination had never
+been run, and the claim is precisely about the combination.
+
+Per day, both windows, 60 sessions, chain-priced, at the deployed
+configuration including the +50% ride rung:
+
+    deployed (clock-driven)      +18.47/day  0.77 tr/day  23% green
+      morning: ALL tiers         -12.96/day  0.90 tr/day
+      morning: both directions   -27.25/day  1.42 tr/day
+      morning: opens 09:45       -48.59/day  0.97 tr/day
+      credit:  opens 11:00        +2.96/day  1.43 tr/day  42% green
+    COMBINED
+      tiers + directions        -107.21/day  1.85 tr/day
+      FULLY RELAXED (all four)  -134.30/day  2.73 tr/day
+
+THE CLAIM IS REFUTED, AND BACKWARDS. The restrictions do MORE work together
+than apart, not less:
+
+    removing tiers alone costs        -31.43/day
+    removing directions alone costs   -45.72/day
+                        additive      -77.15   predicts  -58.68/day
+                        actual                           -107.21/day
+                        interaction   -48.53/day of damage that is not
+                                      explained by either change alone
+
+THE MECHANISM IS THE SINGLE POSITION SLOT. With all tiers and both
+directions the morning fires early and often -- 1.85 trades a day against
+0.77 -- and holds the one slot until the 13:25 handoff. The credit window,
+the only component that survives relaxation on its own, is then locked out by
+a morning trade a stricter engine would never have opened. The restrictions
+are not independent filters each earning its place; they are jointly
+protecting a scarce resource, and that is why they cannot be evaluated one at
+a time.
+
+This is the first interaction effect measured in this file, and it is only
+visible because the components were run together. Every parameter here was
+chosen by moving one knob, which is the right way to attribute a change and
+the wrong way to evaluate a design.
+
+WORTH NOTING IN THE PROPOSAL'S FAVOUR. `credit opens 11:00` posts 42% green
+days against 23% deployed while earning a fifth as much. More winning days,
+less money -- the same comfort-bought-with-P&L shape as sections 16, 24 and
+30. If green-day frequency is worth something independently of return, that
+is the row that offers it, and it costs about 15 dollars a day.
+
+WHAT CHANGED IN THE CODE, AND WHAT DID NOT. Nothing live moved. What moved is
+that the restrictions are now testable from the environment rather than only
+by editing code: TRADING_MORNING_TIERS (list, or ALL),
+TRADING_MORNING_BULLISH_ONLY and TRADING_MORNING_CREDIT_BEARISH_ONLY join the
+times and widths that were already configurable. The asymmetry mattered --
+knobs that were cheap to sweep got swept repeatedly, and knobs that needed a
+redeploy were defended by their own inaccessibility.
+
+IRON CONDORS AND SINGLE NAMES: THE SAME RULES CANNOT BE APPLIED YET, and the
+reason is measurement rather than reluctance. The 0DTE condor cannot be
+backtested at all -- broker.py's model overstates far-OTM premium and a
+condor sells four such legs where a vertical sells two, so the flattery is
+roughly doubled, on top of a four-leg bid-ask of $9-11 against $2-15. Weekly
+single names have no historical option feed whatsoever. Both are on forward
+marks, and section 29's signal columns are what will make the single-name
+version answerable in eight to ten Fridays.
+
+A prior question outranks the entry rules there: the rough run put realised
+vol ABOVE implied on ten of eleven names. If that survives period-matched
+measurement, no entry rule rescues those structures, and applying good rules
+to a negative-edge trade is what section 21 already caught the credit floor
+doing.

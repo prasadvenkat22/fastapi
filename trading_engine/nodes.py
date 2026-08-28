@@ -1397,6 +1397,27 @@ def is_past_force_close(hour: int = None, minute: int = None) -> bool:
     return (now_est.hour, now_est.minute) >= (hour, minute)
 
 
+def _clean_misses(bullish: bool, sma, ema_cross, vwap_side, rsi_band,
+                  sentiment) -> list:
+    """Which of CLEAN's conditions are unmet, by name.
+
+    CLEAN is the tier worth naming misses for: MORNING_DRIFT accepts only
+    it, so on most cycles 'why no entry' means 'which of these four'.
+    """
+    if bullish:
+        checks = (("trend", sma == "ABOVE_SMA"),
+                  ("ema9", ema_cross == "EMA9_ABOVE_SMA20"),
+                  ("vwap", vwap_side == "ABOVE_VWAP"),
+                  ("band", rsi_band == "BULL_BAND"),
+                  ("macro", sentiment == "GOOD"))
+    else:
+        checks = (("trend", sma == "BELOW_SMA"),
+                  ("ema9", ema_cross == "EMA9_BELOW_SMA20"),
+                  ("vwap", vwap_side == "BELOW_VWAP"),
+                  ("band", rsi_band == "BEAR_BAND"))
+    return [name for name, ok in checks if not ok]
+
+
 def _ride_giveback(deadline) -> float:
     """The share of peak a ride may hand back, at this moment.
 
@@ -2009,6 +2030,35 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             w = entry_window
             if w is not None and w.placement == CREDIT and sma in ("ABOVE_SMA", "BELOW_SMA"):
                 tier, bullish = "THETA", sma == "ABOVE_SMA"
+
+        # ONE LINE SAYING WHAT THE ENTRY LOGIC SAW AND DECIDED.
+        #
+        # Added 2026-08-28 after a session where the cycle summary showed
+        # "action=HOLD ... rsi=NEUTRAL" through the whole credit window and
+        # looked like nothing came close. Three of CLEAN's four inputs were
+        # not logged anywhere -- vwap_side, ema_cross and rsi_band -- and the
+        # rsi field in that summary is the overbought/oversold ZONE, not the
+        # band the tier reads. In fact clean_bear held on two cycles and the
+        # entry was refused later, on price. Establishing that took running
+        # the engine's own indicator code against the day's bars and a live
+        # VWAP fetch inside the container, which is far too much work for
+        # "why did nothing trade".
+        #
+        # Logged whenever an entry is possible -- no position, past warmup --
+        # so it is one line a minute at most and silent while a trade is open.
+        _misses = (_clean_misses(True, sma, ema_cross, vwap_side, rsi_band, sentiment),
+                   _clean_misses(False, sma, ema_cross, vwap_side, rsi_band, sentiment))
+        logger.info(
+            "Entry read [%s]: tier=%s%s — trend=%s ema9=%s vwap=%s band=%s "
+            "macd=%s bb=%s macro=%s%s",
+            entry_window.name if entry_window is not None else "no window",
+            tier or "NONE",
+            "" if tier is None else ("/bull" if bullish else "/bear"),
+            sma, ema_cross, vwap_side, rsi_band, macd, bb,
+            "HALT" if halt else sentiment,
+            "" if tier is not None else
+            f" — clean_bull needs {_misses[0]}, clean_bear needs {_misses[1]}",
+        )
 
         if tier is not None:
             # Strike placement comes from the time-of-day window, so the same

@@ -37,6 +37,7 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py creditgate  # does the credit window need a directional tier?
     python scripts/sweep.py rideratchet # profit protection for a riding position
     python scripts/sweep.py rideguard   # ratchet vs absolute take-profit on a ride
+    python scripts/sweep.py ridetight   # a ratchet tight enough to act like a level
     python scripts/sweep.py retries     # morning window length: does a second entry pay?
     python scripts/sweep.py mstart      # may the morning open at 09:45 instead of 10:15?
     python scripts/sweep.py handoff     # should the morning still hand its slot over at 13:25?
@@ -2336,6 +2337,66 @@ def sweep_rideguard(sessions: dict):
     PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
 
 
+def sweep_ridetight(sessions: dict):
+    """A ratchet tight enough to behave like a level that follows the trade up.
+
+    Raised 2026-08-28, and it exposes a gap in sweep_rideguard: every ratchet
+    arm there used a giveback of 20% or wider, so "ratchet" was only ever
+    measured in its loose form. A loose ratchet surrenders a fifth of the peak
+    before acting, which is why the fixed +50% take-profit beat it on the day
+    that prompted all this -- the level fired at +59.0% while a 20% giveback
+    would have waited for +47.2%.
+
+    A TIGHT giveback is a different rule with the same name. At 8% of peak it
+    books a +59% ride at +54%, and a +200% ride at +184%: it gives up little
+    and stays uncapped, which is the property a fixed level cannot have. That
+    is what is measured here.
+
+    RIDE_MIN_GIVEBACK_PCT matters more as the giveback tightens, since the
+    rule surrenders max(peak * giveback, floor) and the floor starts binding
+    below roughly 0.17 of a 59-point peak. It is swept too rather than left at
+    its default, because at these givebacks it is the binding term.
+    """
+    print("")
+    print("RIDE RATCHET, TIGHT -- does a ratchet beat a level when it barely gives back?")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base = (N.RIDE_RATCHET_ARM_PCT, N.RIDE_TAKE_PROFIT_PCT, N.RIDE_GIVEBACK,
+            N.RIDE_MIN_GIVEBACK_PCT, N.RIDE_GIVEBACK_LATE)
+
+    def _reset():
+        (N.RIDE_RATCHET_ARM_PCT, N.RIDE_TAKE_PROFIT_PCT, N.RIDE_GIVEBACK,
+         N.RIDE_MIN_GIVEBACK_PCT, N.RIDE_GIVEBACK_LATE) = 0.0, 0.0, 0.20, 5.0, 0.0
+
+    def _day(label):
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily(label, per_day)
+
+    print("  REFERENCE")
+    _reset(); _day("off (no rung)")
+    _reset(); N.RIDE_TAKE_PROFIT_PCT = 50.0; _day("book at +50% (deployed)")
+
+    print("")
+    print("  TIGHT RATCHET -- arm x giveback, floor 5 points")
+    for arm in (32.0, 40.0, 50.0):
+        for gb in (0.05, 0.08, 0.12, 0.15):
+            _reset()
+            N.RIDE_RATCHET_ARM_PCT, N.RIDE_GIVEBACK = arm, gb
+            _day(f"arm +{arm:.0f}%, giveback {gb:.0%}")
+
+    print("")
+    print("  THE FLOOR, at the best giveback -- max(peak*gb, floor) points")
+    for floor in (2.0, 5.0, 10.0):
+        _reset()
+        N.RIDE_RATCHET_ARM_PCT, N.RIDE_GIVEBACK, N.RIDE_MIN_GIVEBACK_PCT = 40.0, 0.08, floor
+        _day(f"arm +40%, giveback 8%, floor {floor:.0f}pt")
+
+    (N.RIDE_RATCHET_ARM_PCT, N.RIDE_TAKE_PROFIT_PCT, N.RIDE_GIVEBACK,
+     N.RIDE_MIN_GIVEBACK_PCT, N.RIDE_GIVEBACK_LATE) = base
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT"})
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -2628,6 +2689,8 @@ def main():
         sweep_rideratchet(sessions)
     if which in ("rideguard", "all"):
         sweep_rideguard(sessions)
+    if which in ("ridetight", "all"):
+        sweep_ridetight(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

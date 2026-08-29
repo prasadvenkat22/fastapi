@@ -1910,3 +1910,118 @@ AND THE MACRO HALF OF THE PROPOSAL CANNOT BE TESTED AT ALL. The request was
 GOOD, so every number above speaks to the price condition only. With
 TRADING_MACRO_LLM_GATE live as of today, that half now accumulates forward
 evidence instead of waiting on a backtest that cannot produce it.
+
+--------------------------------------------------------------------------------
+34. THE WEEKLY BOOK -- A PROPOSED STRATEGY, AND WHAT BACKS EACH PARAMETER
+    (2026-08-28)
+--------------------------------------------------------------------------------
+
+Two books, at completely different evidence stages. They look like one and
+must not be run as one: the QQQ edge is measured over five years, and merging
+them lets it underwrite eleven names that have earned nothing.
+
+Every parameter below carries its evidence, or says plainly that it has none.
+
+================================================================================
+A. QQQ WEEKLY PUT CREDIT SPREAD -- proposable now
+================================================================================
+
+STRUCTURE      Put credit spread. Sell the 0.12-delta put, buy $5 lower.
+               Never a call spread. Never a condor.
+
+  EVIDENCE     Five years of 5-day outcomes on QQQ:
+                   0.12-delta CALL  finished ITM 20.9%  priced 11.7%  EV -11.00
+                   0.12-delta PUT   finished ITM 12.3%  priced 11.4%  EV  +8.14
+               Delta is priced driftless and QQQ drifts up, so the call seller
+               is short the index's own direction. A condor deliberately pairs
+               the +8.14 wing with the -11.00 one; it is two trades, one good
+               and one bad, reported as a single number.
+
+STRIKE         By DELTA, not by dollars. 0.12.
+  EVIDENCE     "$2 out of the money" on a 5-day expiry measured 0.478 delta
+               with QQQ at 713.41 -- a coin flip on a 1:1 payoff. The
+               0.12-delta strike sat $19-29 out. Also: over 150 weekends QQQ
+               gapped 2+ dollars on 32.7%, 4+ on 19.3%, 7+ on 8.0%, measured
+               when QQQ averaged $517 and so about 38% larger now. A near
+               strike is gapped through while the position cannot be managed
+               for sixty-five hours.
+
+WIDTH          $5, and at least one strike.
+  EVIDENCE     Cost-adjusted return on risk. Raw return favours narrow and
+               inverts once crossing is charged: $1-wide gives 83% of its
+               credit to the bid-ask, netting 2.3% on risk against 8.4% at
+               $3-5. _strike_spacing reads the grid from the chain, so $5 is
+               five strikes on a $1 name and one on a $5 name.
+
+ENTRY          Friday 15:45 ET, next week's expiry.
+  EVIDENCE     None on the timing itself. It is where the shadow record was
+               collected, so it is the only entry the forward data describes.
+               Do not read it as measured.
+
+FLOOR          Skip if the natural credit is below $0.10.
+  EVIDENCE     Direct: on the 2026-08-28 dry run STX and WDC priced at zero
+               natural credit -- the 0.12-delta wing had no bid -- and the
+               floor skipped them. Refusing a quote that does not exist, which
+               is a different job from the 0DTE floor, where no floor could
+               rescue a structure with no edge (section 21).
+
+EXIT           OPEN QUESTION, and the one thing to resolve first. Every shadow
+               row records BOTH the 25%-of-credit target and the
+               hold-to-expiry outcome precisely because one number cannot
+               answer it. Do not deploy an exit rule until those rows disagree
+               or agree with a margin.
+
+SIZING         Not proposed. Weekend gap risk is the binding constraint and it
+               has not been sized against the 0DTE book's tail cap. This is
+               the gap that must close before real money.
+
+WHY THIS IS STILL A PROPOSAL. The EV figures are per-contract crude numbers
+over 5-day outcomes; they are not a backtest of this strategy, because weekly
+option prices have no historical feed. What is measured is the ASYMMETRY
+between the wings and the width economics. What is not measured is what the
+whole thing earns.
+
+================================================================================
+B. SINGLE NAMES -- NOT proposable, and here is the precondition
+================================================================================
+
+No strategy is proposed for MU, SNDK, CRWV, STX, WDC, DELL, META, MSFT,
+GOOGL, AMZN or MRVL. Writing one now would be inventing rules and citing
+QQQ's evidence for names that have not earned it.
+
+THE PRECONDITION, IN ORDER:
+
+  1. rv_vs_iv.py must report implied ABOVE realised, per name, period-matched.
+     A rough run on 2026-08-27 put ten of eleven names the WRONG way, ratios
+     1.17 to 1.93, breach rates 36-60% against the ~30% a 0.15-delta
+     structure expects. That comparison was unsound -- one day's implied
+     against six months of realised, with an earnings gap inside the window --
+     which is why the period-matched version exists. First pairs land early
+     September.
+
+     If it confirms realised above implied, NOTHING ELSE MATTERS. Selling
+     market-priced options is a fair bet before costs and a losing one after;
+     no entry gate, no indicator and no structure rescues it. Section 21
+     reached this conclusion about the 0DTE credit floor and it cost weeks of
+     tuning to learn.
+
+  2. The call/put asymmetry must be measured PER NAME. QQQ's 20.9%-against-
+     11.7% comes from index drift. A high-IV single stock has no reason to
+     share it, and the sign could invert. weekly_shadow records the wings
+     separately for exactly this; collapsing them into a condor would hide the
+     effect worth knowing about.
+
+  3. Only then do the entry gates become a question. Section 29's sig_
+     columns began recording 2026-08-28, so eight to ten Fridays of trend,
+     Bollinger, RSI, 5-day move and per-variant RV/IV exist around
+     mid-November.
+
+  4. EARNINGS. Not yet handled anywhere. A weekly hold over a single name's
+     earnings date is a different trade, and the 5-day gap statistics that
+     justify the 0.12 delta on QQQ do not describe it.
+
+WHAT TO DO IN THE MEANTIME: nothing new. The shadow book already marks CALL,
+PUT and CONDOR on every name every Friday and costs nothing. The order is
+deliberate and is the one thing this file has learned twice -- the 0DTE
+credit window ran live for weeks before its own numbers said it loses at
+every setting, and that is the mistake not to repeat on eleven names at once.

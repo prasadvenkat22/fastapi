@@ -2513,6 +2513,63 @@ def sweep_relaxed(sessions: dict):
     PB.WINDOWS = base
 
 
+def sweep_regime(sessions: dict):
+    """Four day types, and what each rung is worth on each of them.
+
+    Section 33 located the engine's entire drag in nine REVERSAL sessions --
+    up at 10:15, closed down -- costing 1,167.60 with no green days, while
+    continuous declines earn +9.18 a day and are safe. Every knob in this file
+    was chosen on a 60-session average, which pools four populations that
+    behave nothing alike.
+
+    So the question a per-day average cannot answer: does the deployed +50%
+    rung actually help the bucket that hurts, or does it earn its keep
+    somewhere else entirely and leave the reversal days untouched?
+
+    CONT_UP     up at 10:15, closed up      -- trend days, the ride's home
+    REVERSAL    up at 10:15, closed down    -- the nine that cost everything
+    CONT_DOWN   down at 10:15, closed down  -- the abstention days
+    RECOVERY    down at 10:15, closed up    -- the ride's other good regime
+
+    Read the counts before the averages. Nine sessions is a bucket, not a
+    sample, and a rung that looks decisive on it may be describing four trades.
+    """
+    print("")
+    print("REGIME SPLIT -- what each rung is worth on each kind of day")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    meta = {}
+    for day, bars in sessions.items():
+        c = bars["Close"].astype(float)
+        o, cl = float(c.iloc[0]), float(c.iloc[-1])
+        idx = [i for i, ts in enumerate(bars.index) if ts.strftime("%H:%M") >= "10:15"]
+        early = (float(c.iloc[idx[0]]) - o) / o * 100 if idx else 0.0
+        if early >= 0:
+            meta[day] = "CONT_UP" if cl >= o else "REVERSAL"
+        else:
+            meta[day] = "RECOVERY" if cl >= o else "CONT_DOWN"
+    order = ("CONT_UP", "REVERSAL", "CONT_DOWN", "RECOVERY")
+    counts = {k: sum(1 for v in meta.values() if v == k) for k in order}
+    print("  sessions: " + "  ".join(f"{k} {counts[k]}" for k in order))
+    print("")
+    base_tp = N.RIDE_TAKE_PROFIT_PCT
+    header = "  " + f"{'rung':18s}" + "".join(f"{k + f' ({counts[k]}d)':>18s}" for k in order)
+    print(header)
+    for tp in (0.0, 50.0, 75.0, 100.0):
+        N.RIDE_TAKE_PROFIT_PCT = tp
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        tot = {k: 0.0 for k in order}
+        for d in per_day:
+            tot[meta[d["day"]]] += d["pnl"]
+        label = "off" if tp == 0 else f"book at +{tp:.0f}%"
+        row = "  " + f"{label:18s}"
+        for k in order:
+            row += f"{tot[k] / max(counts[k], 1):+13.2f}/day"
+        print(row)
+    N.RIDE_TAKE_PROFIT_PCT = base_tp
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -2811,6 +2868,8 @@ def main():
         sweep_creditstart(sessions)
     if which in ("relaxed", "all"):
         sweep_relaxed(sessions)
+    if which in ("regime", "all"):
+        sweep_regime(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

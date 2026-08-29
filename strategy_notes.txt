@@ -2802,3 +2802,76 @@ AND NO INTERVAL CATCHES A NEWS GAP. Price moves between ticks; 10 seconds and
 1 second miss it identically, and a resting order would fill at the gap price
 rather than the stop price even if one were available. Gap protection here is
 structure and size, in that order, and never the exit rule.
+
+--------------------------------------------------------------------------------
+45. BOTH WINDOW START TIMES RE-ASKED AT THE CORRECTED CONFIG  (2026-08-29)
+--------------------------------------------------------------------------------
+
+Sections 27 and 31 answered these under the sizing defect and, for the credit
+window, with the +50% take-profit crippling the morning. Both re-run at entry
+fraction 0.20, equity 4,000, -8% stop, no take-profit.
+
+MORNING START -- 10:15 still wins, and now on the halves too.
+
+    both windows, per day
+      09:45   -9.51/day   halves +22.15/-41.17   32 stop-outs of 40 (80%)
+      10:00  +19.02/day   halves +56.58/-18.54
+      10:15  +38.39/day   halves +80.04/ -3.26   deployed, 19 of 29 (66%)
+      10:30   +0.30/day   halves +22.93/-22.33
+      11:00  +20.13/day   halves +41.57/ -1.31
+
+09:45 is the only negative arm and fails through stop-outs, as it did in
+section 27. But the gap NARROWED against that run: 09:45 improved 62% while
+10:15 improved 51%, which is what a tighter stop should do to the arm that
+stops out most.
+
+THE CAVEAT MATTERS MORE HERE THAN ANYWHERE ELSE IN THIS FILE. The harness
+models a stop checked every 5 minutes; the live engine now checks every 10
+seconds. 09:45 fails THROUGH the loss channel that fixes, in the half hour
+whose 5-minute bars span $1.78 against the midday $0.83. The replay
+understates that arm by an unknown and probably large margin. It is not
+supported today and it is the single arm most likely to be wrong. Re-test it
+first once the poller has a forward record.
+
+THE AFTERNOON DRIFTS DOWN, AND IT IS NOT WORTH MONEY.
+
+Observed from the tape: QQQ closes below its 13:00 price on 60% of sessions.
+Measured, 60 sessions:
+
+    from     median    mean    % days DOWN   max UP  max DOWN
+    13:00    -0.76    -0.68    36/60 = 60%     1.45      1.91
+    13:30    -0.46    -1.01    37/60 = 62%     1.28      2.07
+    13:45    -0.51    -0.90    41/60 = 68%     1.30      1.96
+    14:00    -0.27    -0.76    37/60 = 62%     1.31      1.85
+
+Real, consistent, and downside travel exceeds upside at every hour. The
+observation is correct.
+
+It buys nothing:
+
+    credit start   13:00 +36.74  13:15 +36.89  13:30 +37.45
+                   13:45 +38.22  14:00 +38.39 (deployed)
+
+    13:00 either direction   +36.74/day  0.80 tr/day
+    13:00 call spreads only  +36.79/day  0.68 tr/day
+
+$1.65 a day across a full hour of start time, and five cents between
+two-sided and call-only. Both are noise on 35 trades.
+
+WHY THE WEEKLY ASYMMETRY DOES NOT REPRODUCE INTRADAY. Section 22 found a real
+edge from the same reasoning: options are priced driftless, QQQ drifts UP over
+5 days, so the 0.12-delta call finished ITM 20.9% against 11.7% priced. The
+intraday mirror should favour an afternoon CALL seller, who is long a
+downward drift the chain does not price.
+
+It does not survive the spread. -0.76 on a $716 underlying is 0.1%, against a
+0.25-delta short strike $3.3 out. Five days of drift is large relative to a
+0.12-delta strike; three afternoon hours is not. Sections 14 and 21 stand:
+selling market-priced 0DTE premium loses to costs whichever way the
+underlying leans.
+
+NOTE WHAT THIS CORRECTS. Section 31 reported 13:00 at -1.30 a day against
++18.47 at 14:00 and concluded morning selling was measurably bad. That run
+carried the +50% take-profit and the sizing defect, so it was measuring the
+MORNING window's damage and attributing it to the credit start. The credit
+start time is nearly irrelevant; the earlier conclusion was an artefact.

@@ -2138,3 +2138,77 @@ size from the engine it is modelling will rank correctly and price wrongly
 forever, and nothing in the output says so. Every sweep invocation in this
 file should pass TRADING_ENTRY_FRACTION explicitly, and the printed header
 should name the sizing it ran at, the way it already names the pricing mode.
+
+--------------------------------------------------------------------------------
+37. THE AFTERNOON HAS NO BETTER OCCUPANT -- AND LIVE CONTRADICTS THE BACKTEST
+    (2026-08-29)
+--------------------------------------------------------------------------------
+
+The objection: the credit window earns 0.83 a day, $49 across three months,
+while holding the single position slot from 14:00. Sections 14 and 21 explain
+why it cannot do better -- a credit spread's break-even win rate IS its risk
+ratio and delta IS the market's probability estimate -- so the question is not
+how to tune it but what should replace it.
+
+Five occupants, take-profit off, entry fraction 0.20, 60 sessions:
+
+    A  current (morning + credit)      +113.23/day  0.58 tr/day  20% green
+    B  credit window OFF               +112.40/day  0.43 tr/day  15% green
+    C  no handoff, credit OFF          +106.81/day  0.43 tr/day  12% green
+    D  entries to 15:00, no handoff     +30.49/day  0.58 tr/day  12% green
+    E  afternoon runs MORNING structure +112.40/day  0.43 tr/day  15% green
+
+E IS IDENTICAL TO B BECAUSE IT TOOK NO TRADES. Running the morning's ITM
+debit structure in the 14:00-15:00 slot produces nothing at all: CLEAN needs
+price above both EMAs, EMA9 above the 20 SMA, above VWAP, RSI in the bull
+band and macro GOOD, and that stack essentially never assembles in that hour.
+The proposed replacement does not lose money; it does not trade.
+
+SO THE CREDIT WINDOW IS NOT THERE BECAUSE IT EARNS. It is there because
+nothing else qualifies in that hour. It buys 0.83 a day and five points of
+green-day frequency in a slot that would otherwise be empty. That is a weak
+justification and it beats all four alternatives, including switching it off.
+
+AND EXTENDING THE MORNING IS MUCH WORSE. D gives up 83 dollars a day.
+Allowing morning entries until 15:00 does not capture the afternoon, it
+dilutes the morning -- the same finding as section 27's start time and
+section 32's relaxation, arriving a third time from a third direction.
+
+THE LIVE RECORD CONTRADICTS THE BACKTEST, AND BOTH SAMPLES ARE TOO SMALL
+
+Every trade ever routed to the live account:
+
+    window             n   total     per trade  wins
+    ITM_GRINDER        2   +86.67     +43.34     1     (disabled window)
+    AFTERNOON_CREDIT   6   +57.55      +9.59     3
+    MORNING_DRIFT      4  -211.07     -52.77     1
+
+On live fills the credit window is the ONLY profitable component, and the
+morning debit -- which the 60-session replay credits with essentially all the
+engine's P&L at +113 a day -- has lost 211 dollars on four trades.
+
+                    backtest (60 sessions)     live (12 trades)
+    morning debit   +113/day, carries all      -211.07, 1 win in 4
+    credit window   +0.83/day, ~nothing        +57.55, the only winner
+
+Neither is a sample. Two of the four morning losses are -142 and -106, both
+stop-outs, and one of those landed on a session that CLOSED UP 0.77% -- the
+section 10 pattern of chop stopping out a directional position. Four trades
+cannot separate that from misfortune.
+
+WHAT THIS MEANS FOR "OPTIMISE ON LIVE DATA". It cannot be done. Twelve trades
+across three strategies is noise, and fitting rules to it is exactly how
+section 21's credit floor "won" by refusing 95% of sessions. The 60-session
+replay remains the better instrument for RANKING and the live record the
+better instrument for REALISM, and on this question they disagree.
+
+The morning window's live record is four trades against a modelled claim of
+31. Before restructuring anything around it, it should demonstrate the edge
+the backtest attributes to it -- twenty live trades, roughly two months at
+one trade every other session. Until then the only defensible changes are
+ones with evidence from BOTH instruments, or none at all.
+
+ONE CHANGE FOLLOWS FROM ALL OF TODAY: the +50% take-profit off. It costs
+105.61 a day in the replay and has no live evidence whatsoever -- deployed
+2026-08-28, zero trades under it. Everything else tested today either
+measures worse, does not trade, or rests on a sample too thin to act on.

@@ -2618,6 +2618,74 @@ def sweep_indicators(sessions: dict):
     N.EMA_CROSS_REFERENCE, N.MACD_ZERO_AXIS_GATE = base_ref, base_gate
 
 
+def sweep_afternoon(sessions: dict):
+    """What should occupy the afternoon, given that selling premium does not?
+
+    The credit window is worth 0.83 a day -- $49 across three months, 11
+    trades in 60 sessions -- while holding the single position slot from
+    14:00. Sections 14 and 21 explain why: a credit spread's break-even win
+    rate IS its risk ratio and delta IS the market's probability estimate, so
+    selling market-priced premium is a fair bet before costs and a losing one
+    after. Tuning it has been tried at every width, floor, delta, stop and
+    start time in this file.
+
+    The question never asked is why the slot runs a CREDIT structure at all
+    when the DEBIT structure beside it earns everything. Four alternatives,
+    all with the take-profit off, which section 36 established as the correct
+    baseline:
+
+      A  current -- morning to 12:30, handoff 13:25, credit 14:00-15:00
+      B  credit window simply off
+      C  no handoff: the morning rides to the force close instead
+      D  morning entries allowed to 15:00, no handoff, no credit window
+      E  the afternoon slot runs the MORNING structure instead of a credit
+         one -- same ITM placement, same CLEAN gate, 14:00-15:00
+
+    E is the direct test of the objection. If the afternoon is worth trading
+    at all, it should be traded with the structure that works.
+    """
+    print("")
+    print("WHAT BELONGS IN THE AFTERNOON")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}"
+          f"  entry fraction {N.ENTRY_FRACTION:.2f}")
+    print("")
+    base = PB.WINDOWS
+    morning = [w for w in base if w.name == "MORNING_DRIFT"][0]
+
+    def run(label, windows, names):
+        PB.WINDOWS = windows
+        PB.ENABLED_WINDOWS = frozenset(names)
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily(label, per_day)
+
+    run("A  current (morning + credit)", base, {"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    run("B  credit window OFF", base, {"MORNING_DRIFT"})
+
+    no_handoff = tuple(replace(w, ride_until=None) if w.name == "MORNING_DRIFT" else w
+                       for w in base)
+    run("C  no handoff, credit OFF", no_handoff, {"MORNING_DRIFT"})
+
+    late = tuple(replace(w, ride_until=None, end=dtime(15, 0))
+                 if w.name == "MORNING_DRIFT" else w for w in base)
+    run("D  entries to 15:00, no handoff", late, {"MORNING_DRIFT"})
+
+    # E: the afternoon slot, run as a DEBIT window with the morning's shape.
+    debit_pm = tuple(
+        replace(w, placement=morning.placement, width=morning.width,
+                long_depth=morning.long_depth, entry_tiers=morning.entry_tiers,
+                bullish_only=morning.bullish_only, bearish_only=False,
+                stop_loss_pct=morning.stop_loss_pct,
+                take_profit_pct=morning.take_profit_pct,
+                ride_to_close=True, ride_until=None,
+                entry_fraction=morning.entry_fraction)
+        if w.name == "AFTERNOON_CREDIT" else w
+        for w in base
+    )
+    run("E  afternoon runs the MORNING structure", debit_pm,
+        {"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    PB.WINDOWS = base
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -2920,6 +2988,8 @@ def main():
         sweep_regime(sessions)
     if which in ("indicators", "all"):
         sweep_indicators(sessions)
+    if which in ("afternoon", "all"):
+        sweep_afternoon(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

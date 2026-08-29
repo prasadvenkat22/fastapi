@@ -2087,3 +2087,54 @@ choice, and the fourth could not apply at all. None of that was visible from
 reading the advice; all of it took a sweep or a grep. The advice was not
 wrong in general -- it was wrong about THIS engine, which is a different thing
 and only the repo's own data can tell them apart.
+
+--------------------------------------------------------------------------------
+36. EVERY PER-DAY FIGURE IN SECTIONS 27-35 WAS HALF-SCALE  (2026-08-29)
+--------------------------------------------------------------------------------
+
+scripts/sweep.py inherits TRADING_ENTRY_FRACTION from the environment and
+falls back to the nodes.py default of 0.10. The deployed engine runs 0.20.
+Every sweep in this file since section 27 was invoked without that variable,
+so every per-day and per-trade dollar figure in sections 27 through 35 is
+roughly HALF what the deployed engine would have produced.
+
+RANKINGS ARE UNAFFECTED -- all arms in a sweep were equally half-sized, and
+this file's decisions are made on rankings. MAGNITUDES ARE NOT. Anywhere a
+dollar figure was used to weigh a cost against a benefit, it understated both
+by about a factor of two.
+
+Re-run at 0.20, 60 sessions, chain-priced:
+
+    deployed (+50% take-profit)   +7.62/day  worst -1076.40  halves +36.69/-21.45
+    take-profit OFF             +113.23/day  worst -1614.60  halves +241.81/-15.36
+    OFF, no credit window       +112.40/day  worst -1614.60  halves +241.69/-16.89
+    OFF + put debit 0.75%       +103.19/day  worst -1614.60  halves +230.29/-23.90
+    +50% + put debit 0.75%        -2.92/day  worst -1076.40  halves +30.11/-35.95
+    OFF + put debit 0.50%        +93.31/day  worst -1614.60  halves +228.03/-41.40
+
+THREE CORRECTIONS FOLLOW FROM IT.
+
+THE +50% TAKE-PROFIT COSTS 105.61 A DAY, not the 61 quoted in section 30. It
+was deployed on 2026-08-28 as a stated risk preference against the
+measurement, and the measurement is twice as unfavourable as the one that
+decision was made against. It also has the WORSE second half (-21.45 against
+-15.36). What it buys is a worst day of -1,076 against -1,615, about $538.
+That is the entire trade.
+
+THE SEVERE-MORNING PUT DEBIT IS REFUTED, and section 33 reached the wrong
+conclusion by comparing two crippled configurations. Its apparent +45.47
+against +18.47 was two arms both dragged down by the take-profit. Against the
+correct baseline it COSTS 10.04 a day at the 0.75% gate and 19.92 at 0.50%.
+Section 33's structure finding stands -- a put debit beats a bear call on a
+continuing decline -- but its gate finding does not.
+
+THE CREDIT WINDOW IS WORTH 0.83 A DAY. 113.23 with it against 112.40 without:
+$49 across three months, for a window that holds the single position slot
+from 14:00. What it does buy is green-day frequency, 20% against 15%. That is
+the honest case for keeping it and it is not a P&L case.
+
+WHAT THIS SAYS ABOUT THE HARNESS. A sweep that silently inherits a different
+size from the engine it is modelling will rank correctly and price wrongly
+forever, and nothing in the output says so. Every sweep invocation in this
+file should pass TRADING_ENTRY_FRACTION explicitly, and the printed header
+should name the sizing it ran at, the way it already names the pricing mode.

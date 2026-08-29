@@ -2875,3 +2875,88 @@ NOTE WHAT THIS CORRECTS. Section 31 reported 13:00 at -1.30 a day against
 carried the +50% take-profit and the sizing defect, so it was measuring the
 MORNING window's damage and attributing it to the credit start. The credit
 start time is nearly irrelevant; the earlier conclusion was an artefact.
+
+--------------------------------------------------------------------------------
+46. A THIRD OUTSIDE NOTE, AND THE ONE MECHANISM IT NAMES THAT DOES NOT EXIST
+    (2026-08-29)
+--------------------------------------------------------------------------------
+
+Mechanical risk rules for 0DTE: book credit spreads at 50-60%, scale debit
+positions out at +30-50% / +100% / trail the rest, hard cutoff at 15:30, stop
+sellers at 2-3x credit, time-stop buyers after 15-20 flat minutes, move to
+breakeven after the first target.
+
+FIVE OF SIX ARE ALREADY DONE, ALREADY REFUTED, OR AIMED AT A DIFFERENT
+STRUCTURE.
+
+  Book credit at 50-60%      ALREADY DEPLOYED, and swept flat: 25% +12.84,
+                             50% +13.15, 75% +13.16, 90% +13.22. A $0.38 a
+                             day range. Right and inert.
+
+  Stop sellers at 2-3x       REFUTED. -100% +12.57, -200% +10.96, -400%
+                             +12.69, -600% +13.22, -1000% +13.10. The note's
+                             3x is the WORST cell tested and the deployed
+                             -600% the best. A credit spread's loss is already
+                             capped by its long leg, so a tighter stop does
+                             not lower the ceiling -- it realises noise early.
+
+  Scale out at +30-50%       REFUTED as a level. book at +30% -19.19/day,
+                             +50% +7.43, +75% +22.67, +100% +9.86, none
+                             +34.49. +30% is the only negative arm, and the
+                             reason is structural: NOTHING in the sample
+                             finishes between +50% and +100%. The note assumes
+                             a middle this distribution does not have.
+
+  15:30 hard cutoff          REFUTED. Flatten at 15:00 +35.64, 15:15 +36.92,
+                             15:30 +36.64, 15:45 +38.44 (live), 16:00 +37.52.
+                             15:45 is best on total AND second half, the range
+                             spans $2.80 a day, and the trade count is
+                             identical at 0.58/day everywhere -- the force
+                             close is rarely the binding exit. The note's
+                             rationale (pin risk, overnight assignment) does
+                             not apply at all: expiry is 16:15 and nothing is
+                             ever held to it.
+
+  Time-stop after 15-20      WRONG FOR THIS STRUCTURE. The rule assumes theta
+  flat minutes               drains a long option. MORNING_DRIFT's long leg is
+                             $2 IN the money and broker.py records that the
+                             structure has POSITIVE theta -- "hold above the
+                             short strike and the value drifts up toward the
+                             width as time runs out, which is the whole reason
+                             for buying ITM". Sideways is not a slow death
+                             here, it is the payoff. Applying the rule would
+                             exit the position for the reason it exists.
+
+THE ONE THING IT NAMES THAT GENUINELY DOES NOT EXIST: PARTIAL SCALING.
+
+Every exit in this engine is all-or-nothing. broker.sell_all() is the only
+close path, and the OpenPosition row carries a single quantity. Partial ENTRY
+exists -- entry_tranche_qty and entry_slices_remaining -- but there is no
+partial exit anywhere.
+
+TO BUILD IT would need: a partial close on the broker path, remaining-quantity
+tracking on the position row, per-tranche cost basis so the second exit's
+return is computed against the right debit, and an order path that submits a
+smaller multileg than the position holds.
+
+THE PRIOR IS STRONG AND AGAINST IT. Scaling out pays when the return
+distribution has a fat middle to harvest. This one is bimodal: of 29 morning
+trades, 19 finish below -5%, four between 0 and +50%, six above +100%, and
+NONE between +50% and +100%. Six trades are 107% of total P&L. Selling half
+of those six at +30% clips the only trades that pay, and sells half of
+nothing on the 19 that never get there.
+
+THE VARIANT ACTUALLY WORTH TESTING is not the note's. Scale at a HIGH level:
+sell half at +100% and let the remainder ride to the handoff. That is the only
+version that does not truncate the population carrying the strategy, and it is
+untestable today because the mechanism does not exist. Left as the next
+mechanism to build if the forward record justifies it.
+
+THE PATTERN ACROSS ALL THREE OUTSIDE NOTES. Their OBSERVATIONS keep being
+sound -- QQQ does move $4-7 a day, it does drift down after 13:00, the $8 OTM
+short leg is nearly worthless, 0DTE does swing violently. Their PRESCRIPTIONS
+keep failing here, and almost always for the same reason: they assume a naked
+or ATM long with negative theta, a credit spread whose loss is not already
+capped, or a return distribution with a middle. This engine is a capped long
+call with a tight stop plus a two-sided credit window worth about a dollar a
+day. Generic 0DTE advice is written for neither.

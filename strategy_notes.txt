@@ -77,7 +77,13 @@ session's bars produced materially different results - see section 11.)
   9 EMA         Trailing reference only, never an entry filter. ABOVE_EMA9 /
                 BELOW_EMA9.
 
-  EMA cross     EMA(9) against EMA(20) - velocity rather than position.
+  EMA cross     EMA(9) against the SIMPLE 20 average - velocity rather than
+                position. Simple, not exponential, and measured: swept on
+                2026-08-29 the simple 20 gave +79.34 a day against +78.75
+                for EMA(21) and +76.41 for EMA(20), with a far better
+                second half (-6.86 against -79) and a $91 better worst
+                day. This file previously described it as EMA(20), which
+                the code never did. See section 35.
 
   50 EMA        The bar's HIGH pierces the 50 EMA but the CLOSE finishes below
   rejection     it. Recorded; used only by the REJECT tier.
@@ -2025,3 +2031,59 @@ PUT and CONDOR on every name every Friday and costs nothing. The order is
 deliberate and is the one thing this file has learned twice -- the 0DTE
 credit window ran live for weeks before its own numbers said it loses at
 every setting, and that is the mistake not to repeat on eleven names at once.
+
+--------------------------------------------------------------------------------
+35. TWO INDICATOR DEFINITIONS, AND A GATE THAT IS NOT WIRED  (2026-08-29)
+--------------------------------------------------------------------------------
+
+From outside 0DTE notes. Most of what they proposed was already refuted here
+-- band-tag premium selling (17, 18, 23, and FADE_ENTRIES is off for exactly
+that reason), 10:00-11:30 credit entry (-25.23/tr against +6.22 at 14:00),
+and a 21 EMA trailing stop (26: the guard replaces the stop and deepens the
+worst day 56%). Two things were genuinely unexamined.
+
+WHAT THE 9 EMA IS COMPARED AGAINST. Three specifications were in play: the
+code used a SIMPLE 20 average, section 3 of this file claimed EMA(20), and the
+outside note proposed EMA(21). ema_cross is one of CLEAN's four conditions and
+the sole blocker on 2-3% of cycles, so this is not cosmetic. 60 sessions,
+chain-priced, per day:
+
+    9 EMA vs sma20 (deployed)  +79.34/day  worst  -985.80  halves +165.55/ -6.86
+    9 EMA vs ema20             +76.41/day  worst -1076.40  halves +232.69/-79.87
+    9 EMA vs ema21             +78.75/day  worst -1076.40  halves +236.75/-79.25
+
+The deployed simple average wins. Totals sit within 4% of each other and the
+halves do not: -6.86 against -79 for both exponential variants, with a $91
+better worst day. The choice was unexamined and turns out to be correct;
+section 3 has been corrected to describe what the code actually does.
+
+THE MACD ZERO-AXIS GATE CHANGED NOTHING, AND THE REASON MATTERS MORE THAN THE
+RESULT. Identical output to five decimal places -- same P&L, same worst day,
+same halves, same 0.70 trades a day.
+
+    zero-axis gate off  +79.34/day  worst -985.80  halves +165.55/-6.86
+    zero-axis gate ON   +79.34/day  worst -985.80  halves +165.55/-6.86
+
+Because MACD GATES NOTHING IN THE DEPLOYED ENGINE. The tier that trades reads
+four conditions and MACD is not among them:
+
+    clean_bull = (sma == "ABOVE_SMA" and ema_cross == "EMA9_ABOVE_SMA20"
+                  and vwap_side == "ABOVE_VWAP" and rsi_band == "BULL_BAND"
+                  and sentiment == "GOOD")
+
+MORNING_DRIFT accepts CLEAN only. STRICT and RELAXED do use MACD and almost
+never fire at the deployed configuration. So every MACD refinement in the
+outside notes -- zero-axis crossovers, divergence exits, avoiding an extended
+histogram -- is aimed at a gate that is not wired up.
+
+This also explains something visible in every cycle log all week: macd=BULLISH
+printed while trend=BELOW_SMA and it never once mattered. MACD is recorded,
+not consulted. The knob stays, defaulted off, because it becomes live the
+moment a MACD-reading tier is enabled.
+
+WHAT THIS SAYS ABOUT TESTING OUTSIDE ADVICE. Two of the note's four tools were
+already measured and refuted, one was measured here and confirmed the existing
+choice, and the fourth could not apply at all. None of that was visible from
+reading the advice; all of it took a sweep or a grep. The advice was not
+wrong in general -- it was wrong about THIS engine, which is a different thing
+and only the repo's own data can tell them apart.

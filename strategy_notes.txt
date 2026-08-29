@@ -2579,3 +2579,136 @@ written after both were fixed because the invocation omitted the morning
 stop. Every ranking survived; no dollar figure did. Any magnitude quoted in
 sections 27 through 35 should be read as roughly a quarter of what it says,
 and sections 36, 38, 39 and 41 carry the corrected numbers.
+
+--------------------------------------------------------------------------------
+43. THE STOP OVERSHOOT IS THE DOMINANT LOSS CHANNEL, AND THE PEAK IS NOT
+    (2026-08-29)
+--------------------------------------------------------------------------------
+
+Asked why a +59.0% peak on 2026-08-28 was allowed to become a stop-out, and
+whether the engine should detect a local maximum and wait to see if a higher
+one follows. Measuring it turned up something larger that had been recorded
+as a footnote since Friday.
+
+WHERE THE MONEY ACTUALLY GOES. The 29 morning trades in the sample:
+
+    total +2,893.00 over 29 trades, mean +99.76
+    top 1 trade  = +1,089.20   ( 37.6% of total)
+    top 3 trades = +3,109.60   (107.5% of total)
+    WITHOUT the top 3: -216.60 over 26 trades = -8.33 a trade
+
+    return buckets
+      -100% to  -5%   19 trades   -2,503.80
+        +0% to +25%    2 trades       +82.40
+       +25% to +50%    2 trades      +195.20
+      +100% to +200%   5 trades    +4,042.00
+      +200% and up     1 trade     +1,077.20
+
+NOTHING FINISHES BETWEEN +50% AND +100%. The distribution is bimodal: a trade
+stops out, or it runs past +100%. There is no middle to harvest, which is why
+every take-profit level tested costs money -- it is not booking a population
+that exists.
+
+THE STOP IS NOT DOING ITS JOB, AND THAT IS THE REAL DEFECT.
+
+    19 losers, mean realised loss -28.3%, against a stop set to -8%
+    worst: -66.4%, entered 11:05 and exited 11:10 -- one 5-minute bar
+
+    if the stop capped at its setting:
+      -8%   recovers +1,812.68  ->  +78.43/day (from +48.22)
+      -12%  recovers +1,467.34  ->  +72.67/day
+      -20%  recovers   +992.99  ->  +64.77/day
+
+Worth more than every parameter change made across 2026-08-28 and 29
+combined, and it was reported as a $47 footnote for two days while roughly
+fifty configurations were swept around it.
+
+READ THE CAVEAT. The harness checks every 5-minute bar; the live engine
+checks every cron minute. So the replay OVERSTATES the overshoot -- live on
+2026-08-28 the realised loss was -18.1% against a -10% stop, 1.8x, against
+the replay's 3.5x. Call the live opportunity half the figure above. It is
+still the largest single item measured on this engine.
+
+THE FIX IS EXIT GRANULARITY, NOT A PARAMETER. run_cycle.py now carries
+TRADING_EXIT_POLL_SECONDS: while a position is OPEN it re-runs the cycle at
+that interval within its minute, to a 55-second budget, stopping the moment
+the position closes. Flat cycles run once exactly as before, so entry logic,
+breadth and the LLM verdict are unchanged in frequency, and the macro cache
+means polled cycles do not multiply the LLM cost.
+
+It deliberately re-uses execute_and_persist_cycle rather than carving out an
+exit-only path: the exit rules need the full indicator state, and a second
+implementation of the exit ladder that drifts is worse than a slower one that
+does not.
+
+THE STALLED-PEAK RULE -- BUILT, MEASURED, LEFT OFF
+
+The proposal was to distinguish a local maximum from a global one: while the
+curve keeps setting higher highs, wait however deep the pullback; book only
+once it has gone N minutes without a new high. That is a genuinely different
+question from every rule tested here -- a take-profit fires at a LEVEL, a
+ratchet fires on GIVEBACK, and this fires on the ABSENCE OF PROGRESS.
+
+    off (rides to the handoff)          +38.39/day  worst -592.40  18% green
+    no new high 15min, 20pt below peak  +13.09/day  worst -358.80  20% green
+    no new high 15min,  5pt below peak  +13.10/day  worst -358.80
+    no new high 15min, 10pt below peak  +12.14/day  worst -358.80
+    no new high 10min, 20pt below peak   +7.46/day  worst -358.80
+    no new high 10min, 10pt below peak   +3.97/day  worst -358.80
+    no new high 10min,  5pt below peak   +0.81/day  worst -358.80  22% green
+
+Every arm cuts the worst day by $234 and raises green days, and costs $25-38
+a day. Left off, and NOT wired into production: it would need the peak's
+timestamp persisted on the position row, and a migration for a rule that
+measures negative is how two dead knobs were shipped this same day.
+
+AND THE GOAL ITSELF IS UNREACHABLE, which is worth recording separately from
+the measurement. The global maximum is only identifiable in hindsight. At
+11:26 on 2026-08-28 a +59.0% peak was indistinguishable from the +49.6% on
+2026-06-04 that went on to +198%. SIX trades in the sample ran past +100% and
+every one exited at the 13:25 HANDOFF -- each still climbing when the clock
+took it. Any rule fast enough to catch Friday's top is fast enough to have
+truncated those six. That is not a tuning failure; it is the same information
+problem wearing three different rule shapes.
+
+DEPLOYED 2026-08-29 DESPITE THE MEASUREMENT
+
+    TRADING_STALL_MINUTES=15
+    TRADING_STALL_GIVEBACK_PCT=5
+    TRADING_EXIT_POLL_SECONDS=15
+
+15/5 rather than 15/20 because the two measure the same (+13.10 against
++13.09) and 5 points books far closer to the top, which is the whole point of
+the rule: from a +59% peak it books at +54% instead of +39%.
+
+The stall rule is a stated risk preference against its own measurement. It
+costs about $25 a day and buys a worst day of -358.80 against -592.40 plus
+two points of green-day frequency. Recorded here so that a future reader does
+not mistake it for a cell the data chose.
+
+The exit poller is the opposite: it has no direct measurement -- 1-minute
+bars are unavailable past 7 days, so the value of finer exit checking cannot
+be replayed over 60 sessions -- but a strong mechanism. The stop realised a
+mean -28.3% against an -8% setting, and the overshoot is caused by exit
+granularity and nothing else.
+
+WHAT TO WATCH ON THE FIRST SESSION. Two new log lines:
+
+    "Stalled peak: ... peaked +X% and has made no new high for N min, now +Y%"
+    "exit poll +15s — action=... exit=..."
+
+If the stall line never appears, the rule is not firing and 15 minutes is too
+patient for a 0DTE ride. If exit poll lines appear without ever changing an
+outcome, the poller is costing Tradier calls for nothing.
+
+TO RE-TEST ON MONDAY, noted rather than built:
+
+  * The plain RATCHET -- books after surrendering its giveback -- against the
+    stall rule now that both can be compared on live fills rather than on
+    replayed marks. Sections 26, 30 and 39 all measured it negative, but all
+    three ran before the sizing correction and before peak_at existed.
+  * Whether the stall rule's 15 minutes is measurable at all on 5-minute
+    bars. The harness has 5-minute resolution on a "minutes without a new
+    high" test, so it understates a rule the live engine can now evaluate
+    every 15 seconds. This is the one case all session where the replay is
+    likely to be PESSIMISTIC rather than optimistic.

@@ -10,7 +10,7 @@ above into a final trading decision.
 import logging
 import os
 from dataclasses import replace as _dc_replace
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone
 from typing import List
 from zoneinfo import ZoneInfo
 
@@ -386,6 +386,35 @@ RIDE_TAKE_PROFIT_PCT = float(os.getenv("TRADING_RIDE_TAKE_PROFIT", "0"))
 # Zero disables it and the flat giveback applies throughout, which is the
 # shipped default.
 RIDE_GIVEBACK_LATE = float(os.getenv("TRADING_RIDE_GIVEBACK_LATE", "0"))
+
+# STALLED-PEAK EXIT. Book once the profit curve stops making new highs.
+#
+# The third distinct question an exit can ask, and the only one this
+# engine could not previously express:
+#
+#   a take-profit fires at a LEVEL          -- ignores shape entirely
+#   a ratchet fires on GIVEBACK             -- cannot tell a dip inside a
+#                                              climb from the end of one
+#   this fires on the ABSENCE OF PROGRESS   -- waits through any pullback
+#                                              while new highs keep coming
+#
+# Needs peak_at, added by migration d1f7a03c9e84, because peak_return_pct
+# alone says how good a position has been and nothing about when.
+#
+# MEASURED AND IT COSTS MONEY. Over 60 sessions the best arm returns
+# +13.10 a day against +38.39 for riding to the handoff -- about $25 a day
+# -- and buys a worst day of -358.80 against -592.40 plus two points of
+# green-day frequency. Deployed as a stated risk preference against that
+# measurement, not because the data favours it. Section 43.
+#
+# 15 minutes / 5 points is the deployed pair: it measures the same as the
+# 20-point variant (+13.10 against +13.09) and books far closer to the
+# top, which is the point of the rule. From a +59% peak it books at +54%
+# rather than +39%.
+#
+# Zero on either knob disables it.
+STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
+STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
 
 # What the 9 EMA is compared against for the ema_cross reading.
 #
@@ -1671,7 +1700,23 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 if position.entry_net_debit > 0 else 0.0
             )
             ceiling_pct = RIDE_CEILING_FRACTION * max_return_pct
-            if RIDE_TAKE_PROFIT_PCT > 0 and return_pct >= RIDE_TAKE_PROFIT_PCT:
+            stalled = False
+            if STALL_MINUTES > 0 and STALL_GIVEBACK_PCT > 0:
+                peak_at = getattr(position, "peak_at", None)
+                if peak_at is not None and peak_return > 0:
+                    quiet_min = (datetime.now(timezone.utc) - peak_at).total_seconds() / 60.0
+                    stalled = (quiet_min >= STALL_MINUTES
+                               and return_pct <= peak_return - STALL_GIVEBACK_PCT)
+                    if stalled:
+                        logger.info(
+                            "Stalled peak: %s peaked %+.1f%% and has made no new high "
+                            "for %.0f min, now %+.1f%% — booking.",
+                            position.strategy, peak_return, quiet_min, return_pct,
+                        )
+            if stalled:
+                broker.sell_all(position.underlying)
+                action, exit_reason = "SELL_ALL", "STALL"
+            elif RIDE_TAKE_PROFIT_PCT > 0 and return_pct >= RIDE_TAKE_PROFIT_PCT:
                 logger.info(
                     "Ride take-profit: %s at %+.1f%% reached the absolute +%.0f%% "
                     "level — booking outright.",

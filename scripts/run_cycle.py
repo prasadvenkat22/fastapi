@@ -36,11 +36,72 @@ NY = ZoneInfo("America/New_York")
 MARKET_OPEN = (9, 30)
 MARKET_CLOSE = (16, 0)
 
+# How often to re-check exits WHILE A POSITION IS OPEN, in seconds.
+#
+# Cron fires this script once a minute, so every exit -- the stop included --
+# waits up to 60 seconds for the next process. That is the dominant loss
+# channel and it was mistaken for a footnote for two days. Measured over 60
+# sessions on 5-minute bars, the 19 losing morning trades realised a MEAN of
+# -28.3% against a stop set to -8%, and the worst realised -66.4% five minutes
+# after entry. The live overshoot is smaller because the live interval is one
+# minute rather than five -- 2026-08-28 realised -18.1% against a -10% stop,
+# 1.8x -- but it is the largest single item measured on this engine.
+#
+# Polling only happens while a position is OPEN. Flat cycles run exactly once,
+# as before, so entry logic, breadth and the LLM verdict are untouched in
+# frequency. The macro verdict is cached on a 5-minute refresh, so even the
+# polled cycles do not multiply the LLM cost.
+#
+# 0 disables it and restores the previous behaviour exactly.
+EXIT_POLL_SECONDS = float(os.getenv("TRADING_EXIT_POLL_SECONDS", "0"))
+
+# Never poll past this; cron will start the next process at the minute.
+_POLL_BUDGET_SECONDS = 55.0
+
 
 def _within_market_hours(now: datetime) -> bool:
     if now.weekday() >= 5:  # Saturday/Sunday
         return False
     return MARKET_OPEN <= (now.hour, now.minute) < MARKET_CLOSE
+
+
+async def _poll_exits(db) -> None:
+    """Re-run the cycle every EXIT_POLL_SECONDS while a position is open.
+
+    Deliberately re-uses execute_and_persist_cycle rather than carving out an
+    exit-only path. The exit rules live inside execution_risk_agent and need
+    the full indicator state, so a separate lightweight path would be a second
+    implementation of the exit ladder -- and a second implementation that
+    drifts is worse than a slower one that does not.
+
+    Stops the moment the position closes, so a polled minute costs nothing
+    once the trade is out.
+    """
+    from models_pgdb.trading_models import OpenPosition
+    from trading_engine.service import execute_and_persist_cycle
+
+    if EXIT_POLL_SECONDS <= 0:
+        return
+    if db.query(OpenPosition).first() is None:
+        return
+
+    waited = 0.0
+    while waited + EXIT_POLL_SECONDS <= _POLL_BUDGET_SECONDS:
+        await asyncio.sleep(EXIT_POLL_SECONDS)
+        waited += EXIT_POLL_SECONDS
+        db.expire_all()
+        if db.query(OpenPosition).first() is None:
+            logger.info("exit poll: position closed after %.0fs — stopping.", waited)
+            return
+        try:
+            state = await execute_and_persist_cycle(db)
+        except Exception:
+            logger.exception("exit poll failed at %.0fs — leaving it to the next cycle.", waited)
+            return
+        logger.info(
+            "exit poll +%.0fs — action=%s exit=%s",
+            waited, state.get("execution_status"), state.get("exit_reason") or "-",
+        )
 
 
 async def _run() -> int:
@@ -68,6 +129,7 @@ async def _run() -> int:
             state.get("bollinger_zone"),
             state.get("rsi_zone"), state.get("market_sentiment"),
         )
+        await _poll_exits(db)
         return 0
     except Exception:
         # Logged, not raised: cron mails on non-zero exit, and one bad cycle

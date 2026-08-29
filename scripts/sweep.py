@@ -171,6 +171,25 @@ COMMISSION_ROUNDTRIP = 0.014
 # place for it.
 STAND_DOWN_AFTER_RIDE_RATCHET = False
 
+# STALLED-PEAK EXIT. Book when the profit curve stops making new highs.
+#
+# Different from a ratchet, which fires on giveback alone and therefore
+# cannot tell a dip inside a climb from the end of the climb. This asks a
+# second question: has the position made a NEW peak recently? While it
+# keeps setting higher highs the rule waits, however far it has pulled
+# back; once it has gone STALL_MINUTES without a new high AND is below the
+# peak by STALL_GIVEBACK_PCT, it books.
+#
+# The motivating shape is 2026-08-28: peaked +59.0% at 11:26, never made
+# another high, then collapsed. A ratchet fires on the first dip; a stall
+# detector waits through dips and acts on the absence of progress.
+#
+# Harness only. Live it would need the peak's TIMESTAMP persisted on the
+# position row, which does not exist -- and two knobs shipped today that
+# silently did nothing are reason enough to measure before wiring.
+STALL_MINUTES = 0.0
+STALL_GIVEBACK_PCT = 0.0
+
 
 class _Clock:
     """The simulated 'now', shared by every patched time function."""
@@ -438,6 +457,7 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
     _Cooldown.open_session()
     broker = MockBrokerClient(position=None, available_cash=_Account.equity)
     trades, entry = [], None
+    _stall = {"peak": -1e9, "at": None}
 
     for i in range(len(day_bars)):
         ts = day_bars.index[i]
@@ -461,12 +481,31 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
             continue
 
         before = broker.get_open_position()
+
+        # Stalled-peak check, ahead of the agent so it can pre-empt the ride.
+        if STALL_MINUTES > 0 and before is not None and entry is not None:
+            r = before.return_pct
+            if r > _stall["peak"]:
+                _stall["peak"], _stall["at"] = r, ts
+            elif (_stall["at"] is not None
+                  and (ts - _stall["at"]).total_seconds() / 60.0 >= STALL_MINUTES
+                  and r <= _stall["peak"] - STALL_GIVEBACK_PCT):
+                broker.sell_all(before.underlying)
+                closed = _close(entry, before, spot, ts, "STALL")
+                _Account.book(closed["pnl"])
+                _Cooldown.book(closed["strategy"], closed["pnl"], ts)
+                trades.append(closed)
+                entry = None
+                _stall.update(peak=-1e9, at=None)
+                continue
+
         out = N.execution_risk_agent(state, broker=broker)
         after = broker.get_open_position()
 
         if before is None and after is not None:
             entry = {"ts": ts, "strategy": after.strategy, "qty": after.quantity,
                      "debit": after.entry_net_debit, "playbook": after.playbook}
+            _stall.update(peak=-1e9, at=None)
         elif before is not None and after is None and entry is not None:
             closed = _close(entry, before, spot, ts, out.get("exit_reason", ""))
             _Account.book(closed["pnl"])
@@ -2776,6 +2815,53 @@ def sweep_straddle(sessions: dict):
         print("")
 
 
+def sweep_stall(sessions: dict):
+    """Does "wait for a new high, book when it stops making them" beat riding?
+
+    The proposal: a profit curve hitting a local maximum is not the same as a
+    profit curve that is finished. Rather than booking on the first pullback,
+    wait -- if it sets another higher high the climb continues, and only when
+    it stops making new highs is that the global maximum for the day.
+
+    That is a genuinely different rule from everything tested so far. Section
+    39's take-profits fire at a LEVEL regardless of shape. Sections 26 and 30's
+    ratchets fire on GIVEBACK, which cannot distinguish a dip inside a climb
+    from the end of one. This fires on the ABSENCE OF PROGRESS, which is the
+    thing actually being asked about.
+
+    The shape it targets is 2026-08-28: peaked +59.0% at 11:26 and never made
+    another high. And the shape it must not damage is the six trades that ran
+    past +100% -- every one exited at the 13:25 handoff, so each was still
+    climbing when the clock took it.
+
+    Read the trade count as well as the P&L: a stall rule that books early
+    also frees the slot, and section 38 established that nothing re-enters.
+    """
+    print("")
+    print("STALLED-PEAK EXIT -- book when the curve stops making new highs")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("  NOTE: 5-minute bars, so 'minutes without a new high' has 5-min resolution")
+    print("")
+    global STALL_MINUTES, STALL_GIVEBACK_PCT
+    base_m, base_g = STALL_MINUTES, STALL_GIVEBACK_PCT
+
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    STALL_MINUTES, STALL_GIVEBACK_PCT = 0.0, 0.0
+    _, per_day = _run_arm(sessions, dtime(10, 15))
+    _report_daily("off (rides to the handoff)", per_day)
+
+    print("")
+    for mins in (10.0, 15.0, 25.0):
+        for give in (5.0, 10.0, 20.0):
+            STALL_MINUTES, STALL_GIVEBACK_PCT = mins, give
+            PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+            _, per_day = _run_arm(sessions, dtime(10, 15))
+            _report_daily(f"no new high for {mins:.0f}min, {give:.0f}pt below peak",
+                          per_day)
+        print("")
+    STALL_MINUTES, STALL_GIVEBACK_PCT = base_m, base_g
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -3120,6 +3206,8 @@ def main():
         sweep_afternoon(sessions)
     if which in ("straddle", "all"):
         sweep_straddle(sessions)
+    if which in ("stall", "all"):
+        sweep_stall(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

@@ -199,6 +199,8 @@ class MockSpreadPosition:
     current_net_value: float  # per-spread current value (long mark - short mark)
     playbook: str = ""        # named strategy that opened it; drives its take-profit target
     peak_return_pct: float = 0.0  # best return this position has ever shown
+    # When that best return was set. None until the first mark.
+    peak_at: "datetime | None" = None
     # Time-sliced entry plan, carried from the OpenPosition row so the
     # rules can see how much of the intended size is still unfilled.
     # 0/0 means the position was opened in one order.
@@ -339,6 +341,7 @@ class MockBrokerClient:
             self._position = MockSpreadPosition(
                 strategy=pos.strategy, underlying=pos.underlying, quantity=total_qty, playbook=pos.playbook,
                 peak_return_pct=pos.peak_return_pct,
+                peak_at=pos.peak_at,
                 long_strike=pos.long_strike, short_strike=pos.short_strike,
                 entry_net_debit=round(weighted_debit, 4), current_net_value=pos.current_net_value,
             )

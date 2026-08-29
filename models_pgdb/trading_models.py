@@ -54,6 +54,11 @@ class OpenPosition(Base):
     # Best return this position has shown, so a profit ratchet can measure
     # retracement from the peak rather than only from entry.
     peak_return_pct = Column(Float, nullable=True, default=0.0)
+    # WHEN that peak was set. peak_return_pct says how good a position
+    # has been and nothing about when, so a giveback rule cannot tell a
+    # dip inside a climb from the end of one. The stalled-peak exit asks
+    # whether a NEW high has been made recently, and needs this.
+    peak_at = Column(DateTime(timezone=True), nullable=True)
     # Time-sliced entry plan. NULL means the position was opened in one order,
     # which is the default and was the only behaviour before 2026-08-25.
     #

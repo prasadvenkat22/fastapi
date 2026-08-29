@@ -270,6 +270,7 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             current_net_value=current_value,
             playbook=open_row.playbook or "",
             peak_return_pct=open_row.peak_return_pct or 0.0,
+            peak_at=open_row.peak_at,
             entry_tranche_qty=open_row.entry_tranche_qty or 0,
             entry_slices_remaining=open_row.entry_slices_remaining or 0,
             opened_at=open_row.opened_at,
@@ -281,6 +282,12 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         if pre_close_return_pct > position.peak_return_pct:
             position.peak_return_pct = pre_close_return_pct
             open_row.peak_return_pct = pre_close_return_pct
+            # Stamp the peak's TIME too. Without it the stalled-peak exit
+            # cannot tell a dip inside a climb from the end of one, which is
+            # the whole difference between it and a giveback ratchet.
+            now_peak = datetime.now(timezone.utc)
+            position.peak_at = now_peak
+            open_row.peak_at = now_peak
         spent = open_row.quantity * open_row.entry_net_debit * 100
         broker = MockBrokerClient(position=position, available_cash=max(POSITION_BUDGET - spent, 0))
     else:

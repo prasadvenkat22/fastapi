@@ -256,17 +256,66 @@ account down after losses and up after wins.
 9. THE TWO LIVE WINDOWS
 --------------------------------------------------------------------------------
 
-MORNING_DRIFT - 10:15 to 11:30, rides to 13:25
-  Structure     $6 wide, long leg $2 in the money, short leg $4 out. Bullish
+MORNING_DRIFT - 10:15 to 12:30, rides to the 13:25 handoff
+  Structure     $10 wide, long leg $2 in the money, short leg $8 out. Bullish
                 only, CLEAN tier only.
-  Sizing        8% entry fraction, 50% risk share.
-  Exits         -20% stop, 90%-of-max ceiling, 13:25 handoff. No take-profit.
-  Evidence      Judged per day with the credit window live: +49.46/day against
-                +41.42 for the $5 deep placement it replaced, both sample
-                halves higher. It wins 42% of the time against 52% for the
-                deep version - the average is better because the structure
-                stays uncapped $4 higher, so trending sessions pay for the ones
-                that stop out. 24 trades: provisional.
+  Sizing        20% entry fraction (global, no window override), 50% risk share.
+  Exits         -10% stop, 13:25 handoff, 15:45 force close. NO take-profit
+                and no ratchet; the 90%-of-max ceiling exists but is
+                unreachable (see below).
+
+  WHAT THIS STRUCTURE ACTUALLY IS. Calling it a debit vertical implies the
+  short leg does work. It does not. Measured on the live chain 2026-08-28:
+
+      entry 10:35   call 719/729   legs  62 delta 2.955  /  10 delta 0.045
+
+  The short leg sold for FOUR AND A HALF CENTS against a $2.93 debit -- 1.5%
+  of the structure. And it sits beyond the day's reach: from the 10:15 price
+  QQQ's maximum up-move has a median of $4.05 and reaches $8 on 8 of 60
+  sessions, 13%.
+
+      up-move from 10:15 reaches   $2 OTM 70%   $3 OTM 62%   $4 OTM 52%
+                                   $5 OTM 37%   $6 OTM 28%   $8 OTM 13%
+
+  So this is a CAPPED LONG CALL, not a premium-selling structure. Max return
+  is +241%, the ride ceiling sits at 90% of that near +195%, and neither is
+  reachable in a session whose median move is $4.15. The short leg's only job
+  is to satisfy section 1's never-a-naked-leg rule at the lowest possible cost
+  to the upside, and 4.5 cents is what that costs.
+
+  Evidence      That the cap should stay out of reach is measured, not assumed.
+                Per day with the credit window live, entry fraction 0.20,
+                chain-priced, 60 sessions:
+
+                    $10 wide, $2 ITM / $8 OTM  +34.49/day  worst -592.40
+                    $8  wide, $2 ITM / $6 OTM  +26.71/day  worst -529.20
+                    $10 wide, $3 ITM / $7 OTM  +17.76/day  worst -410.80
+                    $8  wide, $3 ITM / $5 OTM  +17.44/day  worst -402.80
+                    $6  wide, $2 ITM / $4 OTM   +5.36/day  worst -499.20
+                    $5  wide, $2 ITM / $3 OTM   +4.96/day  worst -463.20
+                    $10 wide, $5 ITM / $5 OTM   -5.60/day  worst -326.80
+                    $5  wide, $3 ITM / $2 OTM   -6.35/day  worst -326.80
+                    $8  wide, $5 ITM / $3 OTM   -7.62/day  worst -294.80
+                    $6  wide, $5 ITM / $1 OTM  -14.79/day  worst -318.80
+
+                Monotone in BOTH directions, exactly as section 24 found on a
+                different harness: wider is better and a shallower long leg is
+                better, and the live cell is the best of ten.
+
+                Narrowing the spread to where the short leg earns real premium
+                costs about $29.53 a day and buys a worst day $129 shallower
+                (-463 against -592). That is a far closer call than the deeper
+                variants -- $5 ITM placements lose money outright at every
+                width -- and it is the same comfort-for-P&L trade as sections
+                24, 30 and 32. The structure is uncapped BECAUSE trending
+                sessions pay for the stop-outs, and a cap the day reaches 62%
+                of the time truncates exactly those.
+
+                THE FULLY-ITM VARIANT IS THE WORST OF ALL. $6 wide with the
+                long $5 ITM and the short $1 OTM loses $14.79 a day. It is
+                insulated from theta and capped at a level a $4.15 median move
+                clears constantly: a high win rate with no upside to pay for
+                the losses.
 
 AFTERNOON_CREDIT - 13:30 to 15:00
   Structure     $4 wide. Short strike chosen by DELTA, targeting 0.20, from the
@@ -2214,3 +2263,108 @@ ONE CHANGE FOLLOWS FROM ALL OF TODAY: the +50% take-profit off. It costs
 105.61 a day in the replay and has no live evidence whatsoever -- deployed
 2026-08-28, zero trades under it. Everything else tested today either
 measures worse, does not trade, or rests on a sample too thin to act on.
+
+--------------------------------------------------------------------------------
+38. THE STRUCTURE IS CHOSEN BY THE STOP, NOT BY THE DAILY RANGE  (2026-08-29)
+--------------------------------------------------------------------------------
+
+The objection: QQQ moves $4-7 a day, so a $10-wide spread with the short leg
+$8 out asks for a move that never happens, and the structure should fit the
+range. The premise is exactly right. The inference is a win-rate rule where
+the engine needs an expected-value one.
+
+THE GEOMETRY, MEASURED. 60 sessions, spot 715-725:
+
+    |close - open|            median $4.15   mean $5.61   p75 $7.78
+    max UP move from 10:15    median $4.05   p75 $6.23    p90 $8.88
+    max UP move from 14:00    median $1.31   p75 $2.35    p90 $4.30
+
+    a short call struck this far out is touched, from 10:15 / from 14:00:
+      $2 OTM  70% / 32%     $4 OTM  52% / 10%     $6 OTM  28% /  7%
+      $3 OTM  62% / 20%     $5 OTM  37% /  7%     $8 OTM  13% /  3%
+
+So the live short leg is beyond the day's reach 87% of the time, which is why
+it priced at 4.5 cents on 2026-08-28 (62 delta long 2.955, 10 delta short
+0.045) against a $2.93 debit. The structure is a CAPPED LONG CALL and the
+notes were wrong to imply the short leg does work. Section 9 now says so.
+
+WHY WIDE STILL WINS, AND IT IS THE STOP THAT DECIDES
+
+    $10 wide, $2 ITM, debit ~2.93:  max loss ~0.29 (the -10% stop)
+                                    max gain  7.07 (width minus debit)
+    $5  wide, $2 ITM, debit ~2.20:  max loss ~0.22
+                                    max gain  2.80
+
+Halving the width cuts the upside 60% and the downside by almost nothing,
+because the downside is governed by the STOP and not by the width. The move
+distribution is right-skewed -- median 4.05, p90 8.88 -- and a cap at $3
+deletes that tail.
+
+    THE RULE IS NOT "width should fit the median move". IT IS: the short leg
+    belongs beyond where the distribution has mass, BECAUSE the stop already
+    bounds the loss. Width buys right-tail exposure at nearly no left-tail
+    cost.
+
+AND THAT HOLDS ONLY WHILE THE STOP IS TIGHT. At a -40% or -50% stop the loss
+scales with the debit again, the left tail reopens, and narrow spreads start
+to make sense. The structure and the stop are ONE decision. Nothing in this
+file recorded that dependency before now, and every width result in it was
+produced at -10% or -20%.
+
+THE FULL GRID, entry fraction 0.20, equity 4,000, chain-priced, per day:
+
+    long ATM,    short $10 OTM   +62.39   worst -1154.00  halves +201.44/-76.67
+    long ATM,    short  $8 OTM   +59.18   worst -1154.00  halves +197.15/-78.80
+    long $2 ITM, short  $8 OTM   +34.49   worst  -592.40  halves  +77.71/ -8.73  live
+    long ATM,    short  $5 OTM   +28.91   worst  -875.20  halves +137.45/-79.62
+    long $2 ITM, short  $6 OTM   +26.71   worst  -529.20
+    long $1 ITM, short  $4 OTM   +23.44   worst  -677.00
+    long $3 ITM, short  $7 OTM   +17.76   worst  -410.80
+    long $2 ITM, short  $4 OTM    +5.36   worst  -499.20
+    long $2 ITM, short  $3 OTM    +4.96   worst  -463.20
+    long ATM,    short  $3 OTM    +1.11   worst  -723.20
+    long $1 ITM, short  $2 OTM    -2.39   worst  -527.00
+    long $5 ITM, short  $5 OTM    -5.60   worst  -326.80
+    long $3 ITM, short  $2 OTM    -6.35   worst  -326.80
+    long $5 ITM, short  $3 OTM    -7.62   worst  -294.80
+    long $5 ITM, short  $1 OTM   -14.79   worst  -318.80
+
+Monotone in both directions -- wider better, shallower long leg better --
+reproducing section 24 on a completely rebuilt harness.
+
+THE ATM LONG EARNS MOST AND FAILS THE HALVES. +62.39 a day against the live
++34.49, with a second half of -76.67 against -8.73 and twice the worst day.
+More leverage, more variance both ways. By section 11's bar the live cell
+passes and the ATM cell does not, which is the only reason it is not deployed.
+
+THE FULLY-ITM VARIANT IS WORST OF FIFTEEN. Long $5 ITM / short $1 OTM loses
+14.79 a day: insulated from theta as advertised, and capped at a level a
+$4.15 median move clears constantly. A high win rate with no upside to pay
+for the losses.
+
+BOOK-AND-RE-ENTER: REFUTED BY THE ENTRY GATE, NOT BY THE EXIT
+
+The follow-on proposal was that a narrow spread booked at its target and
+re-entered up to five times a day beats one wide spread that never maxes.
+Tested on the $5 wide / $2 ITM structure:
+
+    no target (rides)   0.60 tr/day    +4.96/day
+    book at +30%        0.62 tr/day   -19.95/day
+    book at +50%        0.65 tr/day    -0.38/day
+    book at +75%        0.62 tr/day    +1.73/day
+
+THE TRADE COUNT DOES NOT MOVE. 0.60 to 0.65. Booking frees the position slot
+and nothing re-enters, because CLEAN does not re-assemble inside the window.
+The bottleneck was never the slot, the width or the exit -- it is the entry
+gate.
+
+    trades per session, live config:  {0: 12, 1: 31, 2: 12, 3: 4, 4: 1}
+    maximum ever observed: 4
+
+A five-entry cap would never bind. Three or more trades happen on 5 of 60
+sessions. The only lever that raises frequency is relaxing the gate, and
+section 32 measured that at -107 to -134 a day.
+
+A winning exit imposes no cooldown -- blocked_direction() returns None after
+a profitable close -- so the engine could already churn if the setups existed.
+They do not.

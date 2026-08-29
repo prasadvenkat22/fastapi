@@ -2691,6 +2691,91 @@ def sweep_afternoon(sessions: dict):
     PB.WINDOWS = base
 
 
+def sweep_straddle(sessions: dict):
+    """Long ATM straddles -- the structure class this engine has never had.
+
+    Both outside notes proposed buying volatility around events, and a grep
+    for "straddle" or "strangle" across the whole repository returns nothing.
+    Every structure here is a vertical, so the engine can express a DIRECTION
+    and cannot express "a large move, either way".
+
+    That gap matters because of where the losses live. Section 33 located the
+    entire drag in REVERSAL sessions -- up at 10:15, closed down -- which are
+    exactly the days a directional debit spread is punished and a straddle is
+    not. A structure indifferent to sign is the only untested answer to the
+    one bucket that costs money.
+
+    MEASUREMENT ONLY. Nothing here touches the live engine. A straddle is not
+    a vertical: the position model carries long_strike/short_strike, the
+    broker sends two-leg debit/credit packages, and sizing is premium-at-risk
+    rather than width-minus-credit. Building it into a live money engine
+    before knowing whether it earns is how sections 22, 24 and 29 happened.
+
+    Priced through chain_pricer -- the same fitted surface the rest of the
+    chain-priced sweeps use -- and charged the same slippage and commission a
+    vertical pays, since both cross two legs each way.
+
+    READ THE COST FIRST. An ATM straddle buys two at-the-money options, so it
+    costs several times a vertical and needs a move to break even, not merely
+    a direction. Section 3's daily geometry says the median max move from
+    10:15 is about $4.05 and this is what decides it.
+    """
+    import trading_engine.chain_pricer as CP
+    print("")
+    print("LONG ATM STRADDLE -- a structure the engine cannot currently express")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}   1 contract per trade")
+    print("")
+
+    def price(spot, strike, minutes, vix=None):
+        years = max(minutes, 0.0) / (60.0 * 6.5 * 252.0)
+        if years <= 0:
+            return max(0.0, spot - strike) + max(0.0, strike - spot)
+        iv = CP.implied_vol(strike, spot, years, vix)
+        return (CP.black_scholes(spot, strike, years, iv, call=True)
+                + CP.black_scholes(spot, strike, years, iv, call=False))
+
+    for entry_at in ("09:45", "10:15", "13:30"):
+        for tp, sl in ((None, None), (50.0, -40.0), (100.0, -40.0), (50.0, -25.0)):
+            trades = []
+            for day, bars in sessions.items():
+                idx = [i for i, ts in enumerate(bars.index)
+                       if ts.strftime("%H:%M") >= entry_at]
+                if not idx:
+                    continue
+                i = idx[0]
+                spot0 = float(bars["Close"].iloc[i])
+                strike = round_to_strike(spot0)
+                m0 = broker_mod.minutes_to_expiry(bars.index[i].to_pydatetime())
+                debit = price(spot0, strike, m0)
+                if debit <= 0.05:
+                    continue
+                pnl, reason = None, "FORCE_CLOSE"
+                for j in range(i + 1, len(bars)):
+                    ts = bars.index[j]
+                    if ts.time() > dtime(15, 45):
+                        break
+                    sp = float(bars["Close"].iloc[j])
+                    m = broker_mod.minutes_to_expiry(ts.to_pydatetime())
+                    val = price(sp, strike, m)
+                    ret = (val - debit) / debit * 100.0
+                    pnl = (val - debit)
+                    if tp is not None and ret >= tp:
+                        reason = "TAKE_PROFIT"; break
+                    if sl is not None and ret <= sl:
+                        reason = "STOP_LOSS"; break
+                if pnl is None:
+                    continue
+                pnl -= SLIPPAGE_ROUNDTRIP + COMMISSION_ROUNDTRIP
+                trades.append({"pnl": round(pnl * 100, 2), "reason": reason,
+                               "pct": round(pnl / debit * 100, 2), "debit": debit})
+            rule = "hold to 15:45" if tp is None else f"+{tp:.0f}% / {sl:.0f}%"
+            if trades:
+                avg_debit = sum(t["debit"] for t in trades) / len(trades)
+                _report(f"enter {entry_at}, {rule} (avg debit {avg_debit:.2f})",
+                        trades, len(sessions))
+        print("")
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -3033,6 +3118,8 @@ def main():
         sweep_indicators(sessions)
     if which in ("afternoon", "all"):
         sweep_afternoon(sessions)
+    if which in ("straddle", "all"):
+        sweep_straddle(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

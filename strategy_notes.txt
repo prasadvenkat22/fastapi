@@ -2409,3 +2409,59 @@ THE NARROW STRUCTURE UNDER THE SAME LADDER, for completeness:
 Every cell is below every wide cell except +30%, and the trade count never
 exceeds 0.65 a day at any target. Booking does not create entries -- see
 section 38.
+
+--------------------------------------------------------------------------------
+40. LONG STRADDLES -- BUILT, MEASURED, REFUTED BY THEIR OWN BREAK-EVEN
+    (2026-08-29)
+--------------------------------------------------------------------------------
+
+Both outside notes proposed buying volatility, and a grep for "straddle" or
+"strangle" across the repository returned nothing. Every structure here is a
+vertical, so the engine can express a DIRECTION and cannot express "a large
+move, either way".
+
+That gap looked important because of where the losses live: section 33 put
+the entire drag in REVERSAL sessions, exactly the days a directional debit
+spread is punished and a structure indifferent to sign is not.
+
+Built as a measurement only -- sweep_straddle, priced through chain_pricer's
+fitted surface, charged the same slippage and commission a vertical pays,
+since both cross two legs each way. Nothing touches the live engine: a
+straddle is not a vertical, and the position model, the order path and the
+sizing rule would all need changing before one could be traded.
+
+Twelve arms, 60 sessions, one contract:
+
+    enter 10:15, hold to close   23% win  -213.11/tr   avg debit 7.24
+    enter 10:15, +50% / -40%     23% win  -155.19/tr
+    enter 10:15, +100% / -40%    22% win  -137.38/tr
+    enter 10:15, +50% / -25%     17% win  -112.13/tr
+    enter 09:45, +50% / -25%     22% win   -88.47/tr   avg debit 7.57
+    enter 13:30, +50% / -25%     10% win   -99.23/tr   avg debit 4.64
+
+EVERY ARM LOSES, IN BOTH HALVES, AT EVERY ENTRY TIME AND EVERY EXIT RULE.
+
+THE REASON IS ARITHMETIC AND IT USES THIS FILE'S OWN GEOMETRY. An ATM
+straddle at 10:15 costs $7.24. That is the break-even move, either direction,
+by the close. Section 38 measured the distribution:
+
+    max move from 10:15    median $4.05    p75 $6.23    p90 $8.88
+
+The break-even sits above the 75th percentile. A p85 session is needed merely
+to get the money back, before costs. The straddle is priced CORRECTLY --
+implied vol is tracking the real distribution -- so buying it at fair value
+loses the bid-ask every day, mechanically.
+
+THE SYMMETRY WITH SECTIONS 14 AND 21 IS THE POINT. Selling market-priced
+premium is a fair bet that loses after costs. BUYING market-priced premium is
+also a fair bet that loses after costs. Both sides pay the spread. Whatever
+edge this engine has does not come from an opinion about volatility; it comes
+from a directional debit spread whose short leg subsidises 1.5% of the cost.
+
+WHAT THIS DOES NOT TEST. Both notes proposed straddles specifically around
+scheduled events, and the sample holds two FOMC days. The event-specific
+version cannot be measured here. For it to work, event days would have to
+differ enormously from a -137 a trade baseline against a $7.24 break-even --
+which is possible and is not evidence.
+
+The sweep stays in the tree. If enough event days accumulate, the arm exists.

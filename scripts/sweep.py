@@ -79,7 +79,12 @@ from trading_engine.broker import (CALL_CREDIT_SPREAD, PUT_CREDIT_SPREAD, MockBr
 from trading_engine.equity import EquityState
 
 NY = ZoneInfo("America/New_York")
-EQUITY = 10000.0
+# Starting equity for every arm. Read from the same variable the engine
+# uses, not hardcoded: it was 10000.0 while the deployed budget was 4000,
+# which is the other half of the sizing defect the banner above exists to
+# prevent. Sizing is a share of equity, so a harness with 2.5x the
+# account's equity reports 2.5x the account's dollars.
+EQUITY = float(os.getenv("TRADING_POSITION_BUDGET", "10000"))
 
 # Round-trip cost of crossing the spread, in premium terms, per contract.
 #
@@ -2895,9 +2900,47 @@ def sweep_orb(sessions: dict, iv: float = 0.185, dte: float = 3.0):
         _report(f"exit by {exit_by.strftime('%H:%M')}", results, len(sessions))
 
 
+def _config_banner() -> None:
+    """Print every setting that changes the MAGNITUDE of a result.
+
+    Added 2026-08-29 after a defect that ran silently for a week. sweep.py
+    imports the engine, so it inherits the engine's environment defaults --
+    and TRADING_ENTRY_FRACTION defaults to 0.10 in nodes.py while the
+    deployed engine runs 0.20. Every sweep in sections 27-35 was invoked
+    without it, so every dollar figure was about half-scale, and nothing in
+    the output said so.
+
+    Rankings survived -- all arms in a run share the same sizing -- but any
+    figure used to weigh a cost against a benefit was wrong by a factor of
+    two, and one live configuration decision was made on such a figure.
+
+    A harness that silently models a different size from the engine ranks
+    correctly and prices wrongly forever. The fix is not to hardcode the
+    live value -- that would break the moment the live value changed -- but
+    to make the sizing impossible to miss, next to the pricing mode that is
+    already declared.
+    """
+    import trading_engine.nodes as _N
+    unset = [v for v in ("TRADING_ENTRY_FRACTION", "TRADING_POSITION_BUDGET")
+             if os.getenv(v) is None]
+    print("")
+    print("  RUN CONFIG -- these set the SCALE of every dollar below")
+    print(f"    pricing          {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}"
+          f"   tick grid {'on' if TICK_PRICING else 'off'}")
+    print(f"    entry fraction   {_N.ENTRY_FRACTION:.2f}"
+          f"   equity {EQUITY:,.0f}   contract cap {_N.MAX_CONTRACTS if hasattr(_N, 'MAX_CONTRACTS') else 'n/a'}")
+    print(f"    morning stop     {_N.RIDE_TAKE_PROFIT_PCT:+.0f}% take-profit"
+          f"   credit floor {_N.MIN_CREDIT:.2f}   short delta {_N.CREDIT_SHORT_DELTA:.2f}")
+    if unset:
+        print(f"    !! NOT SET, using code defaults: {', '.join(unset)}")
+        print("    !! Dollar figures will not match the deployed engine.")
+    print("")
+
+
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     _patch_engine()
+    _config_banner()
     sessions = _load_sessions()
     print(f"{len(sessions)} sessions, {min(sessions)} to {max(sessions)}")
     if which in ("morning", "all"):

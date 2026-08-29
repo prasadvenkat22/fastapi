@@ -227,8 +227,10 @@ visible.
 
 Position size is the smallest of four independent limits.
 
-  1. Entry fraction     15% of equity, per trade (MORNING_DRIFT overrides to
-                        8%). This is capital deployed.
+  1. Entry fraction     20% of equity, per trade (no window override is set;
+                        the 8% MORNING_DRIFT override was removed). This is
+                        capital deployed. 20%, not the 15% this file said
+                        until 2026-08-29 -- verified against the container.
   2. Risk share         A window's share of the day's loss budget. Both live
                         windows: 50%. Sized so ONE stop-out cannot exceed it.
                         Post-loss re-entries use 30% and are halved.

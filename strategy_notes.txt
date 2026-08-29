@@ -2673,9 +2673,39 @@ problem wearing three different rule shapes.
 
 DEPLOYED 2026-08-29 DESPITE THE MEASUREMENT
 
-    TRADING_STALL_MINUTES=15
+    TRADING_STALL_MINUTES=5
     TRADING_STALL_GIVEBACK_PCT=5
     TRADING_EXIT_POLL_SECONDS=15
+
+CORRECTED FROM 15 MINUTES THE SAME DAY, AND THE CORRECTION IS THE POINT. 15
+was chosen because it was the best-measuring arm in the sweep. Replayed
+against the session it was built to prevent, it does nothing at all:
+
+    stall     fires at   return    outcome
+     3min      15:29     +53.9%    prevents the stop-out
+     5min      15:31     +51.5%    prevents the stop-out
+     8min      15:34     +49.7%    prevents the stop-out
+    10min      15:36     +41.1%    prevents the stop-out
+    15min      15:41     -18.1%    too late -- that IS the stop cycle
+
+The peak was 15:26 UTC and fifteen minutes later is 15:41, the exact cycle
+the -8% stop fired on. The rule would have booked the same loss under a
+different exit reason. A parameter picked on a 60-session average was one
+cycle too slow for the single case it existed to fix, and nobody would have
+noticed until it failed again live.
+
+5 minutes books at +51.5% against the -18.1% actually realised, ten minutes
+before the stop, and is not the twitchiest option available.
+
+WHAT THE HARNESS CANNOT SAY ABOUT THIS. The sweep runs on 5-minute bars, so
+"minutes without a new high" has 5-minute resolution and a 3- or 5-minute
+stall cannot be evaluated at all there. The 10-minute arm measured +0.81 a
+day, the WORST of the nine tested, so the honest expectation is that 5
+minutes costs more than the 15 it replaces. It is deployed because it
+prevents the case it was asked to prevent and 15 minutes provably does not.
+This is the one rule in this file whose live behaviour the harness is
+structurally unable to measure -- the engine now evaluates it every 15
+seconds and the replay evaluates it every 5 minutes.
 
 15/5 rather than 15/20 because the two measure the same (+13.10 against
 +13.09) and 5 points books far closer to the top, which is the whole point of

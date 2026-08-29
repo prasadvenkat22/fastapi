@@ -387,6 +387,34 @@ RIDE_TAKE_PROFIT_PCT = float(os.getenv("TRADING_RIDE_TAKE_PROFIT", "0"))
 # shipped default.
 RIDE_GIVEBACK_LATE = float(os.getenv("TRADING_RIDE_GIVEBACK_LATE", "0"))
 
+# What the 9 EMA is compared against for the ema_cross reading.
+#
+# Three specifications have been in play and only one was ever deployed.
+# The code compares against a SIMPLE 20 average; section 3 of
+# strategy_notes.txt describes it as EMA(20); outside notes propose
+# EMA(21). The code comment defends the CONCEPT -- 9 EMA against a mean is
+# velocity, price against the 9 EMA is only position -- but says nothing
+# about simple versus exponential, which looks unexamined rather than
+# decided.
+#
+# ema_cross is one of CLEAN's four conditions and is the sole blocker on
+# 2-3% of cycles, so the choice is not cosmetic. sma20 is the default and
+# the deployed behaviour; ema20 and ema21 exist to be swept against it.
+EMA_CROSS_REFERENCE = os.getenv("TRADING_EMA_CROSS_REF", "sma20").strip().lower()
+
+# Require a MACD crossover to happen BELOW the zero line for a bullish
+# read (and above it for a bearish one).
+#
+# The engine reads only the histogram's SIGN. An outside note argues the
+# crossover's POSITION matters -- that a cross above the signal line while
+# the MACD line is still below zero is a turn from oversold, while the same
+# cross after hours above zero is a tiring trend. That is a genuinely
+# different filter and the engine has never looked at it.
+#
+# Off by default. On, a BULLISH read additionally requires the MACD line
+# below zero and a BEARISH read requires it above.
+MACD_ZERO_AXIS_GATE = os.getenv("TRADING_MACD_ZERO_AXIS", "false").lower() == "true"
+
 # Least credit worth selling a spread for, per contract.
 #
 # Without a floor the engine will open a credit vertical that collects
@@ -725,6 +753,18 @@ def macd_agent(state: TradingState) -> dict:
     else:
         signal = "NEUTRAL"
 
+    # The zero-axis refinement, off by default. The reading above uses only
+    # the histogram's SIGN, which says the MACD line is above its signal line
+    # and nothing about where that happened. A cross while the MACD line is
+    # still BELOW zero is a turn out of oversold; the same cross after hours
+    # above zero is a tiring trend making one more push. Whether that
+    # distinction is worth anything on 5-minute QQQ bars has never been
+    # measured here, which is why the knob exists rather than the opinion.
+    if MACD_ZERO_AXIS_GATE and signal != "NEUTRAL":
+        line = float(macd_line.iloc[-1])
+        if (signal == "BULLISH" and line >= 0) or (signal == "BEARISH" and line <= 0):
+            signal = "NEUTRAL"
+
     # Recorded on every cycle, not just entries: without it a HOLD cycle
     # leaves no trace of where price was, and "what did we miss" cannot be
     # answered from our own data afterwards.
@@ -770,8 +810,14 @@ def sma_agent(state: TradingState) -> dict:
     # Rule B proper: 9 EMA vs the 20 SMA, not price vs the 9 EMA. The first
     # says velocity is accelerating in the trend's direction; the second only
     # says price is above a fast average. They agree often and not always.
-    sma20 = close.rolling(20).mean().iloc[-1]
-    ema_cross = "EMA9_ABOVE_SMA20" if ema9 > sma20 else "EMA9_BELOW_SMA20"
+    if EMA_CROSS_REFERENCE == "ema20":
+        reference = close.ewm(span=20, adjust=False).mean().iloc[-1]
+    elif EMA_CROSS_REFERENCE == "ema21":
+        reference = close.ewm(span=21, adjust=False).mean().iloc[-1]
+    else:
+        reference = close.rolling(20).mean().iloc[-1]
+    sma20 = reference
+    ema_cross = "EMA9_ABOVE_SMA20" if ema9 > reference else "EMA9_BELOW_SMA20"
 
     # Rule C: VWAP, the institutional anchor. Must reset each session — a
     # VWAP carried across days is not VWAP, it is a slow moving average.

@@ -2570,6 +2570,54 @@ def sweep_regime(sessions: dict):
     N.RIDE_TAKE_PROFIT_PCT = base_tp
 
 
+def sweep_indicators(sessions: dict):
+    """Two indicator definitions the engine never examined, from outside notes.
+
+    EMA_CROSS_REFERENCE. ema_cross is one of CLEAN's four conditions and the
+    sole blocker on 2-3% of cycles, and three specifications have been in play:
+    the code compares the 9 EMA against a SIMPLE 20 average, section 3 of the
+    notes describes EMA(20), and outside advice proposes EMA(21). The code
+    comment defends the concept and never mentions simple versus exponential,
+    so the choice reads as unexamined rather than decided.
+
+    MACD_ZERO_AXIS_GATE. The engine reads only the histogram's sign. The
+    outside claim is that the crossover's POSITION matters -- a cross while
+    the MACD line is below zero is a turn out of oversold, the same cross far
+    above zero is a tiring trend. A genuinely different filter, never tested.
+
+    Per day with both windows, since either change alters which trades exist
+    rather than how one is managed.
+    """
+    print("")
+    print("INDICATOR DEFINITIONS -- two the engine never examined")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base_ref, base_gate = N.EMA_CROSS_REFERENCE, N.MACD_ZERO_AXIS_GATE
+
+    def _day(label):
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, per_day = _run_arm(sessions, dtime(10, 15))
+        _report_daily(label, per_day)
+
+    print("  WHAT THE 9 EMA IS COMPARED AGAINST")
+    for ref in ("sma20", "ema20", "ema21"):
+        N.EMA_CROSS_REFERENCE, N.MACD_ZERO_AXIS_GATE = ref, False
+        _day(f"9 EMA vs {ref}" + ("  (deployed)" if ref == "sma20" else ""))
+
+    print("")
+    print("  MACD ZERO-AXIS GATE, at the deployed reference")
+    for gate in (False, True):
+        N.EMA_CROSS_REFERENCE, N.MACD_ZERO_AXIS_GATE = "sma20", gate
+        _day("zero-axis gate ON" if gate else "zero-axis gate off  (deployed)")
+
+    print("")
+    print("  BOTH, at the best reference")
+    N.EMA_CROSS_REFERENCE, N.MACD_ZERO_AXIS_GATE = "ema21", True
+    _day("ema21 + zero-axis gate")
+
+    N.EMA_CROSS_REFERENCE, N.MACD_ZERO_AXIS_GATE = base_ref, base_gate
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -2870,6 +2918,8 @@ def main():
         sweep_relaxed(sessions)
     if which in ("regime", "all"):
         sweep_regime(sessions)
+    if which in ("indicators", "all"):
+        sweep_indicators(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

@@ -2368,3 +2368,44 @@ section 32 measured that at -107 to -134 a day.
 A winning exit imposes no cooldown -- blocked_direction() returns None after
 a profitable close -- so the engine could already churn if the setups existed.
 They do not.
+
+--------------------------------------------------------------------------------
+39. THE TAKE-PROFIT LADDER AT CORRECT SIZING -- SUPERSEDES SECTION 30
+    (2026-08-29)
+--------------------------------------------------------------------------------
+
+Section 30 deployed a +50% take-profit on a measured cost of $61 a day, and
+section 36 corrected that to $105.61. Both figures came from runs made under
+the sizing defect. At entry fraction 0.20 and equity 4,000 -- the deployed
+account -- the whole ladder is:
+
+    no target (deployed)   +34.49/day  0.58 tr/day  worst -592.40  +77.71/ -8.73
+    book at +75%           +22.67/day  0.67 tr/day  worst -538.20  +49.19/ -3.84
+    book at +100%           +9.86/day  0.60 tr/day  worst -412.60  +24.56/ -4.83
+    book at +50%            +7.43/day  0.65 tr/day  worst -358.80  +20.20/ -5.35
+    book at +30%           -19.19/day  0.62 tr/day  worst -358.80   -9.01/-29.37
+
+THE +50% TAKE-PROFIT COSTS $27.06 A DAY, not 61 and not 105.61. It buys a
+worst day $234 shallower. That is a defensible purchase and it was presented
+twice as an obvious call in both directions on figures that were wrong by
+2x and 4x. The ranking never moved; only the price did.
+
++75% IS THE ARM WORTH KNOWING ABOUT. It has the best second half of anything
+tested -- -3.84 against the deployed -8.73 -- for $11.82 a day, and it is the
+only level that improves both the worst day and the second half without
+costing much. Every other target is worse on both counts.
+
+It is NOT deployed, because the stated objective is maximum profit and no
+target wins that by $11.82 a day. It becomes the right answer the moment the
+objective includes the second half, or if forward data shows the first half of
+this sample was the unusual one.
+
+THE NARROW STRUCTURE UNDER THE SAME LADDER, for completeness:
+
+    $5w $2ITM/$3OTM  rides        +4.96/day    book at +75%   +1.73/day
+    $5w $2ITM/$3OTM  book +100%   +3.48/day    book at +50%   -0.38/day
+                                                book at +30%  -19.95/day
+
+Every cell is below every wide cell except +30%, and the trade count never
+exceeds 0.65 a day at any target. Booking does not create entries -- see
+section 38.

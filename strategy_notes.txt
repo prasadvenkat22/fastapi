@@ -2465,3 +2465,55 @@ differ enormously from a -137 a trade baseline against a $7.24 break-even --
 which is possible and is not evidence.
 
 The sweep stays in the tree. If enough event days accumulate, the arm exists.
+
+--------------------------------------------------------------------------------
+41. STOP AND CREDIT PARAMETERS RE-SCANNED AT CORRECT SIZING  (2026-08-29)
+--------------------------------------------------------------------------------
+
+Sections 24 and 25 chose the morning stop and the credit configuration on
+figures produced under the sizing defect. Both re-scanned at entry fraction
+0.20 and equity 4,000, no take-profit, $10 wide / $2 ITM.
+
+THE MORNING STOP. A smooth single-peaked curve:
+
+    -5%   +28.52/day  halves +80.04/-22.99
+    -8%   +38.39/day  halves +80.04/ -3.26   <- best on total AND second half
+    -10%  +34.49/day  halves +77.71/ -8.73   <- deployed
+    -12%  +29.22/day  halves +67.82/ -9.39
+    -15%  +15.67/day  halves +50.06/-18.73
+    -20%  +13.22/day  halves +48.66/-22.21
+    -30%   +7.15/day  halves +36.67/-22.38
+
+-8% wins on both metrics, by $3.90 a day and by 5.5 points of second half.
+
+SECTION 24 CHOSE -10% OVER THE -8% PEAK DELIBERATELY, on the grounds that the
+plateau centre had -8 and -12 confirming it on both sides while "peaks are
+where overfitting lives". At correct sizing that description no longer fits:
+-8 is a single peak with -5 below it, and -10 sits on the downslope rather
+than at a centre. The methodological argument was sound and the shape it
+described was an artefact of the sizing.
+
+Worth keeping in view: the difference is $3.90 a day across 35 trades, and
+NEITHER stop passes section 11's both-halves bar -- -3.26 and -8.73 are both
+negative. This is choosing the less-negative second half, not a clean win.
+
+THE CREDIT PARAMETERS ARE FLAT, ALL OF THEM.
+
+    width    $2 +13.09   $3 +13.16   $4 +13.22   $5 +13.29   $6 +13.22
+    stop   -100% +12.57  -200% +10.96  -400% +12.69  -600% +13.22  -1000% +13.10
+    target   25% +12.84   50% +13.15   75% +13.16   90% +13.22
+
+Fourteen arms spanning a 3x width change, a 10x stop change and a 4x target
+change move the engine across a $2.33 a day range, most of it the -200% stop.
+There is nothing to tune, which is exactly what a window contributing about a
+dollar a day should look like. Sections 21 and 25 spent considerable effort
+tuning these; at correct sizing the whole parameter space is one flat line.
+
+A NOTE ON THE RUN ITSELF, because it caught me again. These credit arms sit
+at +13 rather than +34 because the invocation passed TRADING_MORNING_WIDTH
+and TRADING_MORNING_LONG_DEPTH but not TRADING_MORNING_STOP_PCT, so the
+morning stop fell back to the playbook default of -20% -- which is exactly
+the +13.22 row in the scan above. The banner added in section 36 prints entry
+fraction and equity and does NOT print the window parameters, so it did not
+catch this. Everything that sets the scale of a result should be echoed, not
+just the two variables that caused the first incident.

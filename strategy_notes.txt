@@ -2742,3 +2742,63 @@ TO RE-TEST ON MONDAY, noted rather than built:
     high" test, so it understates a rule the live engine can now evaluate
     every 15 seconds. This is the one case all session where the replay is
     likely to be PESSIMISTIC rather than optimistic.
+
+--------------------------------------------------------------------------------
+44. TRADIER WILL NOT ACCEPT A STOP ON A SPREAD -- SETTLED BY PREVIEW
+    (2026-08-29)
+--------------------------------------------------------------------------------
+
+Section 12 has said since the engine went live that "no resting stop exists
+at the exchange", and it was never clear whether that described an
+unimplemented feature or a broker limitation. It has been quoted as an
+open item three times in two days. Settled with preview orders, which Tradier
+validates and does not execute:
+
+    class=multileg, QQQ vertical, deliberately invalid strikes
+
+    credit      REJECTED on the SYMBOL  -- "Undefined symbol: QQQ260905C..."
+    market      REJECTED on the SYMBOL  -- same
+    stop        REJECTED on the TYPE    -- "Invalid parameter, type: is not valid"
+    stop_limit  REJECTED on the TYPE    -- same
+
+The control is the point. credit and market got PAST type validation and
+failed on the made-up option symbols; stop and stop_limit never reached that
+stage. The type itself is refused.
+
+TRADIER'S MULTILEG ORDER CLASS SUPPORTS market, debit, credit and even. It
+does not support stop or stop_limit. A resting stop on a vertical spread is
+not available at this broker at any price, and no amount of engine work
+changes that.
+
+WHAT FOLLOWS FROM IT.
+
+  * Engine polling is the ONLY exit mechanism this account has. There is no
+    fallback and no exchange-side safety net.
+  * Section 12's known limit is now a broker constraint rather than a to-do,
+    and should stop being cited as something to build.
+  * The morning window's gap exposure is bounded by STRUCTURE rather than by
+    any order: a debit spread cannot lose more than its premium. Friday risked
+    $586 in total across two contracts, and a gap to zero loses exactly that.
+  * The credit window is where gap risk is genuinely open -- width minus
+    credit, roughly $380 a contract against $20 of premium -- and it now has
+    no exchange-side protection available even in principle. The tail cap is
+    the only control.
+
+EXIT POLLING SET TO 10 SECONDS. From Friday's worst minute the spread fell
+30.6 points in 60 seconds, -0.51 a second:
+
+    check every 60s  ->  up to 30.6 points of overshoot   (what ran all week)
+    check every 15s  ->  up to  7.7 points
+    check every 10s  ->  up to  5.1 points   <- deployed
+    check every  5s  ->  up to  2.5 points
+
+Stopped at 10 rather than 5. Each poll runs a full cycle -- 100-symbol
+breadth, timesales, VIX, TNX and the chain -- so 5 seconds means twelve
+cycles a minute and roughly sixty Tradier requests, on a 1GB container idling
+at 455MB. The extra 2.6 points of precision is not worth a rate-limit or a
+memory failure on a loss the structure already caps at the premium.
+
+AND NO INTERVAL CATCHES A NEWS GAP. Price moves between ticks; 10 seconds and
+1 second miss it identically, and a resting order would fill at the gap price
+rather than the stop price even if one were available. Gap protection here is
+structure and size, in that order, and never the exit rule.

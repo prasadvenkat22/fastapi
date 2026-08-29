@@ -2517,3 +2517,65 @@ the +13.22 row in the scan above. The banner added in section 36 prints entry
 fraction and equity and does NOT print the window parameters, so it did not
 catch this. Everything that sets the scale of a result should be echoed, not
 just the two variables that caused the first incident.
+
+--------------------------------------------------------------------------------
+42. DEPLOYED FOR 2026-08-31, AND WHAT THE WEEKEND CHANGED
+    (2026-08-29)
+--------------------------------------------------------------------------------
+
+Verified against the running container, not against the code defaults:
+
+    MORNING_DRIFT     10:15-12:30 entry, rides to the 13:25 handoff
+                      $10 wide, long $2 ITM / short $8 OTM
+                      CLEAN tier only, LONG only
+                      stop -8%, NO take-profit, force close 15:45
+
+    AFTERNOON_CREDIT  14:00-15:00
+                      $4 wide, short strike at 0.25 delta, floor $0.20
+                      any tier, either direction
+                      books at 50%, 30% ratchet, stop -600%
+
+    BOTH              20% entry fraction, $4,000 budget, cap 3 contracts
+                      macro LLM gate ON, VIX halt at 22, 15-min warmup
+                      6% daily loss cap, 3-loss halt, 30-min post-loss cooldown
+                      live orders to 6YB90697, preview off
+
+TWO CHANGES THIS WEEKEND, both to the morning window and both reversals of
+decisions made earlier in the week on half-scale figures.
+
+    take-profit +50% -> OFF     +7.43/day -> +34.49/day
+    stop -10% -> -8%           +34.49/day -> +38.39/day
+
+The take-profit was deployed on 2026-08-28 as a stated risk preference
+against a measured cost of $61 a day, which was really $27.06. It is off
+because the stated objective is maximum profit; it remains the right answer
+if the objective ever includes the second half, where +75% is the best arm
+tested (-3.84 against -8.73).
+
+The stop moved to the peak of a smooth single-peaked curve. Section 24 chose
+-10% over -8% because the shape then looked like a plateau with -8 and -12
+bracketing it; at correct sizing -8 is a peak and -10 is on the downslope.
+Worth $3.90 a day and 5.5 points of second half, on 35 trades, and NEITHER
+stop passes section 11's both-halves bar.
+
+NOTHING ELSE CHANGED, and that is the result of about fifty configurations
+tested across 2026-08-28 and 29. Refuted this weekend: narrower spreads, ATM
+and deep-ITM long legs, book-and-re-enter at every target, long straddles at
+three entry times and four exit rules, every credit width, stop and target,
+the severe-morning put debit, running the morning structure in the afternoon,
+extending the morning to 15:00, and both MACD refinements from the outside
+notes. The engine's shape is not under-explored.
+
+THE HONEST STATE OF THE EVIDENCE, restated because it outranks the rest.
+Live: -66.85 across 12 routed trades. Backtest: +38.39 a day. Those
+disagree, both samples are far too small, and no further replay resolves it.
+The morning window has FOUR live trades against a modelled 31. What the
+engine needs next is trades, not parameters.
+
+FIVE SIZING CORRECTIONS WERE ISSUED IN TWO DAYS, all from the harness
+modelling a different account than the deployed one -- entry fraction 0.10
+against 0.20, equity hardcoded at 10,000 against 4,000, and once in a sweep
+written after both were fixed because the invocation omitted the morning
+stop. Every ranking survived; no dollar figure did. Any magnitude quoted in
+sections 27 through 35 should be read as roughly a quarter of what it says,
+and sections 36, 38, 39 and 41 carry the corrected numbers.

@@ -1828,3 +1828,85 @@ vol ABOVE implied on ten of eleven names. If that survives period-matched
 measurement, no entry rule rescues those structures, and applying good rules
 to a negative-edge trade is what section 21 already caught the credit floor
 doing.
+
+--------------------------------------------------------------------------------
+33. WHERE THE LOSSES ACTUALLY LIVE, AND THE PUT DEBIT ON SEVERE MORNINGS
+    (2026-08-28)
+--------------------------------------------------------------------------------
+
+Asked: on a day that starts bad and declines all session, what does a
+long-only CLEAN morning window do for us?
+
+It abstains, and abstaining is not the problem. Split by day type, deployed
+configuration, 60 sessions, chain-priced:
+
+    UP at 10:15 -> closed DOWN     9 days  traded  4  -129.73/day  -1167.60   0% green
+    UP at 10:15 -> closed UP      16 days  traded 10   +50.13/day   +802.00  38% green
+    DOWN at 10:15 -> closed DOWN  24 days  traded  7    +9.18/day   +220.40  17% green
+    DOWN at 10:15 -> closed UP    11 days  traded  7  +113.93/day  +1253.20  36% green
+
+THE CONTINUOUS DECLINE IS A SAFE DAY. The engine enters on 7 of those 24 and
+still earns +9.18 a day on them. Long-only CLEAN is what keeps it out, and
+that is the restriction working rather than failing.
+
+THE ENGINE'S ENTIRE DRAG IS NINE REVERSAL DAYS. Up at 10:15, closed down:
+-1,167.60 across nine sessions with ZERO green days, against a 60-session
+total of +1,108. Remove those nine and the engine earns +44.60 a day instead
+of +18.47. It traded only four of them, so roughly four trades carry about
+$292 of damage each.
+
+2026-08-28 was one: opened 719.20, 720.98 when it entered at 10:35, closed
+716.45. So was the session that prompted the -10% stop in section 24. This is
+the same tail section 10 described as "chop stopping out a directional
+position" -- now located precisely. It is not chop and it is not decline. It
+is the reversal.
+
+THE PUT DEBIT ON SEVERE MORNINGS, RE-MEASURED
+
+The proposal: on a continuous decline, buy put debit spreads -- the mirror of
+the morning call debit -- instead of sitting out. Section 10 recorded this as
+the one open idea, at +166.52 a trade on six trades. Re-run chain-priced at
+the deployed configuration:
+
+    structure / gate              engine/day       the short trades
+    put DEBIT, any bearish read   -27.25/day   38 tr  24% win   -62.17/tr
+    put DEBIT, down 0.25%+         +0.74/day   26 tr  31% win   -14.65/tr
+    put DEBIT, down 0.50%+        +25.63/day   15 tr  33% win   +52.04/tr
+    put DEBIT, down 0.75%+        +45.47/day   10 tr  50% win  +209.02/tr
+    bear CALL, down 0.75%+        +12.41/day    3 tr   0% win  -121.20/tr
+
+THE STRUCTURE QUESTION IS SETTLED. The put debit beats the bear call at every
+gate, and at 0.75% the call is -121.20 a trade with no wins at all. On a
+decline that continues, a debit monetises the move to width-minus-debit while
+a credit spread caps at its credit. Buy the direction; do not sell the
+opposite side.
+
+THE GATE QUESTION IS NOT, AND THE ARM LOOKS EXACTLY LIKE A FILTER WITH NO
+EDGE:
+
+    trades      38  ->  26  ->  15  ->  10
+    per trade -62.17 -> -14.65 -> +52.04 -> +209.02
+
+Per-trade improves monotonically as the count collapses. That is the section
+21 signature verbatim -- the gate is finding the door, not better trades.
+
+Three further reasons it is NOT deployed, despite +45.47/day against +18.47:
+
+  * The halves fail. Engine +155.89 / -64.94; the trades themselves +618.16 /
+    -200.12. Section 11's bar is both halves, and this misses it in both
+    frames.
+  * 0.50% and 0.75% share an IDENTICAL first half of +155.89. Every trade the
+    looser gate adds falls in the second half and loses, so the whole gain
+    rests on the same few early-sample days.
+  * The worst day gets WORSE, -717.60 to -897.00. The structure that pays
+    more when the decline continues also pays more when it does not.
+
+Ten trades in sixty sessions. Promoted to leading candidate with forward
+tracking, not deployed. What would change it: either half turning positive,
+or the count rising without the per-trade collapsing.
+
+AND THE MACRO HALF OF THE PROPOSAL CANNOT BE TESTED AT ALL. The request was
+"continuous decline AND bad macro". sweep.py hardcodes market_sentiment to
+GOOD, so every number above speaks to the price condition only. With
+TRADING_MACRO_LLM_GATE live as of today, that half now accumulates forward
+evidence instead of waiting on a backtest that cannot produce it.

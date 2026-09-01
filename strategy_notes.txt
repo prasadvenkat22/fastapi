@@ -3072,3 +3072,70 @@ This also supersedes the rough 2026-08-27 run that put ten of eleven names the
 wrong way. That comparison was unsound -- one day's implied against six months
 of realised, with an earnings gap inside the window -- and the period-matched
 replacement simply has no data yet. Neither number should be cited.
+
+--------------------------------------------------------------------------------
+49. THE -8% STOP WAS TUNED TO A HARNESS ARTEFACT  (2026-09-01)
+--------------------------------------------------------------------------------
+
+Section 43 called the stop overshoot the dominant loss channel and put the fix
+at +15 to +30 a day. That estimate was arrived at by taking the 19 existing
+losers and scaling their realised losses back to the -8% setting. IT ASSUMED
+THE SAME TRADES WOULD STILL HAPPEN. They do not.
+
+The harness evaluates exits once per BAR, so a 5-minute bar is a stop checked
+every five minutes while the deployed engine now checks every ten seconds.
+SWEEP_INTRABAR_STOPS closes the gap without finer data: the position is priced
+at the bar's ADVERSE extreme -- low for a long, high for a short -- and if that
+breaches the stop the trade closes AT THE STOP LEVEL. Optimistic bound on
+precision; the bar close is the pessimistic one; live sits between.
+
+    morning solo, stop waits for the bar close   28 tr  +44.57/day  19 losers  mean -29.6%
+    morning solo, stop fires at its setting      39 tr  -14.17/day  37 losers  mean -12.3%
+
+THE MEAN LOSS IMPROVES EXACTLY AS PREDICTED AND THE STRATEGY TURNS NEGATIVE.
+Trade count goes 28 to 39 and 37 of the 39 lose. A precise stop does not cut
+the same losses smaller; it creates NEW stop-outs from positions the slow stop
+let ride through a dip into a win. The overshoot was not purely a defect. It
+was accidentally functioning as a much wider stop, and the strategy was
+depending on it.
+
+THE STOP WIDTH SCAN, both resolutions:
+
+    width    precise      5-minute     gap
+     -8%    -11.89/day   +37.49/day   $49
+    -15%     -3.55/day   +24.76/day   $28
+    -25%    +24.74/day   +21.89/day    $3
+    -35%    +14.80/day   +14.06/day    $0.74
+
+READ THE GAP COLUMN, NOT THE ROWS. At -8% the answer swings by 49 dollars a
+day on measurement resolution alone. At -25% it barely moves. The +37.49 that
+justified the deployed stop DEPENDS ON THE STOP NOT WORKING PROPERLY --
+tighten execution and the same cell reads -11.89. A parameter whose value
+comes from an artefact of the harness is not a parameter anyone owns.
+
+DEPLOYED: STOP -25%, EXIT POLLING BACK ON AT 10s. That pair earns 22 to 25 a
+day whichever way the stop is modelled. It gives up about 13 a day of nominal
+average against -8%/no-poller, in exchange for a number that survives contact
+with a stop that actually fires.
+
+THE SEQUENCE OF ERRORS IS WORTH RECORDING because each looked reasonable:
+
+  1. Section 24 chose -10% (later -8%) from a scan run at bar-close
+     resolution, so the whole curve described a stop that fires late.
+  2. Section 43 diagnosed the overshoot as pure loss and sized the fix by
+     rescaling existing losers -- arithmetic that cannot see trades that
+     would no longer exist.
+  3. The poller was deployed on that estimate, which would have tightened the
+     effective stop from roughly -28% to -8% on live money.
+  4. Nothing traded between the deploy and this measurement, so it cost
+     nothing. That is luck, not process.
+
+AND THE WIDE STOPS DO NOT FAIL, THEY STOP TRADING. -50% takes 0.14 trades a
+day and -70% takes zero. Section 8's risk share sizes so one stop-out cannot
+exceed the window's budget, so a wider stop means more risk per contract and
+the quantity calculation collapses to zero. Those rows are about sizing, not
+about stop width, and should not be read as evidence either way.
+
+STILL OPEN. The stall rule at 5min/5pt was measured against a -8% stop at
+bar-close resolution and has not been re-checked at -25% with the poller on.
+Its arms should be re-run before its cost is quoted again.

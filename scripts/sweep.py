@@ -171,6 +171,30 @@ COMMISSION_ROUNDTRIP = 0.014
 # place for it.
 STAND_DOWN_AFTER_RIDE_RATCHET = False
 
+# MODEL A STOP THAT ACTUALLY FIRES AT ITS SETTING.
+#
+# The harness evaluates exits once per BAR. On 5-minute bars that is a stop
+# checked every five minutes, and the deployed engine now checks every ten
+# seconds. The gap is not cosmetic: measured over 60 sessions the 19 losing
+# morning trades realised a MEAN of -28.3% against a stop set to -8%, and
+# the worst realised -66.4% inside a single bar. Every counter-trend idea
+# tested here -- a 09:45 start, the bullish band bounce, the stall rule --
+# fails through exactly that overshoot, so the harness has been penalising
+# them for a defect the live engine no longer has.
+#
+# 1-minute bars cannot fix it: yfinance serves seven days of them and this
+# sample is sixty sessions. But the bars carry HIGH and LOW, so the
+# question 'would the stop level have been touched inside this bar' is
+# answerable without finer data.
+#
+# On, the position is priced at the bar's ADVERSE extreme -- the low for a
+# long, the high for a short -- and if that breaches the stop the trade is
+# closed AT THE STOP LEVEL rather than at the bar close. That is the
+# optimistic bound: a perfect stop. Off is the pessimistic bound: a stop
+# that waits five minutes. The live engine sits between them, nearer the
+# optimistic end, and reporting both is more honest than picking one.
+INTRABAR_STOPS = os.getenv("SWEEP_INTRABAR_STOPS", "false").lower() == "true"
+
 # STALLED-PEAK EXIT. Book when the profit curve stops making new highs.
 #
 # Different from a ratchet, which fires on giveback alone and therefore
@@ -451,6 +475,21 @@ def _mark(position, spot: float) -> float:
                                             position.short_strike, spot), "sell")
 
 
+def _stop_pct_for(position):
+    """The stop this position is actually managed by, as a negative percent.
+
+    Read from the window that OPENED it, not from whatever window the clock is
+    in -- the same rule the engine's own exit ladder follows. Returns None when
+    the playbook is unknown, which makes the intrabar check a no-op rather
+    than a guess.
+    """
+    name = (position.playbook or "").split(":")[0]
+    for w in PB.WINDOWS:
+        if w.name == name:
+            return w.stop_loss_pct
+    return None
+
+
 def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
     """One session through the engine. Returns the trades it closed."""
     _Account.open_session()
@@ -474,6 +513,37 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
             # rules run; without both, every exit that reads the peak is blind.
             position.current_net_value = _mark(position, spot)
             position.peak_return_pct = max(position.peak_return_pct, position.return_pct)
+
+            # Would the stop have been touched INSIDE this bar? See
+            # INTRABAR_STOPS above. Checked before the agent runs, because a
+            # stop that fires mid-bar fires before anything the bar close
+            # would have decided.
+            if INTRABAR_STOPS and entry is not None:
+                stop_pct = _stop_pct_for(position)
+                if stop_pct is not None and stop_pct < 0:
+                    long_side = not is_credit(position.strategy)
+                    adverse = float(day_bars["Low"].iloc[i] if long_side
+                                    else day_bars["High"].iloc[i])
+                    worst = _mark(position, adverse)
+                    debit = entry["debit"]
+                    worst_pct = ((worst - debit) / debit * 100.0) if debit else 0.0
+                    if worst_pct <= stop_pct:
+                        # Filled AT the stop, not at the bar's extreme: that is
+                        # what a stop checked every ten seconds achieves, and
+                        # the extreme is the five-minute answer this exists to
+                        # replace.
+                        stop_value = debit * (1.0 + stop_pct / 100.0)
+                        broker.sell_all(position.underlying)
+                        closed = _close(entry, position, spot, ts, "STOP_LOSS")
+                        per = (stop_value - debit) - SLIPPAGE_ROUNDTRIP - COMMISSION_ROUNDTRIP
+                        closed["pnl"] = round(per * entry["qty"] * 100, 2)
+                        closed["pct"] = round(per / debit * 100, 2) if debit else 0.0
+                        _Account.book(closed["pnl"])
+                        _Cooldown.book(closed["strategy"], closed["pnl"], ts)
+                        trades.append(closed)
+                        entry = None
+                        _stall.update(peak=-1e9, at=None)
+                        continue
 
         try:
             state = _session_state(seen)

@@ -3015,3 +3015,60 @@ so the gate can never be the sole blocker on a short.
 After a few weeks this answers the question no replay can: did the refused
 setups win? Until then the gate stays on and the stop fix stays untested,
 which is the price of the patient option and should be recorded as such.
+
+--------------------------------------------------------------------------------
+48. THE FIRST FULL MULTI-SYMBOL COHORT, AND THE FIRST RV/IV NUMBER
+    (2026-09-01)
+--------------------------------------------------------------------------------
+
+Twelve symbols, three structures each, opened 2026-08-28 at 15:45 for the
+2026-09-04 expiry. Marked as of 2026-09-01:
+
+    WEEKLY_CALL     n=12   avg  +33.2%   winners 10/12   worst -284.6  best +100.0
+    WEEKLY_PUT      n=12   avg -126.7%   winners  4/12   worst -570.0  best  +87.5
+    WEEKLY_CONDOR   n=12   avg  -28.5%   winners  6/12   worst -141.7  best  +62.5
+
+    per name, call / put:  MRVL +91.9 / -187.4    AMZN +98.9 / -570.0
+                           GOOGL +96.4 / -442.9   MSFT +90.9 / -230.8
+
+READ THIS AS A FACT ABOUT A DOWN WEEK, NOT ABOUT THE WINGS. The market fell
+between the marks and now, so every short call printed and every short put was
+run over. One directional week says nothing about either wing's expected
+value, and it INVERTS the five-year measurement in section 22, where the
+0.12-delta call finished ITM 20.9% against 11.7% priced (EV -11.00) and the
+put was roughly fair (EV +8.14). Five years beats one week and the sign
+should not be read from this cohort.
+
+WHAT IT DOES CONFIRM is structural rather than directional: the CONDOR sits
+between its wings at -28.5%, the arithmetic sum of a +33.2% side and a -126.7%
+one. That is section 22's argument -- a condor pairs a good wing with a bad
+one and reports the average as a single number -- appearing in live marks for
+the first time.
+
+NO sig_ COLUMNS ON THIS COHORT. The signal recording deployed 2026-08-29,
+after these rows were written. The 2026-09-04 Friday cohort is the first that
+will carry trend, EMA cross, Bollinger zone, RSI, 5-day move, realised vol
+and per-variant RV/IV.
+
+THE FIRST PERIOD-MATCHED RV/IV NUMBER, 21 snapshots, 4-day horizon:
+
+    sym   pairs  sessions  implied  realised  RV/IV  breach  verdict
+    QQQ       9         6    2.44%     1.00%   0.41      0%  sells well
+    all 11 single names: 0 pairs -- too few to say anything
+
+QQQ AT 0.41 IS A STRONG VARIANCE RISK PREMIUM and the first direct evidence
+for the weekly put spread proposed in section 34 -- implied 2.44% against
+realised 1.00%. It is also 9 pairs across 6 sessions with overlapping
+horizons, which is closer to one or two independent observations than nine.
+The script says so in its own output and it should be believed.
+
+EVERY SINGLE NAME HAS ZERO PAIRS. Multi-symbol capture began 2026-08-27 and a
+4-day horizon needs four trading days of realised move, so the first
+single-name pairs land in the first days of September. Until they do there is
+no evidence about any of the eleven names, and section 34's refusal to
+propose a single-name strategy stands unchanged.
+
+This also supersedes the rough 2026-08-27 run that put ten of eleven names the
+wrong way. That comparison was unsound -- one day's implied against six months
+of realised, with an earnings gap inside the window -- and the period-matched
+replacement simply has no data yet. Neither number should be cited.

@@ -291,3 +291,12 @@ class WeeklyShadow(Base):
     sig_index_bb_zone = Column(String, nullable=True)
     sig_index_rsi14 = Column(Float, nullable=True)
     sig_index_move_5d_pct = Column(Float, nullable=True)
+
+    # The live order behind this row, when it was actually traded. NULL on
+    # every observation-only row, which is all of them before 2026-09-01.
+    # live_qty is what FILLED, not what was requested: Tradier clamps and
+    # can fill partially, and the close has to be sized on the fill.
+    live_order_id = Column(String, nullable=True)
+    live_qty = Column(Integer, nullable=True)
+    live_close_order_id = Column(String, nullable=True)
+    live_closed_at = Column(DateTime(timezone=True), nullable=True)

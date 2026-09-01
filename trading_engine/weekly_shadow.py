@@ -1,8 +1,27 @@
-"""Weekly credit structures across many underlyings, observed and never traded.
+"""Weekly credit structures across many underlyings, mostly observed.
 
 Started as a QQQ call spread and now marks CALL, PUT and CONDOR on every
-symbol in TRADING_WEEKLY_SYMBOLS. Nothing here places an order or consumes
-buying power; it writes rows on Friday and marks them until expiry.
+symbol in TRADING_WEEKLY_SYMBOLS, writing rows on Friday and marking them
+until expiry.
+
+OBSERVATION-ONLY BY DEFAULT, AND ONE NARROW SLICE CAN TRADE. TRADING_WEEKLY_LIVE
+is false unless set; when true, only the symbols in TRADING_WEEKLY_LIVE_SYMBOLS
+(QQQ) and variants in TRADING_WEEKLY_LIVE_VARIANTS (PUT) place orders, at
+TRADING_WEEKLY_LIVE_CONTRACTS size. Everything else on every other row stays a
+pure observation and consumes no buying power.
+
+The slice is narrow because it is the only part with affirmative evidence: 5
+years of 5-day outcomes give the 0.12-delta put EV +8.14 a contract against
+the call's -11.00, and the first period-matched RV/IV put QQQ at 0.41 --
+implied 2.44% against realised 1.00%. Every single name had ZERO RV/IV pairs
+as of 2026-09-01. A CONDOR is refused outright by _maybe_trade: it pairs the
+good wing with the bad one.
+
+A LIVE ROW IS ALWAYS CLOSED BEFORE EXPIRATION. Carried through, a credit
+spread with spot inside the short strike is assigned 100 shares a contract on
+a physically settled underlying -- roughly one week in eight at a 0.12 delta,
+in an account that cannot cover it. TRADING_WEEKLY_CLOSE_BY is the five-day
+equivalent of the 0DTE book's 15:45 force close and is not optional.
 
 WHY ALL THREE STRUCTURES, PER SYMBOL. On QQQ the two sides are not
 symmetric and the asymmetry is measured, not assumed: over 5 years of 5-day
@@ -50,8 +69,9 @@ prices they are about 38% larger. A near strike is gapped through while the
 position cannot be managed, hedged or stopped for sixty-five hours. A
 0.12-delta strike needs a gap most weekends never produce.
 
-Nothing here places an order or consumes buying power. It writes one row on
-Friday and marks it every cycle until expiry.
+That original note was written when nothing here could place an order. See the
+header for what changed: one narrow slice trades, everything else still just
+writes a row on Friday and marks it every cycle until expiry.
 """
 
 import logging
@@ -126,6 +146,44 @@ SYMBOLS = tuple(
 )
 TARGET_PCT = float(os.getenv("TRADING_WEEKLY_TARGET_PCT", "25.0"))
 MIN_CREDIT = float(os.getenv("TRADING_WEEKLY_MIN_CREDIT", "0.10"))
+
+# ---------------------------------------------------------------- LIVE
+# This book has been observation-only since it was written. These knobs
+# let ONE narrow slice of it trade for real, and everything defaults to
+# off so an unset environment behaves exactly as before.
+#
+# WHY SO NARROW. Only the QQQ PUT side has affirmative evidence: over 5
+# years of 5-day outcomes the 0.12-delta put finished ITM 12.3% against
+# 11.4% priced (EV +8.14 a contract) while the CALL finished 20.9%
+# against 11.7% (EV -11.00), and the first period-matched RV/IV put QQQ
+# at 0.41 -- implied 2.44% against realised 1.00%. Every single name has
+# ZERO RV/IV pairs as of 2026-09-01, and a condor pairs the good wing
+# with the bad one. See sections 22, 34 and 48.
+LIVE = os.getenv("TRADING_WEEKLY_LIVE", "false").lower() == "true"
+LIVE_SYMBOLS = frozenset(
+    v.strip().upper()
+    for v in os.getenv("TRADING_WEEKLY_LIVE_SYMBOLS", "QQQ").split(",")
+    if v.strip()
+)
+LIVE_VARIANTS = frozenset(
+    v.strip().upper()
+    for v in os.getenv("TRADING_WEEKLY_LIVE_VARIANTS", "PUT").split(",")
+    if v.strip()
+)
+LIVE_CONTRACTS = int(os.getenv("TRADING_WEEKLY_LIVE_CONTRACTS", "1"))
+
+# CLOSE BEFORE EXPIRY, ALWAYS. A put credit spread carried through
+# expiration with spot below the short strike is ASSIGNED -- 100 shares a
+# contract, on a physically settled underlying, in an account that cannot
+# cover it. At a 0.12 delta that is roughly one week in eight. The 0DTE
+# book has a 15:45 force close for the same reason; this is that rule for
+# a five-day hold, and it is not optional.
+_close_raw = os.getenv("TRADING_WEEKLY_CLOSE_BY", "15:30")
+try:
+    _ch, _cm = (int(x) for x in _close_raw.split(":"))
+    CLOSE_BY = time(_ch, _cm)
+except ValueError:
+    CLOSE_BY = time(15, 30)
 
 
 def _strike_spacing(chain) -> float:
@@ -258,6 +316,61 @@ def _price(chain, cs, cl, ps, pl):
             "call_side": sides["call"], "put_side": sides["put"]}
 
 
+def _maybe_trade(symbol, variant, expiry, cs, cl, ps, pl, priced):
+    """Place the opening order, if this row is in the live slice.
+
+    Returns (order_id, quantity) or (None, None). Every failure path returns
+    None: a weekly row that could not be ordered is still a perfectly good
+    observation, and the alternative -- a row asserting a position the broker
+    does not hold -- is the state _reconcile exists to scream about.
+
+    PUT ONLY BY DEFAULT, and the asymmetry is measured rather than assumed.
+    Over 5 years of 5-day outcomes the 0.12-delta call finished ITM 20.9%
+    against 11.7% priced; the put 12.3% against 11.4%. Selling the call side
+    is selling the index's own drift back to itself.
+    """
+    from . import tradier_orders
+
+    if not (LIVE and symbol.upper() in LIVE_SYMBOLS and variant.upper() in LIVE_VARIANTS):
+        return None, None
+    if variant.upper() == "CONDOR":
+        logger.warning("Weekly live: refusing CONDOR — it pairs the +8.14 wing "
+                       "with the -11.00 one. Not a structure to trade whole.")
+        return None, None
+
+    call_put = "call" if variant.upper() == "CALL" else "put"
+    short_strike = cs if call_put == "call" else ps
+    long_strike = cl if call_put == "call" else pl
+    if short_strike is None or long_strike is None:
+        return None, None
+
+    credit = round(max(priced["natural_sell"], 0.0), 2)
+    if credit < MIN_CREDIT:
+        return None, None
+    try:
+        res = tradier_orders.submit_vertical(
+            underlying=symbol, expiry=expiry, call_put=call_put,
+            long_strike=float(long_strike), short_strike=float(short_strike),
+            quantity=LIVE_CONTRACTS, opening=True,
+            limit_price=credit, is_credit=True, preview=False,
+        )
+    except Exception:
+        logger.exception("Weekly live: %s %s order FAILED — row stays an observation.",
+                         symbol, variant)
+        return None, None
+    oid = str(res.get("id")) if isinstance(res, dict) else None
+    if not oid:
+        logger.warning("Weekly live: %s %s returned no order id (%s) — treating as unfilled.",
+                       symbol, variant, res)
+        return None, None
+    logger.info(
+        "WEEKLY LIVE ORDER %s: %s %s %s short %s / long %s x%d at %.2f credit — order %s",
+        symbol, variant, expiry, call_put, short_strike, long_strike,
+        LIVE_CONTRACTS, credit, oid,
+    )
+    return oid, LIVE_CONTRACTS
+
+
 def _maybe_open(db, now: datetime, symbol: str) -> None:
     if now.weekday() != ENTRY_WEEKDAY or now.time() < ENTRY_TIME:
         return
@@ -298,7 +411,15 @@ def _maybe_open(db, now: datetime, symbol: str) -> None:
         # than losing the observation -- the credit and the strikes are the
         # part that cannot be reconstructed later.
         signals = weekly_signals.entry_signals(symbol, short_iv, now.date())
+
+        # THE ONE SLICE THAT TRADES. Everything else on this row stays an
+        # observation. Submitted BEFORE the row is written so a failed order
+        # leaves a clean shadow record rather than a row claiming a fill that
+        # never happened.
+        live_id, live_qty = _maybe_trade(symbol, variant, expiry, cs, cl, ps, pl,
+                                         priced)
         db.add(WeeklyShadow(
+            live_order_id=live_id, live_qty=live_qty,
             symbol=symbol, expiration=expiry, strategy=f"WEEKLY_{variant}",
             short_strike=cs, long_strike=cl,
             put_short_strike=ps, put_long_strike=pl,
@@ -365,10 +486,68 @@ def _mark(db, row: WeeklyShadow, now: datetime, chain, spot) -> None:
             "book here. Still marking to expiry to see whether holding beat it.",
             row.symbol, row.strategy, TARGET_PCT, ret,
         )
+
+    # A LIVE row has to actually be closed. Two triggers, and the second is
+    # not optional: the target, and the hard deadline on expiration day.
+    #
+    # Carried through expiration with spot inside the short strike, a credit
+    # spread is ASSIGNED -- 100 shares a contract on a physically settled
+    # underlying. At a 0.12 delta that is roughly one week in eight, and the
+    # account cannot cover it. The 0DTE book force-closes at 15:45 for exactly
+    # this reason; CLOSE_BY is that rule for a five-day hold.
+    if row.live_order_id and not row.live_closed_at:
+        expiring = now.date().isoformat() >= row.expiration
+        deadline = expiring and now.time() >= CLOSE_BY
+        if ret >= TARGET_PCT or deadline:
+            _close_live(db, row, now, priced, "deadline" if deadline else "target")
     db.commit()
 
     if now.date().isoformat() == row.expiration and now.time() >= time(15, 45):
         _settle(db, row, now)
+
+
+def _close_live(db, row: WeeklyShadow, now: datetime, priced, reason: str) -> None:
+    """Buy back a live weekly spread.
+
+    Priced at the natural BUY -- what closing actually costs -- not the mid.
+    The 0DTE book learned that on 2026-08-21, when a model mark of 0.20-0.34
+    drove exits while the market quoted 0.01-0.04.
+
+    A failure here is logged and left for the next cycle rather than raised:
+    the cycle runs every minute and CLOSE_BY leaves room before the bell, so
+    one bad request is recoverable. What is NOT recoverable is an exception
+    escaping into the trading cycle from a book that otherwise only takes
+    notes.
+    """
+    from . import tradier_orders
+
+    call_put = "call" if row.strategy.endswith("CALL") else "put"
+    short_strike = row.short_strike if call_put == "call" else row.put_short_strike
+    long_strike = row.long_strike if call_put == "call" else row.put_long_strike
+    if short_strike is None or long_strike is None:
+        return
+    cost = round(max(priced.get("natural_buy", priced["mid"]), 0.01), 2)
+    try:
+        res = tradier_orders.submit_vertical(
+            underlying=row.symbol, expiry=row.expiration, call_put=call_put,
+            long_strike=float(long_strike), short_strike=float(short_strike),
+            quantity=int(row.live_qty or 1), opening=False,
+            limit_price=cost, is_credit=True, preview=False,
+        )
+    except Exception:
+        logger.exception(
+            "WEEKLY LIVE CLOSE FAILED for %s %s (%s) — retrying next cycle. If "
+            "this is the deadline, close it by hand before the bell.",
+            row.symbol, row.strategy, reason,
+        )
+        return
+    row.live_close_order_id = str(res.get("id")) if isinstance(res, dict) else None
+    row.live_closed_at = now
+    logger.info(
+        "WEEKLY LIVE CLOSE %s %s (%s) — bought back x%d at %.2f, order %s.",
+        row.symbol, row.strategy, reason, int(row.live_qty or 1), cost,
+        row.live_close_order_id,
+    )
 
 
 def _settle(db, row: WeeklyShadow, now: datetime) -> None:

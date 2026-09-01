@@ -2960,3 +2960,58 @@ or ATM long with negative theta, a credit spread whose loss is not already
 capped, or a return distribution with a middle. This engine is a capped long
 call with a tight stop plus a two-sided credit window worth about a dollar a
 day. Generic 0DTE advice is written for neither.
+
+--------------------------------------------------------------------------------
+47. THE FIRST TWO SESSIONS AFTER THE DEPLOY: NOTHING TRADED  (2026-09-01)
+--------------------------------------------------------------------------------
+
+Three changes went live on 2026-08-29 -- the -8% stop with 10-second exit
+polling, the stalled-peak exit, and the macro LLM gate. After the first live
+session, 2026-08-31:
+
+    "Stalled peak" fires, ever      0
+    "exit poll" lines, ever         0
+    orders submitted since deploy   0
+
+NEITHER OF THE TWO CHANGES THAT MATTER HAS BEEN TESTED. The exit poller only
+runs while a position is open, so with no entries it has never executed a
+line. Friday's -18.1% fill against a -10% stop still stands unchallenged, and
+the stop overshoot remains the largest measured item on this engine -- 19
+losers realising a mean -28.3% against their setting -- with zero forward
+evidence either way.
+
+THE MACRO GATE IS THE REASON, AND IT IS NOT MARGINAL. Monday's morning window,
+130 cycles, counted by which CLEAN conditions were unmet:
+
+    50 cycles   needs [trend, ema9, vwap, band, macro]
+    41 cycles   needs [trend, vwap, band, macro]
+    15 cycles   needs [trend, ema9, band, macro]
+    10 cycles   needs [trend, macro]
+     5 cycles   needs [macro]              <- the gate alone refused these
+     4 cycles   needs [trend, band, macro]
+
+On five cycles every technical condition aligned and the verdict was the only
+thing standing in the way. Monday would have been a trade but for the gate.
+
+THE BIND. The gate went live on n=2 refusals that both happened to be losers,
+it cannot be swept (sweep.py hardcodes market_sentiment to GOOD), and its own
+verdict history ran ~100% BAD on five of nine sessions -- so two consecutive
+shutouts are its normal behaviour rather than a bad run. Meanwhile it is
+blocking the accumulation of evidence for the change with the largest measured
+value. Keeping it on is a choice to learn slowly about everything else.
+
+DECIDED: KEEP IT AND RECORD THE COUNTERFACTUAL. nodes.py now emits a distinct
+line whenever the verdict is the SOLE reason nothing opened:
+
+    MACRO REFUSED a bull setup [MORNING_DRIFT]: every other CLEAN condition
+    held (trend=... ema9=... vwap=... band=...) — verdict BAD, spot 715.13.
+    Counterfactual, no order placed.
+
+Spot is recorded so each refused trade's outcome can be reconstructed from
+bars afterwards, the way the shadow condor and the weekly book already work.
+It fires only on the bull side, correctly: clean_bear carries no macro term,
+so the gate can never be the sole blocker on a short.
+
+After a few weeks this answers the question no replay can: did the refused
+setups win? Until then the gate stays on and the stop fix stays untested,
+which is the price of the patient option and should be recorded as such.

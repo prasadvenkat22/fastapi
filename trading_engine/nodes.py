@@ -2151,6 +2151,34 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             f" — clean_bull needs {_misses[0]}, clean_bear needs {_misses[1]}",
         )
 
+        # THE MACRO GATE'S COUNTERFACTUAL, on its own greppable line.
+        #
+        # The gate went live 2026-08-28 on two refusals, both of which happened
+        # to be losers, and it cannot be swept: sweep.py hardcodes
+        # market_sentiment to GOOD, so no replay can ever price it. Its only
+        # possible evidence is forward, and forward evidence needs the refused
+        # trades recorded at the moment they are refused.
+        #
+        # Fires only when EVERY other CLEAN condition held and the verdict was
+        # the sole reason nothing opened -- the counterfactual trade, not a
+        # general complaint about a BAD reading. On 2026-08-31 that was 5 of
+        # 130 morning cycles, against 125 where the setup was failing anyway.
+        #
+        # Spot is recorded so the outcome can be reconstructed afterwards from
+        # bars alone, the way the shadow condor and weekly book are.
+        if tier is None and not halt:
+            for _dir, _miss in (("bull", _misses[0]), ("bear", _misses[1])):
+                if _miss == ["macro"]:
+                    logger.info(
+                        "MACRO REFUSED a %s setup [%s]: every other CLEAN condition held "
+                        "(trend=%s ema9=%s vwap=%s band=%s) — verdict %s, spot %s. "
+                        "Counterfactual, no order placed.",
+                        _dir,
+                        entry_window.name if entry_window is not None else "no window",
+                        sma, ema_cross, vwap_side, rsi_band, sentiment,
+                        state.get("qqq_close"),
+                    )
+
         if tier is not None:
             # Strike placement comes from the time-of-day window, so the same
             # signal produces a leveraged ATM structure during the morning

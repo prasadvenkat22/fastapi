@@ -268,6 +268,50 @@ def open_positions() -> list:
     return rows or []
 
 
+def opposing_leg(underlying: str, expiry, call_put: str, strike: float,
+                 want_long: bool) -> "dict | None":
+    """The account's existing position at this strike, if it opposes us.
+
+    Why this exists. On 2026-09-02 the engine tried to open a 708/718 call
+    debit spread. The account already held a MANUAL short 5x QQQ 708 from
+    earlier that morning, so the engine's buy_to_open on 708 read to Tradier
+    as covering an existing short:
+
+        "Buy order cannot be placed to cover short position, order must be
+         placed as a Buy to Cover."
+
+    The order was rejected, and the engine -- which had already written its
+    position row -- spent five hours trying to close a spread that never
+    existed. The row-rollback in service._open_rejected stops the phantom;
+    this stops the rejection.
+
+    The engine has always placed entries with no knowledge of what else the
+    account holds at that strike. It shares the account with a human. That is
+    the same blindness that had it size an entry as though the account were
+    empty while three other structures were open.
+
+    Returns the offending position dict, or None when the strike is clear.
+    Never raises: a lookup failure must not block an entry, because the
+    failure mode of over-blocking is silent and permanent.
+    """
+    try:
+        want = occ_symbol(underlying, expiry, call_put, strike)
+        for p in open_positions():
+            if p.get("symbol") != want:
+                continue
+            qty = float(p.get("quantity") or 0)
+            # We want to BUY and the account is short, or we want to SELL and
+            # the account is long. Same-direction holdings are fine -- adding
+            # to a position is not what Tradier refuses.
+            if (want_long and qty < 0) or ((not want_long) and qty > 0):
+                return p
+        return None
+    except Exception:
+        logger.exception("Opposing-leg check failed for %s %s — not blocking.",
+                         underlying, strike)
+        return None
+
+
 def quotes(symbols: list) -> dict:
     """Live quotes for a list of OCC symbols, keyed by symbol.
 

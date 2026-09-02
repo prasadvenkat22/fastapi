@@ -102,6 +102,39 @@ def _route_order(position_like, quantity: int, opening: bool, limit_price: float
 _DEAD_ORDER_STATES = {"rejected", "canceled", "cancelled", "expired", "error"}
 
 
+def _open_rejected(order_result: "dict | None") -> bool:
+    """Did the broker REFUSE this open?
+
+    The mirror of _close_rejected, and it should have existed at the same
+    time. Until 2026-09-02 an OPEN was pure shadow: the row was written
+    whatever the broker answered, which the docstring above called "a known
+    gap, visible as a RECONCILE line rather than as a corrected position".
+
+    On 2026-09-02 that gap cost a session. The entry order was rejected --
+
+        14:45:14.640755  OpenPosition row written: BULL_CALL_SPREAD 708/718 x3
+        14:45:14.730     order created
+        14:45:14.777     order REJECTED
+
+    -- and the row survived it by ninety milliseconds and five hours. The
+    engine then believed it held a spread that had never existed and spent the
+    afternoon trying to close it: 189 rejected two-leg buy_to_close orders
+    against a short 718 that was never opened, one every thirteen seconds.
+    Worse than the noise, the real book went unmanaged the whole time, because
+    the single position slot was occupied by a fiction.
+
+    A row written for a rejected open is not a divergence to be reported. It
+    is a position that does not exist, and the engine must not carry one.
+
+    Same conservatism as the close path: only an EXPLICIT refusal counts. An
+    order still working when the poll runs out is treated as standing and the
+    row is kept, because an open that fills after we declined to record it is
+    the worse failure -- that one leaves real contracts with nothing watching
+    them, which is precisely what this whole section is about.
+    """
+    return _close_rejected(order_result)
+
+
 def _close_rejected(order_result: "dict | None") -> bool:
     """Did the broker REFUSE this close?
 
@@ -422,26 +455,64 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
 
     if new_position is not None:
         if open_row is None:
-            _route_order(new_position, new_position.quantity, opening=True,
-                         limit_price=new_position.entry_net_debit,
-                         label=new_position.playbook or new_position.strategy)
-            db.add(OpenPosition(
-                strategy=new_position.strategy,
-                underlying=new_position.underlying,
-                quantity=new_position.quantity,
-                long_strike=new_position.long_strike,
-                short_strike=new_position.short_strike,
-                entry_net_debit=new_position.entry_net_debit,
-                playbook=final_state.get("playbook"),
-                entry_macd_signal=final_state.get("macd_signal"),
-                entry_sma_trend=final_state.get("sma_trend"),
-                entry_bollinger_zone=final_state.get("bollinger_zone"),
-                entry_rsi_zone=final_state.get("rsi_zone"),
-                # None rather than 0 when unsliced, so the column reads as
-                # "no plan" instead of "a plan with nothing left in it".
-                entry_tranche_qty=(final_state.get("entry_tranche_qty") or None),
-                entry_slices_remaining=(final_state.get("entry_slices_remaining") or None),
-            ))
+            # Does the account already hold something at these strikes that
+            # opposes the entry? See tradier_orders.opposing_leg -- a manual
+            # short on the long leg's strike is what got the 2026-09-02 entry
+            # rejected, and discovering that in a broker error is the
+            # expensive way to learn it.
+            _clash = None
+            if tradier_orders.LIVE_ORDERS:
+                _cp = option_type_for(new_position.strategy)
+                _long_is_bought = not is_credit(new_position.strategy)
+                for _strike, _want_long in ((new_position.long_strike, _long_is_bought),
+                                            (new_position.short_strike, not _long_is_bought)):
+                    _clash = tradier_orders.opposing_leg(
+                        new_position.underlying, today_expiry(), _cp, _strike, _want_long)
+                    if _clash:
+                        break
+            if _clash:
+                logger.error(
+                    "ENTRY BLOCKED [%s]: the account already holds %s x%s, which opposes "
+                    "this %s %.0f/%.0f. Not sending an order the broker would refuse.",
+                    new_position.playbook or new_position.strategy,
+                    _clash.get("symbol"), _clash.get("quantity"),
+                    new_position.strategy, new_position.long_strike,
+                    new_position.short_strike,
+                )
+                new_position = None
+            else:
+                _opened = _route_order(
+                    new_position, new_position.quantity, opening=True,
+                    limit_price=new_position.entry_net_debit,
+                    label=new_position.playbook or new_position.strategy)
+                if _open_rejected(_opened):
+                    # No row. See _open_rejected for the session this cost.
+                    logger.error(
+                        "ENTRY REJECTED [%s]: %s %.0f/%.0f x%d was refused by the broker — "
+                        "no position row written. The engine stays flat.",
+                        new_position.playbook or new_position.strategy,
+                        new_position.strategy, new_position.long_strike,
+                        new_position.short_strike, new_position.quantity,
+                    )
+                    new_position = None
+                else:
+                    db.add(OpenPosition(
+                        strategy=new_position.strategy,
+                        underlying=new_position.underlying,
+                        quantity=new_position.quantity,
+                        long_strike=new_position.long_strike,
+                        short_strike=new_position.short_strike,
+                        entry_net_debit=new_position.entry_net_debit,
+                        playbook=final_state.get("playbook"),
+                        entry_macd_signal=final_state.get("macd_signal"),
+                        entry_sma_trend=final_state.get("sma_trend"),
+                        entry_bollinger_zone=final_state.get("bollinger_zone"),
+                        entry_rsi_zone=final_state.get("rsi_zone"),
+                        # None rather than 0 when unsliced, so the column reads as
+                        # "no plan" instead of "a plan with nothing left in it".
+                        entry_tranche_qty=(final_state.get("entry_tranche_qty") or None),
+                        entry_slices_remaining=(final_state.get("entry_slices_remaining") or None),
+                    ))
         else:
             # Still the same position — unchanged (HOLD) or added to
             # (BUY_MORE). Updated in place so opened_at and the entry signals

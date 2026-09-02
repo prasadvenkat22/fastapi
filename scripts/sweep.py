@@ -208,11 +208,21 @@ INTRABAR_STOPS = os.getenv("SWEEP_INTRABAR_STOPS", "false").lower() == "true"
 # another high, then collapsed. A ratchet fires on the first dip; a stall
 # detector waits through dips and acts on the absence of progress.
 #
-# Harness only. Live it would need the peak's TIMESTAMP persisted on the
-# position row, which does not exist -- and two knobs shipped today that
-# silently did nothing are reason enough to measure before wiring.
-STALL_MINUTES = 0.0
-STALL_GIVEBACK_PCT = 0.0
+# No longer harness-only. The peak's TIMESTAMP now exists on the position
+# row (migration d1f7a03c9e84 added peak_at) and the rule is DEPLOYED at
+# TRADING_STALL_MINUTES=5 / TRADING_STALL_GIVEBACK_PCT=5.
+#
+# Read from those same two variables, so a sweep invoked with the live
+# environment models the live exit ladder instead of a version of it with
+# the stall switched off. Defaulting to 0 keeps every earlier reproduction
+# in strategy_notes.txt reproducible: a run without the variables behaves
+# exactly as it did when those sections were written.
+#
+# This was a silent divergence of the section-36 kind -- the harness modelled
+# a different engine from the deployed one and nothing in the output said so.
+# It is in the banner now.
+STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
+STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
 
 
 class _Clock:
@@ -234,33 +244,52 @@ class _Cooldown:
     every sweep run through it -- including any sweep of the cooldown itself.
     """
     minutes = 30.0
-    last_loss_at = None
-    last_loss_dir = None
+    win_minutes = 0.0
+    last_at = None
+    last_pnl = None
+    last_dir = None
     streak_today = 0
 
     BULLISH = ("BULL_CALL_SPREAD", "PUT_CREDIT_SPREAD")
 
     @classmethod
     def open_session(cls):
-        cls.last_loss_at = None
-        cls.last_loss_dir = None
+        cls.last_at = None
+        cls.last_pnl = None
+        cls.last_dir = None
         cls.streak_today = 0
 
     @classmethod
     def book(cls, strategy: str, pnl: float, ts):
+        # The LAST trade, win or lose -- not the last LOSS.
+        #
+        # This used to remember only losses, so a loss at 10:30 still blocked
+        # its direction at 10:50 even after a win at 10:40 had intervened.
+        # equity.blocked_direction reads a single row ordered by closed_at and
+        # returns None when that row is a win, so the harness was modelling a
+        # stickier cooldown than the deployed one. Same class of divergence as
+        # the stall exit and the sizing default: it ranked arms consistently
+        # and described an engine that does not exist.
+        cls.last_at, cls.last_pnl = ts, pnl
+        cls.last_dir = "bullish" if strategy in cls.BULLISH else "bearish"
         if pnl < 0:
-            cls.last_loss_at = ts
-            cls.last_loss_dir = "bullish" if strategy in cls.BULLISH else "bearish"
             cls.streak_today += 1
         else:
             cls.streak_today = 0
 
     @classmethod
     def blocked(cls):
-        if cls.last_loss_at is None or cls.minutes <= 0:
+        if cls.last_at is None or cls.minutes <= 0 or (cls.last_pnl or 0) >= 0:
             return None
-        age = (_Clock.now - cls.last_loss_at).total_seconds() / 60.0
-        return cls.last_loss_dir if age < cls.minutes else None
+        age = (_Clock.now - cls.last_at).total_seconds() / 60.0
+        return cls.last_dir if age < cls.minutes else None
+
+    @classmethod
+    def win_blocked(cls):
+        """Both directions, after a WINNING exit. equity.win_pause_active."""
+        if cls.last_at is None or cls.win_minutes <= 0 or (cls.last_pnl or 0) <= 0:
+            return False
+        return (_Clock.now - cls.last_at).total_seconds() / 60.0 < cls.win_minutes
 
     @classmethod
     def streak(cls):
@@ -356,6 +385,8 @@ def _patch_engine():
     CAL.datetime = _FakeDatetime
     N.blocked_direction = _Cooldown.blocked
     N.consecutive_losses_today = _Cooldown.streak
+    N.win_pause_active = _Cooldown.win_blocked
+    _Cooldown.win_minutes = float(os.getenv("TRADING_WIN_COOLDOWN_MINUTES", "0"))
     N.current_equity = lambda *_: _Account.state()
     # Observational only, and it would fire a live HTTP request per bar.
     N.log_price_divergence = lambda *a, **k: None
@@ -512,6 +543,13 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
             # service.py marks the position and ratchets its peak before the
             # rules run; without both, every exit that reads the peak is blind.
             position.current_net_value = _mark(position, spot)
+            # peak_at as well as peak_return_pct. service.py stamps both, and
+            # the credit stall (STALL_ON_CREDIT) reads the TIMESTAMP -- without
+            # it the rule sees peak_at=None, declines to disarm the target, and
+            # every arm of a sweep testing it returns identical numbers. That
+            # tell has cost three separate afternoons in this file already.
+            if position.return_pct > position.peak_return_pct or position.peak_at is None:
+                position.peak_at = _Clock.now
             position.peak_return_pct = max(position.peak_return_pct, position.return_pct)
 
             # Would the stop have been touched INSIDE this bar? See
@@ -574,7 +612,18 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
 
         if before is None and after is not None:
             entry = {"ts": ts, "strategy": after.strategy, "qty": after.quantity,
-                     "debit": after.entry_net_debit, "playbook": after.playbook}
+                     "debit": after.entry_net_debit, "playbook": after.playbook,
+                     # The zone reading AT THE MOMENT OF ENTRY. _close does
+                     # {**entry, ...}, so these ride into the trade record and
+                     # sweep_zones can bucket outcomes by them without a second
+                     # replay. Recorded for every arm, read by one.
+                     "zone": state.get("zone"),
+                     "zone_extension": state.get("zone_extension"),
+                     "day_range_pos_pct": state.get("day_range_pos_pct"),
+                     "prior_change_pct": state.get("prior_change_pct"),
+                     "gap_pct": state.get("gap_pct"),
+                     "dist_day_high_pct": state.get("dist_day_high_pct"),
+                     "dist_day_low_pct": state.get("dist_day_low_pct")}
             _stall.update(peak=-1e9, at=None)
         elif before is not None and after is None and entry is not None:
             closed = _close(entry, before, spot, ts, out.get("exit_reason", ""))
@@ -2082,6 +2131,7 @@ def sweep_cooldown(sessions: dict):
         _report_daily(f"{minutes:.0f} min" + (" (current)" if minutes == 30 else ""),
                       per_day)
     _Cooldown.minutes = 30.0
+    _Cooldown.win_minutes = float(os.getenv("TRADING_WIN_COOLDOWN_MINUTES", "0"))
 
     print("")
     print("MORNING SIZE -- capital the debit window may deploy")
@@ -2684,6 +2734,329 @@ def sweep_regime(sessions: dict):
     N.RIDE_TAKE_PROFIT_PCT = base_tp
 
 
+def _zone_buckets(label: str, trades: list, key, order=None):
+    """Outcomes bucketed by one zone reading.
+
+    Halves are printed per bucket for the usual reason: a bucket that reverses
+    between the first and second half of its own trades is a statement about
+    two samples, not about the level.
+    """
+    buckets = {}
+    for t in trades:
+        k = key(t)
+        if k is None:
+            continue
+        buckets.setdefault(k, []).append(t)
+    if not buckets:
+        print(f"  {label}: no trades carried this reading")
+        return
+    print(f"  {label}")
+    keys = order or sorted(buckets)
+    for k in keys:
+        rows = buckets.get(k)
+        if not rows:
+            continue
+        n = len(rows)
+        tot = sum(r["pnl"] for r in rows)
+        wins = sum(1 for r in rows if r["pnl"] > 0)
+        half = n // 2
+        h1 = sum(r["pnl"] for r in rows[:half]) / max(half, 1)
+        h2 = sum(r["pnl"] for r in rows[half:]) / max(n - half, 1)
+        print(f"    {str(k):22s} {n:3d} tr  {wins / n * 100:3.0f}% win  "
+              f"{tot / n:+8.2f}/tr  {tot:+9.2f} tot  halves {h1:+7.2f}/{h2:+7.2f}")
+
+
+def sweep_zones(sessions: dict):
+    """Do fixed price levels predict anything the moving averages miss?
+
+    The proposal is the standard one: mark the day's high and low and the prior
+    day's close, and read where price sits against them before entering. The
+    engine has never had a fixed level of any kind -- every reading it owns is
+    a trailing-window statistic -- so this is a new KIND of input rather than a
+    variation on an existing one, which is the only reason it is worth the
+    twelfth column.
+
+    Two passes, in this order and not the other:
+
+    1. BUCKETS. Replay the deployed configuration unchanged and sort the trades
+       it already takes by the zone reading at entry. Cheap, and it says
+       whether there is any signal to gate on before a gate exists.
+
+    2. GATED ARMS. Only meaningful if the buckets separate. Bucketing and
+       gating are NOT the same measurement: dropping a trade from a bucket
+       leaves the other trades untouched, while refusing an entry frees the
+       position slot and a different trade takes it. A bucket that looks awful
+       can price out flat once the replacement trades are counted, which is
+       why the deployment decision is made on the arms and never on the
+       buckets.
+    """
+    print("")
+    print("ZONES -- fixed levels against the day's own range")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+
+    PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+    trades, per_day = _run_arm(sessions, dtime(10, 15))
+    _report_daily("deployed, unchanged", per_day)
+    print("")
+
+    longs = [t for t in trades if not is_credit(t["strategy"])]
+    print(f"  {len(trades)} trades, {len(longs)} of them debit/long")
+    print("")
+
+    def _quartile(t):
+        p = t.get("day_range_pos_pct")
+        if p is None:
+            return None
+        if p >= 75:
+            return "75-100 (at the high)"
+        if p >= 50:
+            return "50-75"
+        if p >= 25:
+            return "25-50"
+        return "0-25 (at the low)"
+
+    _zone_buckets("BY POSITION IN THE DAY'S RANGE -- all trades", trades, _quartile,
+                  order=["0-25 (at the low)", "25-50", "50-75", "75-100 (at the high)"])
+    print("")
+    _zone_buckets("BY POSITION IN THE DAY'S RANGE -- debit only", longs, _quartile,
+                  order=["0-25 (at the low)", "25-50", "50-75", "75-100 (at the high)"])
+    print("")
+    _zone_buckets("BY NEAREST LEVEL", trades, lambda t: t.get("zone"))
+    print("")
+    _zone_buckets("BY PRIOR-DAY RANGE EXTENSION", trades, lambda t: t.get("zone_extension"))
+    print("")
+
+    def _gap(t):
+        g = t.get("gap_pct")
+        if g is None:
+            return None
+        return "gap up >0.3%" if g > 0.3 else ("gap down <-0.3%" if g < -0.3 else "flat open")
+
+    _zone_buckets("BY OVERNIGHT GAP", trades, _gap,
+                  order=["gap down <-0.3%", "flat open", "gap up >0.3%"])
+    print("")
+
+    def _prior(t):
+        c = t.get("prior_change_pct")
+        if c is None:
+            return None
+        return "up vs prior close" if c > 0 else "down vs prior close"
+
+    _zone_buckets("BY PRIOR-DAY CHANGE", trades, _prior)
+
+    # ---- the arms, which are what a deployment decision reads ----
+    print("")
+    print("  GATED ARMS -- refusing a long in the top of the day's range")
+    print("  (a refused entry frees the slot, so these are NOT the buckets above)")
+    base = (N.ZONE_MAX_RANGE_POS_LONG, N.ZONE_MIN_RANGE_POS_SHORT,
+            N.ZONE_MIN_RANGE_POS_LONG, N.ZONE_MAX_RANGE_POS_SHORT)
+
+    def _arm(label, max_long=100, min_short=0, min_long=0, max_short=100,
+             inside=False, max_gap=0.0):
+        N.ZONE_MAX_RANGE_POS_LONG = max_long
+        N.ZONE_MIN_RANGE_POS_SHORT = min_short
+        N.ZONE_MIN_RANGE_POS_LONG = min_long
+        N.ZONE_MAX_RANGE_POS_SHORT = max_short
+        N.ZONE_REQUIRE_INSIDE_PRIOR_RANGE = inside
+        N.ZONE_MAX_GAP_PCT = max_gap
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        _, pd_ = _run_arm(sessions, dtime(10, 15))
+        _report_daily(label, pd_)
+
+    _arm("all gates off  (deployed)")
+    print("")
+    print("  DO NOT BUY THE HIGH -- refusing a long in the top of the range")
+    for cap in (90, 80, 70):
+        _arm(f"no long above {cap}% of range", max_long=cap)
+    print("")
+    print("  ONLY BUY STRENGTH -- the opposite rule, refusing a long in the bottom")
+    for floor_ in (30, 50, 70):
+        _arm(f"no long below {floor_}% of range", min_long=floor_)
+    print("")
+    print("  THE SHORT SIDE, both directions")
+    for floor_ in (20, 30):
+        _arm(f"no short below {floor_}% of range", min_short=floor_)
+    for cap in (80, 70):
+        _arm(f"no short above {cap}% of range", max_short=cap)
+
+    # The two readings that held their sign across both halves as BUCKETS.
+    # Bucketing is not gating: these arms are the only thing that prices them,
+    # because a refused entry frees the slot for a different trade.
+    print("")
+    print("  THE TWO THAT SURVIVED THE HALVES -- priced as gates")
+    _arm("only inside yesterday's range", inside=True)
+    for g in (0.5, 0.3, 0.2):
+        _arm(f"no entry after a gap over {g}%", max_gap=g)
+    _arm("inside range AND gap under 0.3%", inside=True, max_gap=0.3)
+
+    (N.ZONE_MAX_RANGE_POS_LONG, N.ZONE_MIN_RANGE_POS_SHORT,
+     N.ZONE_MIN_RANGE_POS_LONG, N.ZONE_MAX_RANGE_POS_SHORT) = base
+    N.ZONE_REQUIRE_INSIDE_PRIOR_RANGE, N.ZONE_MAX_GAP_PCT = False, 0.0
+
+
+def sweep_bookrenter(sessions: dict):
+    """Book the morning ride at a fixed target, pause, then re-enter.
+
+    THREE THINGS CHANGE AT ONCE and the sweep separates them:
+
+      1. A fixed take-profit exists at all. MORNING_DRIFT currently rides --
+         only the stall, the ceiling, the stop and the 13:25 handoff end it.
+      2. The level of that target.
+      3. A pause after a WINNING exit, which did not exist in any form. The
+         30-minute cooldown in equity.py fires on losses only, on the stated
+         grounds that a winning setup needs no cooling off.
+
+    Section 36 already measured (1) at bar-close pricing and it was expensive:
+    +7.62 a day with a +50% take-profit against +113.23 with it off. That
+    measurement had no pause and no re-entry, which is exactly the thing being
+    proposed here, so it does not settle the question -- it only says the
+    take-profit has to EARN back a large deficit from the shots that follow it.
+
+    Run at the live configuration, so intrabar stops and the stall exit are
+    both on. That baseline is negative over these sessions (section 44), which
+    means every figure here should be read as a RANKING and not as a forecast.
+    """
+    print("")
+    print("BOOK AT A TARGET, PAUSE, RE-ENTER")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base_tp, base_win = N.RIDE_TAKE_PROFIT_PCT, _Cooldown.win_minutes
+
+    def _arm(label, tp, pause):
+        N.RIDE_TAKE_PROFIT_PCT = tp
+        _Cooldown.win_minutes = pause
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        trades, per_day = _run_arm(sessions, dtime(10, 15))
+        tps = sum(1 for t in trades if t["reason"] == "TAKE_PROFIT")
+        _report_daily(f"{label}  [{len(trades)} tr, {tps} booked at target]", per_day)
+
+    _arm("ride, no target  (deployed)", 0.0, 0.0)
+    print("")
+    print("  THE ASK: book at +50%, pause 30 min, re-enter")
+    _arm("+50% target, 30 min pause", 50.0, 30.0)
+    print("")
+    print("  IS IT THE TARGET OR THE PAUSE? -- pause length at a +50% target")
+    for pause in (0.0, 15.0, 30.0, 45.0, 60.0):
+        _arm(f"+50% target, {pause:.0f} min pause", 50.0, pause)
+    print("")
+    print("  THE TARGET LEVEL, at a 30-minute pause")
+    for tp in (30.0, 40.0, 50.0, 60.0, 75.0):
+        _arm(f"+{tp:.0f}% target, 30 min pause", tp, 30.0)
+
+    N.RIDE_TAKE_PROFIT_PCT, _Cooldown.win_minutes = base_tp, base_win
+
+
+def sweep_zonetier(sessions: dict):
+    """The ZONE tier: enter off a level that has held, not off the averages.
+
+    Every existing tier is a trend read. This one asks whether the session's
+    floor has been TESTED AND HELD -- old low, real lift off it, VWAP agreeing
+    -- which is visible while the moving averages are still catching up to the
+    reversal that made the floor.
+
+    It can only ADD trades: it sits below CLEAN in the ladder, so a cycle CLEAN
+    would have taken is still attributed to CLEAN. That makes the measurement
+    unusually clean for this engine -- the question is simply whether the extra
+    entries pay, with no confounding from trades that moved between tiers.
+
+    THE MACRO ARM IS THE ONE THAT MATTERS. CLEAN's bullish side requires a GOOD
+    verdict, and on 2026-09-02 the verdict was BAD from the open until 10:17,
+    which is the entire window in which this tier would have fired early. Keep
+    the requirement and the tier mostly cannot act on the mornings it was built
+    for; drop it and it is a materially looser engine. Both arms, no assumption.
+    """
+    print("")
+    print("ZONE ENTRY TIER -- a level that held, rather than an average")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base = (N.ZONE_ENTRIES_ENABLED, N.ZONE_HOLD_MINUTES, N.ZONE_BOUNCE_MIN_PCT,
+            N.ZONE_BOUNCE_MAX_PCT, N.ZONE_REQUIRE_MACRO)
+
+    def _arm(label, on=True, hold=20.0, lo=0.15, hi=0.60, macro=True):
+        N.ZONE_ENTRIES_ENABLED = on
+        N.ZONE_HOLD_MINUTES, N.ZONE_BOUNCE_MIN_PCT = hold, lo
+        N.ZONE_BOUNCE_MAX_PCT, N.ZONE_REQUIRE_MACRO = hi, macro
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        trades, per_day = _run_arm(sessions, dtime(10, 15))
+        zt = [t for t in trades if str(t.get("playbook", "")).endswith("ZONE")]
+        extra = ""
+        if zt:
+            tot = sum(t["pnl"] for t in zt)
+            extra = f"  [{len(zt)} ZONE tr, {tot:+.0f} from them]"
+        _report_daily(label + extra, per_day)
+
+    _arm("ZONE off  (deployed)", on=False)
+    print("")
+    print("  MACRO STILL REQUIRED, as CLEAN's bullish side requires it")
+    for hold in (10.0, 20.0, 30.0):
+        _arm(f"ZONE on, low {hold:.0f} min old", hold=hold, macro=True)
+    print("")
+    print("  MACRO NOT REQUIRED -- the loosening, priced")
+    for hold in (10.0, 20.0, 30.0):
+        _arm(f"ZONE on, low {hold:.0f} min old, no macro", hold=hold, macro=False)
+    print("")
+    print("  HOW FAR OFF THE LEVEL IS STILL 'AT' IT (20 min, no macro)")
+    for hi in (0.40, 0.60, 1.00, 2.00):
+        _arm(f"ZONE on, bounce up to {hi:.2f}%", hold=20.0, hi=hi, macro=False)
+
+    (N.ZONE_ENTRIES_ENABLED, N.ZONE_HOLD_MINUTES, N.ZONE_BOUNCE_MIN_PCT,
+     N.ZONE_BOUNCE_MAX_PCT, N.ZONE_REQUIRE_MACRO) = base
+
+
+def sweep_creditstall(sessions: dict):
+    """Let the afternoon credit trade RIDE past its target, as the morning does.
+
+    The stalled-peak rule lives inside the ride branch, so only MORNING_DRIFT
+    has ever had it. The credit window books the moment it touches
+    final_take_profit_pct, and production sets that to 50 -- the same level
+    that is supposed to ARM the trail, collapsing the designed 50-to-90 band to
+    nothing. The code comment beside it already records the cost: a spread
+    booked at +51% was worth +72% forty-five minutes later.
+
+    With STALL_ON_CREDIT the target arms instead of firing, and the position is
+    booked when the profit curve stops climbing.
+
+    Read the STALL count in the exit mix, not just the dollars: if it stays at
+    zero the rule is not engaging and the arms are measuring nothing.
+    """
+    global STALL_MINUTES, STALL_GIVEBACK_PCT
+    print("")
+    print("CREDIT STALL -- target arms the exit rather than firing it")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base_on, base_m, base_g = N.STALL_ON_CREDIT, STALL_MINUTES, STALL_GIVEBACK_PCT
+
+    def _arm(label, on, minutes, giveback):
+        global STALL_MINUTES, STALL_GIVEBACK_PCT
+        N.STALL_ON_CREDIT = on
+        N.STALL_MINUTES, N.STALL_GIVEBACK_PCT = minutes, giveback
+        STALL_MINUTES, STALL_GIVEBACK_PCT = minutes, giveback
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        trades, per_day = _run_arm(sessions, dtime(10, 15))
+        cr = [t for t in trades if is_credit(t["strategy"])]
+        mix = {}
+        for t in cr:
+            mix[t["reason"]] = mix.get(t["reason"], 0) + 1
+        tot = sum(t["pnl"] for t in cr)
+        extra = f"  [{len(cr)} credit tr {tot:+.0f}, {mix}]"
+        _report_daily(label + extra, per_day)
+
+    _arm("books at target  (deployed)", False, 5.0, 5.0)
+    print("")
+    print("  TARGET ARMS, STALL BOOKS -- how long to wait for a new high")
+    for m in (3.0, 5.0, 8.0, 12.0):
+        _arm(f"arm, book after {m:.0f} min quiet", True, m, 5.0)
+    print("")
+    print("  HOW MUCH GIVEBACK COUNTS AS STALLED (5 min quiet)")
+    for g in (2.0, 5.0, 10.0, 20.0):
+        _arm(f"arm, {g:.0f} pts off the peak", True, 5.0, g)
+
+    N.STALL_ON_CREDIT = base_on
+    N.STALL_MINUTES, N.STALL_GIVEBACK_PCT = base_m, base_g
+    STALL_MINUTES, STALL_GIVEBACK_PCT = base_m, base_g
+
+
 def sweep_indicators(sessions: dict):
     """Two indicator definitions the engine never examined, from outside notes.
 
@@ -3172,6 +3545,17 @@ def _config_banner() -> None:
           f"   equity {EQUITY:,.0f}   contract cap {_N.MAX_CONTRACTS if hasattr(_N, 'MAX_CONTRACTS') else 'n/a'}")
     print(f"    morning stop     {_N.RIDE_TAKE_PROFIT_PCT:+.0f}% take-profit"
           f"   credit floor {_N.MIN_CREDIT:.2f}   short delta {_N.CREDIT_SHORT_DELTA:.2f}")
+    # The exit ladder and the morning geometry, for the same reason the sizing
+    # is here: they set the magnitude of every figure below and they are the
+    # settings most easily left at a default that is not the deployed one.
+    _mw = next((w for w in PB.WINDOWS if w.name == "MORNING_DRIFT"), None)
+    print(f"    stall exit       {STALL_MINUTES:.0f} min / {STALL_GIVEBACK_PCT:.0f}% giveback"
+          f"   intrabar stops {'on' if INTRABAR_STOPS else 'off'}")
+    if _mw is not None:
+        _sl = "none" if _mw.stop_loss_pct is None else f"{_mw.stop_loss_pct:+.0f}%"
+        print(f"    morning window   width {_mw.width:.1f}   stop {_sl}"
+              f"   {_mw.start}-{_mw.end}")
+    print(f"    windows          {sorted(PB.ENABLED_WINDOWS)}")
     if unset:
         print(f"    !! NOT SET, using code defaults: {', '.join(unset)}")
         print("    !! Dollar figures will not match the deployed engine.")
@@ -3210,6 +3594,14 @@ def main():
         sweep_retries(sessions)
     if which in ("mstart", "all"):
         sweep_mstart(sessions)
+    if which in ("zones", "all"):
+        sweep_zones(sessions)
+    if which in ("bookrenter", "all"):
+        sweep_bookrenter(sessions)
+    if which in ("zonetier", "all"):
+        sweep_zonetier(sessions)
+    if which in ("creditstall", "all"):
+        sweep_creditstall(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
     if which in ("forceclose", "all"):

@@ -3232,3 +3232,183 @@ accumulating shadow rows and chain snapshots immediately. It has zero RV/IV
 pairs and its $5 strike grid makes the nearest usable spread one strike wide:
 every width and delta tested came out negative, and widening made it worse
 because there is nothing left to buy three strikes out.
+
+--------------------------------------------------------------------------------
+51. THREE MORE HARNESS DIVERGENCES, FOUND WHILE BUILDING ZONES  (2026-09-02)
+--------------------------------------------------------------------------------
+
+Section 36 recorded a sweep that silently modelled a different engine from the
+deployed one. Three more were found today, in one afternoon, all the same
+shape: the harness ranked arms consistently and described an engine that does
+not exist.
+
+1. THE STALL EXIT WAS OFF IN EVERY SWEEP EXCEPT ITS OWN.
+   STALL_MINUTES and STALL_GIVEBACK_PCT were module globals pinned to 0.0,
+   writable only by sweep_stall. The comment above them said the rule was
+   "harness only" because it "would need the peak's TIMESTAMP persisted on the
+   position row, which does not exist". That was true when written and false
+   since migration d1f7a03c9e84 added peak_at. The rule has been DEPLOYED at
+   5 min / 5 pts since 2026-08-29, and no sweep since has modelled it.
+   Now read from the same two environment variables the engine reads,
+   defaulting to 0 so every reproduction in sections 27-50 still reproduces.
+
+2. THE COOLDOWN REMEMBERED THE LAST LOSS, NOT THE LAST TRADE.
+   equity.blocked_direction reads ONE row ordered by closed_at and returns
+   None when that row is a win. _Cooldown kept last_loss_at forever, so a loss
+   at 10:30 still blocked its direction at 10:50 even after a win at 10:40 had
+   intervened. The harness was modelling a stickier cooldown than production.
+
+3. THE CONFIG BANNER DID NOT SHOW THE SETTINGS MOST LIKELY TO BE WRONG.
+   It printed sizing and pricing -- the section 36 fix -- and not the exit
+   ladder or the morning geometry. A run of sweep_zones was invoked with
+   SWEEP_TICK_PRICING=1 and SWEEP_INTRABAR_STOPS=1, both of which parse as
+   NOT "true", silently turning the tick grid OFF (its default is on) and
+   leaving intrabar stops off; TRADING_MIN_CREDIT and TRADING_CREDIT_SHORT_DELTA
+   were unset, running the credit window at a 0.05 floor and 0.20 delta against
+   the deployed 0.20 and 0.25. That arm took 43 credit trades where the
+   deployed floor takes about 11, and returned -27.13 a day for a baseline
+   that is not the baseline. The banner now prints the stall, the intrabar
+   mode, the morning width/stop/window and the enabled window set.
+
+AND THE ENVIRONMENT FILE ITSELF IS A TRAP. /opt/fastapi/.env carries
+TRADING_POSITION_BUDGET=10000 and TRADING_ENTRY_FRACTION=0.04. Those are not
+the live values: docker-compose.prod.yml overrides env_file to .env.production,
+which carries 6500 and 0.20. Anything reconstructing the deployed config must
+read .env.production, and the banner is what proves it did.
+
+The canonical invocation is now: export every TRADING_ variable from
+.env.production, plus SWEEP_CHAIN_PRICING=1 SWEEP_TICK_PRICING=true
+SWEEP_INTRABAR_STOPS=true, and CHECK THE BANNER against the droplet before
+reading a single figure below it.
+
+--------------------------------------------------------------------------------
+52. ZONES: RANGE POSITION GATES NOTHING, THE GAP MIGHT  (2026-09-02)
+--------------------------------------------------------------------------------
+
+Every reading the engine owns is a moving statistic recomputed from a trailing
+window. None of them is a PLACE. trading_engine/zones.py adds five fixed
+levels from the same 5-day 5-minute series sma_agent already fetches -- day
+high/low, prior high/low/close -- plus signed distances, position within the
+day's range, the overnight gap and the change against the prior close. All
+fifteen columns land in raw_log_payload (JSONB) with no migration.
+
+THE HYPOTHESIS WAS "DO NOT BUY THE HIGH". IT IS FALSE, AND SO IS ITS OPPOSITE.
+
+    all gates off (deployed)      1.00 tr/day  -15.36/day  worst -396.85  halves  +5.71/-35.72
+    no long above 90% of range    0.76 tr/day  -13.49/day  worst -387.85  halves +18.51/-44.42
+    no long above 80% of range    0.56 tr/day  -15.46/day  worst -298.60  halves +12.44/-42.43
+    no long above 70% of range    0.46 tr/day  -14.79/day  worst -161.30  halves  +0.58/-29.64
+    no long below 50% of range    0.92 tr/day  -14.80/day  worst -334.60  halves  -7.51/-21.85
+    no long below 70% of range    0.78 tr/day  -13.31/day  worst -261.15  halves  -4.84/-21.49
+
+Both directions "improve" by a dollar or two, which is the tell: a real effect
+does not work whichever way it is pointed. Nothing is monotonic and everything
+flips between halves. The short-side arms at a 20% floor and both max_short
+settings returned BYTE-IDENTICAL numbers to the baseline -- the gate never
+fired. Rejected.
+
+THE BUCKETS LOOKED BETTER THAN THE ARMS, WHICH IS THE WHOLE LESSON. Sorting
+the trades the deployed config already takes by range position showed 25-50 at
++22.62 a trade against 50-75 at -48.90 -- a spread of seventy dollars that
+priced out to nothing as a gate. Dropping a trade from a bucket leaves the
+others untouched; REFUSING an entry frees the position slot and a different
+trade takes it. Bucket first because it is cheap, decide on the arms.
+
+ONE ARM FAMILY SURVIVED, AND IT IS A FILTER, NOT A TRIGGER:
+
+    no entry after a gap over 0.5%  0.37 tr/day  -1.94/day  worst -298.60  halves -3.72/-0.22
+    no entry after a gap over 0.3%  0.31 tr/day  +5.21/day  worst -298.60  halves +3.10/+7.25
+    no entry after a gap over 0.2%  0.24 tr/day  +6.05/day  worst -298.60  halves +3.10/+8.90
+    only inside yesterday's range   0.42 tr/day  -0.03/day  worst -223.95  halves +3.17/-3.13
+    inside range AND gap under 0.3% 0.14 tr/day  +2.34/day  worst -166.30  halves -5.73/+10.14
+
+Positive, sign held across BOTH halves, and monotonic in the right direction.
+The mechanism is plausible rather than fitted: a gap is overnight information,
+and the entry read is a set of 5-minute averages computed across a series that
+just jumped discontinuously -- the indicators describe a price path that did
+not happen.
+
+NOT DEPLOYED, AND THE REASON IS A LIVE COUNTEREXAMPLE THE SAME DAY. 2026-09-02
+gapped -1.315%. The 0.3% filter would have REFUSED the 10:20 CLEAN entry that
+was +35% fifteen minutes later. One session does not overturn 59, but the arm
+rests on about 18 trades, nine per half, and the three gap arms are nested
+subsets rather than three independent confirmations. Combining the gap with the
+range filter makes it worse and flips the halves, which is what over-filtering
+looks like. Recorded, armed by TRADING_ZONE_MAX_GAP_PCT, left off.
+
+--------------------------------------------------------------------------------
+53. BOOKING THE MORNING AT +50% AND PAUSING: IT IS A SLOPE  (2026-09-02)
+--------------------------------------------------------------------------------
+
+Asked for directly: book the morning ride at +50%, wait 30 minutes, re-enter.
+Two of the three pieces did not exist. RIDE_TAKE_PROFIT_PCT existed and was 0.
+The pause did not exist in any form -- equity.py's 30-minute cooldown fires on
+LOSSES only, by explicit design ("a winning exit imposes no cooldown, since the
+setup just worked"). Added equity.WIN_COOLDOWN_MINUTES, which blocks BOTH
+directions after a winning exit; the loss cooldown is a statement about
+direction, this one is about time, and a bearish entry a minute after booking a
+bullish target is the same mistake wearing the other hat.
+
+    ride, no target (deployed)   1.00 tr/day  -15.36/day  worst -396.85  halves  +5.71/-35.72
+    +50% target,  0 min pause    0.98 tr/day  -13.26/day  worst -396.85  halves +12.08/-37.76
+    +50% target, 15 min pause    0.90 tr/day  -23.10/day  worst -334.60  halves -12.91/-32.94
+    +50% target, 30 min pause    0.83 tr/day  -18.14/day  worst -334.60  halves -12.09/-23.99
+    +50% target, 45 min pause    0.78 tr/day  -20.15/day  worst -334.60  halves -21.52/-18.83
+    +50% target, 60 min pause    0.76 tr/day  -21.55/day  worst -334.60  halves -21.52/-21.59
+
+    +30% target, 30 min pause    -34.03/day  halves -34.42/-33.66
+    +40% target, 30 min pause    -22.38/day  halves -12.09/-32.33
+    +50% target, 30 min pause    -18.14/day  halves -12.09/-23.99
+    +60% target, 30 min pause    -17.91/day  halves -12.09/-23.54
+    +75% target, 30 min pause    -16.43/day  halves -12.09/-20.62
+
+THE TARGET LEVEL IS MONOTONIC AND POINTS AT NO TARGET. +30 is far worse than
++40, which is worse than +50, +60, +75, and the best target is the deployed
+ride. There is no local optimum at +50 -- it is a point on a slope.
+
+THE PAUSE IS THE EXPENSIVE HALF, costing about 4.88 a day against booking at
++50% and re-entering immediately. Not monotonic in pause length (15 min is
+worse than 30), which says the pause arms are noise-dominated on this sample.
+
+WHAT IT BUYS IS THE TAIL: every take-profit arm improves the worst day from
+-396.85 to -334.60. That is 62 dollars of worst day for 2.78 a day of
+expectancy, which is the trade this file has recorded being chosen before.
+Both frames are here so the choice is made on both.
+
+--------------------------------------------------------------------------------
+54. 09:45 RE-ASKED A THIRD TIME, AND CONFIRMED BY THE SAME DAY'S TAPE  (2026-09-02)
+--------------------------------------------------------------------------------
+
+Section 27 rejected an 09:45 morning start; section 45 re-asked it at corrected
+sizing. Both predate the stall exit and intrabar stops being modelled, and an
+earlier start is ENTIRELY a story about stop-outs, so the question deserved a
+third run rather than a citation.
+
+    BOTH LIVE WINDOWS, per day -- the frame that decides
+    opens 09:45  1.19 tr/day  -45.44/day  15% green  halves -49.77/-41.26
+    opens 10:00  1.12 tr/day  -37.83/day  17% green  halves -33.62/-41.90
+    opens 10:15  1.00 tr/day  -15.36/day  19% green  halves  +5.71/-35.72   <- live
+    opens 10:30  0.90 tr/day  -24.92/day  17% green  halves -11.01/-38.37
+    opens 11:00  0.68 tr/day  -11.34/day  19% green  halves  +2.97/-25.17
+
+09:45 is worst by thirty dollars a day, has the lowest win rate (35% against
+46% at 10:15), and is negative in BOTH halves. Confirmed a third time under a
+harness that now models the deployed exit ladder.
+
+THE SAME SESSION DEMONSTRATED THE MECHANISM LIVE. On 2026-09-02 the only CLEAN
+setup between 09:45 and 10:15 was a BEAR at 09:53, with all four conditions
+holding and the macro gate not applying to the short side:
+
+    09:53  tier=CLEAN/bear  trend=BELOW_SMA ema9=BELOW vwap=BELOW_VWAP band=BEAR_BAND
+    09:57  tier=CLEAN/bear  ... bb=LOWER_BAND
+
+QQQ's session low was 705.10. It then ran to 709.80. An 09:45 start would have
+opened a bear spread at the low, taken it through the -25% stop, and consumed
+the single position slot -- so the 707/717 bull spread the engine actually took
+at 10:20, which was +35% within fifteen minutes, would never have been opened.
+The warmup is not caution about the clock. It is the observation that the
+opening auction produces whipsaws the indicators read as trend.
+
+11:00 ranks above 10:15 here as it did in section 27, on 0.68 trades a day.
+That cell has moved between best and worst across three runs on 23-30 trades
+and is not a finding.

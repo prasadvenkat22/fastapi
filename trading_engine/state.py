@@ -65,6 +65,38 @@ class TradingState(TypedDict):
     # database.
     session_move_pct: float    # move from the 09:30 open, percent
     session_drawdown_pct: float  # the session's WORST point vs the open, percent
+    # FIXED LEVELS, as opposed to every moving statistic above.
+    #
+    # Declared here for the reason the block above spells out: LangGraph
+    # carries only the keys this TypedDict names, so an undeclared reading is
+    # computed each cycle, logged by sma_agent, and then silently dropped
+    # before any gate could read it. Recorded now, gating nothing -- see
+    # zones.py and nodes.py ZONE_*.
+    #
+    # Both the LABEL and the NUMBER, the same discipline weekly_signals.py
+    # uses: the label is what a gate would read, the number is what lets a
+    # different threshold be tested later without re-collecting the data.
+    zone: str                  # 'AT_DAY_HIGH'/'AT_DAY_LOW'/'AT_PRIOR_CLOSE'/'AT_PRIOR_HIGH'/'AT_PRIOR_LOW'/'MID_RANGE'
+    zone_extension: str        # 'ABOVE_PRIOR_RANGE'/'BELOW_PRIOR_RANGE'/'INSIDE_PRIOR_RANGE'
+    day_high: float            # this session's regular-hours high so far
+    day_low: float             # this session's regular-hours low so far
+    prior_high: float
+    prior_low: float
+    prior_close: float         # the level "prior day change" is measured from
+    day_range_pos_pct: float   # 0 at the session low, 100 at the session high
+    gap_pct: float             # today's open against the prior close
+    prior_change_pct: float    # price against the prior close, percent
+    dist_day_high_pct: float   # signed; negative means price is BELOW the level
+    dist_day_low_pct: float
+    dist_prior_high_pct: float
+    dist_prior_low_pct: float
+    dist_prior_close_pct: float
+    # WHEN the extreme was set, and how far price has travelled from it. The
+    # ZONE tier reads these four and nothing else reads them yet.
+    minutes_since_day_low: float
+    minutes_since_day_high: float
+    bounce_off_low_pct: float   # always >= 0; the size of the lift off the low
+    fade_off_high_pct: float    # always >= 0; the size of the fall from the high
     market_sentiment: str      # 'GOOD' or 'BAD'
     macro_block_reason: str    # which AND-term refused: breadth/vix_level/vix_spike/yields/llm
     macro_halt: bool           # VIX at/above its ceiling — no entries in either direction

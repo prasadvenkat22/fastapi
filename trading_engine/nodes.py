@@ -23,7 +23,8 @@ from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from . import tradier_orders
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
-from .equity import MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today, current_equity
+from .equity import (MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today,
+                     current_equity, win_pause_active)
 from .macro_calendar import blackout_active as event_blackout_active, describe as describe_event
 from .playbook import (
     CREDIT, close_deadline, credit_strikes_for, final_take_profit_for,
@@ -54,6 +55,7 @@ from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_qqq_session_
                         chain_condor_value, chain_vertical, fetch_option_chain,
                         log_price_divergence, strike_for_delta, _regular_session_open)
 from .state import TradingState
+from . import zones as _zones
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +194,36 @@ FADE_ENTRIES_ENABLED = os.getenv("TRADING_FADE_ENTRIES", "false").lower() == "tr
 # REJECT: a failed test of the 50 EMA from below. Bearish only -- the measured
 # edge is one-directional and there is no evidence for a mirrored bullish case.
 REJECT_ENTRIES_ENABLED = os.getenv("TRADING_REJECT_ENTRIES", "true").lower() == "true"
+
+# ZONE: enter because price has BOUNCED OFF A LEVEL AND HELD, not because the
+# moving averages line up. The only tier that reads a fixed price.
+#
+# Every other tier answers "is the trend intact". This one answers "has the
+# session's floor been tested and held", which is a different question and the
+# reason it can fire earlier -- a floor is visible while the averages are still
+# catching up to the reversal that made it.
+#
+# THREE CONDITIONS, and the middle one is the whole idea:
+#   the low is OLD      -- ZONE_HOLD_MINUTES since it was set. Price 0.2% above
+#                          a low made a minute ago is still making that low.
+#   the bounce is REAL  -- at least ZONE_BOUNCE_MIN_PCT off it.
+#   the bounce is FRESH -- no more than ZONE_BOUNCE_MAX_PCT, so this enters
+#                          near the zone rather than chasing a move that is
+#                          already spent. Without the ceiling this degenerates
+#                          into "buy anything above the low", which is most of
+#                          the session on an up day.
+# Plus VWAP on the right side: the level held AND the session anchor agrees.
+#
+# Off by default and unmeasured at the time of writing -- see section 53.
+ZONE_ENTRIES_ENABLED = os.getenv("TRADING_ZONE_ENTRIES", "false").lower() == "true"
+ZONE_HOLD_MINUTES = float(os.getenv("TRADING_ZONE_HOLD_MINUTES", "20"))
+ZONE_BOUNCE_MIN_PCT = float(os.getenv("TRADING_ZONE_BOUNCE_MIN_PCT", "0.15"))
+ZONE_BOUNCE_MAX_PCT = float(os.getenv("TRADING_ZONE_BOUNCE_MAX_PCT", "0.60"))
+# Whether a zone entry still needs the macro verdict, as CLEAN's bullish side
+# does. Keeping it means the tier cannot fire on a BAD-breadth morning, which
+# is most of what it would otherwise catch; dropping it is a real loosening and
+# gets its own arm rather than being assumed either way.
+ZONE_REQUIRE_MACRO = os.getenv("TRADING_ZONE_REQUIRE_MACRO", "true").lower() == "true"
 
 # Opening warmup. Entries wait this many minutes after the bell so the
 # opening auction's whipsaws don't get read as a trend; position management
@@ -416,6 +448,31 @@ RIDE_GIVEBACK_LATE = float(os.getenv("TRADING_RIDE_GIVEBACK_LATE", "0"))
 STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
 STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
 
+# THE SAME STALL, ON THE AFTERNOON CREDIT TRADE.
+#
+# The stalled-peak rule lives inside the RIDE branch, so only MORNING_DRIFT has
+# ever had it. The credit window books the instant it touches
+# final_take_profit_pct, and with TRADING_CREDIT_FINAL_TAKE_PROFIT=50 in
+# production that target sits ON the trail-arming level, collapsing the
+# designed 50-to-90 trail to zero width. The comment beside that code already
+# records what it costs: a 13:30 call credit spread booked at +51% on
+# 2026-08-20 was worth +72% forty-five minutes later, with spot four dollars
+# below the short strike.
+#
+# With this on, the target ARMS the exit instead of firing it, and what ends
+# the trade is the profit curve stopping. A short that finishes out of the
+# money pays 100% of the credit, so booking at the target hands the rest back
+# on precisely the sessions where nothing went wrong -- and for 0DTE short
+# premium, nothing going wrong is the base case.
+#
+# The stall reads more cleanly here than on the morning ride. While spot sits
+# still, theta prints a new high nearly every cycle, so an absence of new highs
+# is not noise: it means the underlying has come back toward the short strike
+# and decay has stopped winning.
+#
+# Off by default. Section 55 has the measurement.
+STALL_ON_CREDIT = os.getenv("TRADING_STALL_ON_CREDIT", "false").lower() == "true"
+
 # What the 9 EMA is compared against for the ema_cross reading.
 #
 # Three specifications have been in play and only one was ever deployed.
@@ -489,6 +546,40 @@ CREDIT_SHORT_DELTA = float(os.getenv("TRADING_CREDIT_SHORT_DELTA", "0.20"))
 # Every other bucket is positive: -0.75..-0.25 +6.54, flat +70.26, up +68.54,
 # hard up +130.37.
 DAY_TREND_MAX_DROP_PCT = float(os.getenv("TRADING_DAY_TREND_MAX_DROP", "0"))
+
+# ZONE GATES. Both OFF by default (100 and 0 are the no-op ends of the scale).
+#
+# day_range_pos_pct is 0 at the session low and 100 at the session high, so
+# ZONE_MAX_RANGE_POS_LONG = 85 means "do not open a bullish debit spread in the
+# top 15% of the day's range" -- the mechanical form of not buying the high.
+# ZONE_MIN_RANGE_POS_SHORT is its mirror for bearish entries.
+#
+# Chosen over a distance-to-level threshold because range position needs no
+# tuning constant of its own: it is already normalised by the day's own range,
+# so a quiet session and a 2% session are on the same scale. The raw distances
+# are recorded anyway (see zones.py) if a level-proximity form is ever wanted.
+#
+# These gate nothing until swept and shown to survive both sample halves.
+ZONE_MAX_RANGE_POS_LONG = float(os.getenv("TRADING_ZONE_MAX_RANGE_POS_LONG", "100"))
+ZONE_MIN_RANGE_POS_SHORT = float(os.getenv("TRADING_ZONE_MIN_RANGE_POS_SHORT", "0"))
+# The other half of the square, because the direction is an open question and
+# not an assumption. "Do not buy the high" is the folk rule; "only buy strength"
+# is the opposite rule and equally sayable. Both get an arm, both are off, and
+# the sweep decides -- see section 51.
+ZONE_MIN_RANGE_POS_LONG = float(os.getenv("TRADING_ZONE_MIN_RANGE_POS_LONG", "0"))
+ZONE_MAX_RANGE_POS_SHORT = float(os.getenv("TRADING_ZONE_MAX_RANGE_POS_SHORT", "100"))
+
+# The two readings that actually separated. Range position did not -- see
+# section 51 -- but two others held their sign across both sample halves, and
+# a knob is the only way to price them against the freed position slot.
+#
+# INSIDE the prior day's range, and a FLAT open, are close to the same
+# statement made twice: a session that gapped is usually a session that has
+# already left yesterday's range. Both get a knob so the sweep can say whether
+# they are one effect or two.
+ZONE_REQUIRE_INSIDE_PRIOR_RANGE = os.getenv(
+    "TRADING_ZONE_REQUIRE_INSIDE_PRIOR_RANGE", "false").lower() == "true"
+ZONE_MAX_GAP_PCT = float(os.getenv("TRADING_ZONE_MAX_GAP_PCT", "0"))
 
 # On a STRONG trend, place the long leg this many dollars in the money
 # instead of the window's usual depth. Zero disables it.
@@ -894,11 +985,38 @@ def sma_agent(state: TradingState) -> dict:
     except Exception:
         session_drawdown_pct = 0.0
 
+    # Fixed levels -- day high/low, prior high/low/close -- alongside the
+    # moving averages above. See zones.py for why they are a different kind of
+    # reading and not a redundant one.
+    #
+    # Measured against the last CLOSE, not fetch_qqq_spot(). A live spot would
+    # be fresher and would make this the one reading the sweep cannot
+    # reproduce, because the harness replays bars and has no spot to hand.
+    # Section 30 is the record of what a live/sweep divergence costs: a gate
+    # that worked in every replay and never fired in production. The five
+    # minutes of staleness are the price of being able to measure this at all.
+    z = _zones.read(bars, float(last_close))
+
     return {"sma_trend": trend, "ema9_side": ema9_side, "ema_cross": ema_cross,
             "vwap_side": vwap_side, "ema50_reject": ema50_reject,
             "session_move_pct": round(session_move_pct, 3),
             "session_drawdown_pct": round(session_drawdown_pct, 3),
-            "adx": round(adx, 2) if adx_ok else 0.0, "adx_zone": adx_zone}
+            "adx": round(adx, 2) if adx_ok else 0.0, "adx_zone": adx_zone,
+            "zone": z["zone"], "zone_extension": z["zone_extension"],
+            "day_high": z["day_high"], "day_low": z["day_low"],
+            "prior_high": z["prior_high"], "prior_low": z["prior_low"],
+            "prior_close": z["prior_close"],
+            "day_range_pos_pct": z["day_range_pos_pct"],
+            "gap_pct": z["gap_pct"], "prior_change_pct": z["prior_change_pct"],
+            "dist_day_high_pct": z["dist_day_high_pct"],
+            "dist_day_low_pct": z["dist_day_low_pct"],
+            "dist_prior_high_pct": z["dist_prior_high_pct"],
+            "dist_prior_low_pct": z["dist_prior_low_pct"],
+            "dist_prior_close_pct": z["dist_prior_close_pct"],
+            "minutes_since_day_low": z["minutes_since_day_low"],
+            "minutes_since_day_high": z["minutes_since_day_high"],
+            "bounce_off_low_pct": z["bounce_off_low_pct"],
+            "fade_off_high_pct": z["fade_off_high_pct"]}
 
 
 ADX_PERIOD = int(os.getenv("TRADING_ADX_PERIOD", "14"))
@@ -1810,9 +1928,42 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     )
             hit_final = final_tp is not None and return_pct >= final_tp
             books_at_target = (is_credit_pos and not credit_trails) or not TRAILING_EXITS_ENABLED
-            if hit_final or books_at_target or trend_broken or gave_back:
+
+            # Target reached: arm rather than book, and hand the decision to
+            # the stall. Only for credit positions -- a debit spread's ride is
+            # governed by the branch above, which has its own stall.
+            credit_stalled = False
+            peak_at = getattr(position, "peak_at", None)
+            if (STALL_ON_CREDIT and is_credit_pos and hit_final and STALL_MINUTES > 0
+                    and peak_at is not None and peak_return > 0):
+                # Disarm the target ONLY when there is a working stall to hand
+                # the decision to. Without peak_at there is nothing to detect a
+                # stall with, and clearing hit_final would leave the position
+                # with no target at all -- a rule meant to capture MORE profit
+                # silently removing the exit. Rows written before migration
+                # d1f7a03c9e84 have no peak_at, and so does any harness whose
+                # mock position does not carry one.
+                hit_final = False
+                quiet_min = (datetime.now(timezone.utc) - peak_at).total_seconds() / 60.0
+                credit_stalled = (quiet_min >= STALL_MINUTES
+                                  and return_pct <= peak_return - STALL_GIVEBACK_PCT)
+                if credit_stalled:
+                    logger.info(
+                        "Stalled peak (credit): %s peaked %+.1f%% and has made no new "
+                        "high for %.0f min, now %+.1f%% — booking.",
+                        position.strategy, peak_return, quiet_min, return_pct,
+                    )
+                else:
+                    logger.info(
+                        "Credit target armed: %s at %+.1f%% is past %+.0f%%, peak "
+                        "%+.1f%% %.0f min ago — holding while it keeps climbing.",
+                        position.strategy, return_pct, final_tp, peak_return, quiet_min,
+                    )
+
+            if hit_final or credit_stalled or books_at_target or trend_broken or gave_back:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", (
+                    "STALL" if credit_stalled else
                     "TAKE_PROFIT" if (hit_final or books_at_target)
                     else ("RATCHET" if gave_back else "TRAIL_STOP")
                 )
@@ -2032,6 +2183,26 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             and vwap_side == "BELOW_VWAP" and rsi_band == "BEAR_BAND"
         )
 
+        # ZONE: the session low was set a while ago, price has lifted off it by
+        # a real but not-yet-spent amount, and VWAP agrees. Mirror for the high.
+        _since_low = state.get("minutes_since_day_low")
+        _since_high = state.get("minutes_since_day_high")
+        _bounce = state.get("bounce_off_low_pct")
+        _fade = state.get("fade_off_high_pct")
+        zone_bull = (
+            _since_low is not None and _bounce is not None
+            and float(_since_low) >= ZONE_HOLD_MINUTES
+            and ZONE_BOUNCE_MIN_PCT <= float(_bounce) <= ZONE_BOUNCE_MAX_PCT
+            and vwap_side == "ABOVE_VWAP"
+            and (sentiment == "GOOD" or not ZONE_REQUIRE_MACRO)
+        )
+        zone_bear = (
+            _since_high is not None and _fade is not None
+            and float(_since_high) >= ZONE_HOLD_MINUTES
+            and ZONE_BOUNCE_MIN_PCT <= float(_fade) <= ZONE_BOUNCE_MAX_PCT
+            and vwap_side == "BELOW_VWAP"
+        )
+
         # REJECT: price tried the 50 EMA and failed. Requires the broader
         # trend to already be down, so this is a continuation read rather than
         # a lone candle pattern.
@@ -2057,21 +2228,39 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # Refuse the side that just lost, for the cooldown period. The
         # signals still read the same after a stop-out, so without this the
         # engine immediately re-enters the trade the market just rejected.
+        # A booked target pauses everything for a spell -- see
+        # equity.WIN_COOLDOWN_MINUTES. Checked before the directional cooldown
+        # because it subsumes it: if no entry may open at all, which side just
+        # lost is not a question worth asking.
+        if win_pause_active():
+            strict_bull = relaxed_bull = momentum_bull = trend_bull = clean_bull = False
+            strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
+            zone_bull = zone_bear = False
+
         cooling = blocked_direction()
         if cooling == "bearish":
             strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
+            zone_bear = False
         elif cooling == "bullish":
             strict_bull = relaxed_bull = momentum_bull = trend_bull = clean_bull = False
+            zone_bull = False
 
         # Short setups are suppressed until the bearish start time, whatever
         # the signals say. Long setups are unaffected.
         if _is_before_bearish_start():
             strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
+            zone_bear = False
 
         if halt:
             tier, bullish = None, False
         elif CLEAN_ENTRIES_ENABLED and (clean_bull or clean_bear):
             tier, bullish = "CLEAN", clean_bull
+        elif ZONE_ENTRIES_ENABLED and (zone_bull or zone_bear):
+            # Below CLEAN deliberately. When both match, CLEAN is the better
+            # attribution -- it is the tier with a measured record, and a ZONE
+            # label on a trade CLEAN would have taken anyway would overstate
+            # what this tier is contributing.
+            tier, bullish = "ZONE", zone_bull
         elif strict_bull or strict_bear:
             tier, bullish = "STRICT", strict_bull
         elif RELAXED_ENTRIES_ENABLED and (relaxed_bull or relaxed_bear):
@@ -2114,6 +2303,55 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             )
             tier, bullish = None, False
 
+        # WHERE IN THE DAY'S RANGE the entry would be opened. Distinct from the
+        # gate above, which asks how far the session has fallen: a day that is
+        # flat on the session can still be at its own high, and that is the
+        # case this refuses. Off unless a sweep earned it.
+        if tier is not None and ZONE_REQUIRE_INSIDE_PRIOR_RANGE:
+            _ext = state.get("zone_extension")
+            if _ext in ("ABOVE_PRIOR_RANGE", "BELOW_PRIOR_RANGE"):
+                logger.info(
+                    "Session has left yesterday's range (%s, %s-%s) — refusing the %s entry.",
+                    _ext, state.get("prior_low"), state.get("prior_high"), tier,
+                )
+                tier, bullish = None, False
+
+        if tier is not None and ZONE_MAX_GAP_PCT > 0:
+            _gap = state.get("gap_pct")
+            if _gap is not None and abs(float(_gap)) > ZONE_MAX_GAP_PCT:
+                logger.info(
+                    "Opened %.2f%% away from yesterday's close — refusing the %s entry.",
+                    float(_gap), tier,
+                )
+                tier, bullish = None, False
+
+        _pos = state.get("day_range_pos_pct")
+        if tier is not None and _pos is not None:
+            if bullish and ZONE_MIN_RANGE_POS_LONG > 0 and float(_pos) < ZONE_MIN_RANGE_POS_LONG:
+                logger.info(
+                    "Price is only %.0f%% up the day's range (%s-%s) — refusing the bullish %s entry.",
+                    float(_pos), state.get("day_low"), state.get("day_high"), tier,
+                )
+                tier, bullish = None, False
+            elif (not bullish) and ZONE_MAX_RANGE_POS_SHORT < 100 and float(_pos) > ZONE_MAX_RANGE_POS_SHORT:
+                logger.info(
+                    "Price is %.0f%% up the day's range (%s-%s) — refusing the bearish %s entry.",
+                    float(_pos), state.get("day_low"), state.get("day_high"), tier,
+                )
+                tier, bullish = None, False
+            elif bullish and ZONE_MAX_RANGE_POS_LONG < 100 and float(_pos) > ZONE_MAX_RANGE_POS_LONG:
+                logger.info(
+                    "Price is %.0f%% up the day's range (%s-%s) — refusing the bullish %s entry.",
+                    float(_pos), state.get("day_low"), state.get("day_high"), tier,
+                )
+                tier, bullish = None, False
+            elif (not bullish) and ZONE_MIN_RANGE_POS_SHORT > 0 and float(_pos) < ZONE_MIN_RANGE_POS_SHORT:
+                logger.info(
+                    "Price is %.0f%% up the day's range (%s-%s) — refusing the bearish %s entry.",
+                    float(_pos), state.get("day_low"), state.get("day_high"), tier,
+                )
+                tier, bullish = None, False
+
         # No tier, but a credit window is open: sell premium on the side the
         # trend is moving away from. Recorded as its own tier name so the
         # scoreboard can separate it from the signal-driven entries.
@@ -2141,12 +2379,21 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                    _clean_misses(False, sma, ema_cross, vwap_side, rsi_band, sentiment))
         logger.info(
             "Entry read [%s]: tier=%s%s — trend=%s ema9=%s vwap=%s band=%s "
-            "macd=%s bb=%s macro=%s%s",
+            "macd=%s bb=%s macro=%s | zone=%s %s day=%s%% (%s-%s) prior=%s%%%s",
             entry_window.name if entry_window is not None else "no window",
             tier or "NONE",
             "" if tier is None else ("/bull" if bullish else "/bear"),
             sma, ema_cross, vwap_side, rsi_band, macd, bb,
             "HALT" if halt else sentiment,
+            # Zone columns gate nothing. They ride on this line because the
+            # question they exist to answer -- does where price sits against a
+            # fixed level predict anything -- is answerable only by pairing the
+            # reading with the decision, and this is the line that already
+            # carries the decision.
+            state.get("zone") or "?", state.get("zone_extension") or "?",
+            state.get("day_range_pos_pct"),
+            state.get("day_low"), state.get("day_high"),
+            state.get("prior_change_pct"),
             "" if tier is not None else
             f" — clean_bull needs {_misses[0]}, clean_bear needs {_misses[1]}",
         )

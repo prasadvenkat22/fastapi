@@ -60,6 +60,27 @@ MAX_DAILY_LOSS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_PCT", "0.02"))
 # evidence.
 REENTRY_COOLDOWN_MINUTES = float(os.getenv("TRADING_REENTRY_COOLDOWN_MINUTES", "30"))
 
+# After a WINNING exit, refuse BOTH directions for this many minutes.
+#
+# The cooldown above is the mirror of this one and deliberately does not fire
+# on a win: the reasoning was that the setup just worked, so there is nothing
+# to cool off from. That reasoning holds for a stop-out and does not obviously
+# hold for a booked target. A +50% take-profit ends a position that the ride
+# would have kept, and the signals that opened it are usually still true one
+# cycle later -- so without a pause the engine books the target and buys the
+# same structure back a minute later at a worse price, paying the spread twice
+# for the privilege of holding what it already held.
+#
+# BOTH directions, unlike the loss cooldown. That one refuses the side the
+# tape just rejected and leaves the other side available, which is a statement
+# about direction. This one is a statement about TIME -- let the move develop
+# before paying to re-enter it -- and a bearish entry one minute after booking
+# a bullish target is the same mistake wearing the other hat.
+#
+# 0 disables it, which is the state every measurement in sections 27-51 was
+# taken under.
+WIN_COOLDOWN_MINUTES = float(os.getenv("TRADING_WIN_COOLDOWN_MINUTES", "0"))
+
 # Consecutive losing trades before entries stop for the session. The daily
 # loss limit counts dollars; this counts being wrong repeatedly, which can
 # happen well before the dollar limit on a day the strategy simply does not
@@ -82,6 +103,42 @@ class EquityState:
     def session_start_equity(self) -> float:
         """Equity at the start of today, i.e. before today's results."""
         return self.equity - self.realized_today
+
+
+def win_pause_active() -> bool:
+    """True when the last closed trade WON inside WIN_COOLDOWN_MINUTES.
+
+    Blocks both directions. Same single-row lookup as blocked_direction, and
+    the same failure posture: an exception means "do not block", because a
+    guard that halts trading on a database hiccup is worse than no guard.
+    """
+    if WIN_COOLDOWN_MINUTES <= 0:
+        return False
+    try:
+        db = SessionLocal()
+        try:
+            row = (
+                db.query(TradeHistory.strategy, TradeHistory.realized_pnl_dollars, TradeHistory.closed_at)
+                .order_by(TradeHistory.closed_at.desc())
+                .first()
+            )
+            if row is None or row[1] is None or row[1] <= 0 or row[2] is None:
+                return False
+            from datetime import timezone
+            age_min = (datetime.now(timezone.utc) - row[2]).total_seconds() / 60.0
+            if age_min >= WIN_COOLDOWN_MINUTES:
+                return False
+            logger.info(
+                "Win cooldown: last trade booked %+.2f, %.1f min ago — "
+                "no re-entry for another %.0f min.",
+                row[1], age_min, WIN_COOLDOWN_MINUTES - age_min,
+            )
+            return True
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Win cooldown check failed — not blocking.")
+        return False
 
 
 def blocked_direction() -> "str | None":

@@ -3516,3 +3516,74 @@ the position at -7.50. It closed at 15:50 at -657.50. The gap was the round
 trip for authorisation plus a first pair of limit orders priced at the natural,
 which stopped being marketable within seconds at $390 a minute. Roughly 250 of
 the 650 was the delay, not the trade.
+
+--------------------------------------------------------------------------------
+58. WHAT IS DEPLOYED FOR 2026-09-03, AND WHICH PARTS ARE UNMEASURED  (2026-09-02)
+--------------------------------------------------------------------------------
+
+Read from the running container, not from .env.production and not from memory.
+Both have been wrong this week: /opt/fastapi/.env carries budget 10000 and
+entry fraction 0.04, which are NOT the live values -- docker-compose.prod.yml
+overrides env_file to .env.production. Verify against the container.
+
+ENTRY
+  MORNING_DRIFT     10:15-12:30, rides to 13:25, $10 wide, ITM
+  AFTERNOON_CREDIT  14:00-15:00, $4 wide, 0.25 delta, minimum credit 0.20
+  Tiers, first match wins: CLEAN, ZONE, STRICT, RELAXED, REJECT.
+                           MOMENTUM and TREND are off.
+  Size 20% of equity, capped at 5 contracts. Three consecutive losses ends
+  the session. Bearish entries suppressed before 09:45.
+
+EXIT -- MORNING
+  STOP_LOSS      -25%
+  STALL          5 minutes with no new high AND 5 points off the peak.
+                 NO ARMING THRESHOLD -- any positive peak starts it. This is
+                 why the breakeven stop measured as a no-op on this book: the
+                 stall already ends 37 of 59 trades and catches a slide from
+                 a small peak long before the stop does.
+  Ride ceiling   90% of the structure's maximum return
+  HANDOFF        13:25
+  FORCE_CLOSE    15:45
+  No fixed take-profit. RIDE_TAKE_PROFIT_PCT is 0, and section 53 measured
+  the target level as monotonic in the direction of having none.
+
+EXIT -- AFTERNOON
+  Target 50% of credit, which now ARMS the stall rather than firing.
+  Stall watches FROM ENTRY (CREDIT_STALL_REQUIRES_ARM false).
+  Stop -600%. Ratchet arms at 32%. FORCE_CLOSE 15:45.
+
+RECORDED, NOT GATING
+  zones.py -- fifteen fixed-level columns per cycle into raw_log_payload.
+  orphans.py -- positions the engine did not open are paired, marked and
+  reported against the same ladder. It does not act; see the module docstring
+  for the four reasons, each of which would have produced a wrong action on
+  2026-09-02.
+
+TWO SETTINGS RUN AHEAD OF THEIR EVIDENCE. Both are deliberate, both were
+chosen by the operator against the measurement, and both leave a clear trail.
+
+  ZONE TIER, macro gate OFF. Its own trades measured negative on every arm
+  (-21, -13, -25 a trade). The macro dimension is UNMEASURABLE because the
+  harness pins market_sentiment to GOOD, so the sweep cannot represent the
+  BAD-breadth mornings this tier exists to catch. Forward evidence only.
+  Watch for: ZONE entries on mornings CLEAN refused.
+
+  CREDIT STALL FROM ENTRY. Closes the gap that let a 14.2%-of-max peak roll
+  into -657.50 with no rule watching. Every arm measured as not earning it,
+  but on 8-10 credit trades in 60 sessions -- a sample that has now defeated
+  three separate credit-side measurements. STALL_GIVEBACK_PCT is SHARED with
+  the morning ride, so 5 points cannot be tuned for one without moving the
+  other. Watch for: "Stalled peak (credit)" firing within minutes of entry on
+  single-digit peaks. If it does, the fix is a separate credit giveback knob,
+  not reverting the rule.
+
+OFF, BUILT, MEASURED AS NOT EARNING IT
+  TRADING_BREAKEVEN_ARM        dominated by the always-on morning stall
+  TRADING_CREDIT_STRIKE_EXIT   fires only at $2.00; costs $6 on 8 trades
+  TRADING_ZONE_MAX_GAP_PCT     best zone arm, but would have refused the
+                               2026-09-02 entry that was +35% in 15 minutes
+
+DEPLOYMENT IS BY FILE COPY, NOT BY BRANCH. The droplet sits on main with
+modified files; the work lives on chain-priced-sweeps. RUNNING deploy.sh
+update WOULD PULL MAIN AND SILENTLY REVERT ALL OF IT. Copy the changed files
+and recreate the app container, then verify against the container as above.

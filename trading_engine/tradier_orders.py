@@ -268,6 +268,33 @@ def open_positions() -> list:
     return rows or []
 
 
+def quotes(symbols: list) -> dict:
+    """Live quotes for a list of OCC symbols, keyed by symbol.
+
+    Reads from the ORDER environment rather than the quote feed in
+    data_feed.py, deliberately: this is used to mark positions held at THIS
+    broker, and a mark that came from a different venue than the account would
+    be comparing two sets of prices. Returns {} rather than raising, because
+    every caller is observational and a quote outage must not break a cycle.
+    """
+    if not symbols:
+        return {}
+    try:
+        url = f"{_base()}/markets/quotes"
+        r = httpx.get(url, headers=_headers(),
+                      params={"symbols": ",".join(symbols), "greeks": "false"},
+                      timeout=10.0)
+        if r.status_code >= 400:
+            return {}
+        rows = ((r.json() or {}).get("quotes") or {}).get("quote")
+        if isinstance(rows, dict):
+            rows = [rows]
+        return {q.get("symbol"): q for q in (rows or []) if q.get("symbol")}
+    except Exception:
+        logger.exception("Quote lookup failed for %d symbol(s).", len(symbols))
+        return {}
+
+
 def check_fill(short_symbol: str, long_symbol: str) -> dict:
     """Did BOTH legs arrive?
 

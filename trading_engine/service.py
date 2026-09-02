@@ -24,7 +24,7 @@ from .equity import current_equity
 from .graph import run_trading_cycle
 from .nodes import POSITION_BUDGET, TAKE_PROFIT_PCT, is_past_force_close
 from .setup_vector_store import store_trade_setup
-from . import tradier_orders, weekly_shadow
+from . import orphans, tradier_orders, weekly_shadow
 from .state import TradingState
 
 # The only underlying this engine trades. Used to scope the broker
@@ -172,6 +172,12 @@ def _reconcile(open_row) -> None:
                     "RECONCILE: the engine believes it is flat, the broker holds %d %s position(s): %s",
                     len(held), ENGINE_UNDERLYING, [p.get("symbol") for p in held],
                 )
+            # ... and say what the exit ladder WOULD do about them. The error
+            # above has been the whole of the response since it was written:
+            # on 2026-09-02 it fired 34 times at once a minute while a manual
+            # spread ran unmanaged all morning. Observation only -- orphans.py
+            # places no orders.
+            orphans.review()
             return
         # A just-submitted order is not a divergence. Tradier's position list
         # lags its own order acknowledgement by more than the second between
@@ -189,6 +195,8 @@ def _reconcile(open_row) -> None:
         short_sym = tradier_orders.occ_symbol("QQQ", today_expiry(), call_put, open_row.short_strike)
         long_sym = tradier_orders.occ_symbol("QQQ", today_expiry(), call_put, open_row.long_strike)
         fill = tradier_orders.check_fill(short_sym, long_sym)
+        # Everything that is NOT the engine's two legs, marked and reported.
+        orphans.review(engine_symbols={short_sym, long_sym})
         if fill["naked"]:
             logger.error("RECONCILE: naked leg detected — %s", fill)
         elif not fill["complete"]:

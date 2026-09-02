@@ -3139,3 +3139,96 @@ about stop width, and should not be read as evidence either way.
 STILL OPEN. The stall rule at 5min/5pt was measured against a -8% stop at
 bar-close resolution and has not been re-checked at -25% with the poller on.
 Its arms should be re-run before its cost is quoted again.
+
+--------------------------------------------------------------------------------
+50. EV BY DELTA IS THE WRONG CALCULATION, AND WHAT IT COST  (2026-09-01)
+--------------------------------------------------------------------------------
+
+Asked which structure to trade on a single name. Answering it turned up an
+error in the method, not just in the answer.
+
+THE WRONG CALCULATION. A credit spread's EV was computed as
+
+    EV = credit - width x (delta_short + delta_long) / 2
+
+using DELTA as the probability of breach. Delta is the RISK-NEUTRAL
+probability -- derived from implied vol. The entire reason to sell premium is
+that implied exceeds realised, so pricing the risk off delta assumes away the
+edge before the sum begins. Every structure on every name at every strike
+came out negative, including the QQQ weekly put that had just been enabled.
+
+THE RIGHT ONE uses realised vol. A 0.12-delta strike sits about 1.17 implied
+standard deviations out; at RV/IV 0.78 that is 1.17/0.78 = 1.50 REALISED
+standard deviations, which is a materially smaller breach probability:
+
+                        P(breach) by delta   P(breach) realised   EV delta   EV realised
+    QQQ  0.20 x2              0.195               0.135              -14         -2
+    CRWV 0.20 x2              0.188               0.027               -5        +22
+    CRWV 0.30 x2              0.299               0.126               -5        +29
+
+QQQ IS ROUGHLY BREAKEVEN AT EVERY STRIKE even crediting the full variance
+risk premium -- -2 to -11 a contract, about what crossing costs. That is
+sections 14 and 21 reproduced from live chains rather than from a backtest.
+CRWV IS POSITIVE, and only because its implied is more than double its
+realised.
+
+A RETRACTION. On the strength of the delta calculation this file briefly
+recorded that section 22's "+8.14 a contract" contradicted its own statistic.
+That was overstated: the framing was wrong, not necessarily the figure. What
+still stands is narrower -- the statistic quoted beside it (put finished ITM
+12.3% against 11.4% priced) describes realised EXCEEDING implied, which is
+the opposite of a variance risk premium and cannot by itself produce +8.14.
+The figure is derived nowhere in the repository. It should not be cited until
+it is.
+
+AND THE RISK/REWARD SHAPE WAS ITS OWN OBJECTION, separate from EV. QQQ at
+0.12 delta collects 0.11 against 1.89 of risk -- 1:17, or 1:29 at the $1
+width originally configured. One breach erases seventeen wins. At 0.25-0.30
+delta the same name collects 0.42 against 1.58, or 1:3.8. Positive expectancy
+does not make a 1:29 payoff a sensible thing to hold, and the two questions
+should be asked separately.
+
+LOWER DELTA AND WIDER WIDTH PULL AGAINST EACH OTHER, measured on CRWV calls:
+
+    delta  width  credit  risk   ratio    P(breach)  EV
+     0.08   8.0    0.15   7.85   1:52.3     0.10%    +15
+     0.10   5.0    0.17   4.83   1:28.4     0.22%    +16
+     0.15   5.0    0.33   4.67   1:14.2     1.22%    +30
+     0.20   5.0    0.44   4.56   1:10.4     2.80%    +37
+     0.25   5.0    0.57   4.43   1: 7.8     6.04%    +42
+
+Asking for a lower delta AND a wider spread produces the worst ratio in the
+table -- 1:52 at 0.08/$8, worse than the shape that prompted the objection.
+That is not a defect in the chain; it is what "fairly priced" means. Delta
+sets the probability, width sets the ratio and the size of the loss.
+
+DEPLOYED FOR 2026-09-04: CRWV CALL CREDIT SPREAD, 0.25 delta, $5 wide, ONE
+contract, booked at 50% of credit, hard close 15:30 on expiration day.
+
+  * CALLS not puts, against the EV model's marginal preference for puts
+    (+29 vs +24). The model is driftless; CRWV has fallen 7% in five days and
+    trades below both moving averages, so a put short sits in the direction of
+    travel. Last week's shadow agrees -- CRWV's call side returned +80.0% and
+    its put -1.8%.
+  * 0.25 delta and the 50% target apply to the TRADED row only.
+    TRADING_WEEKLY_LIVE_DELTA and _LIVE_TARGET_PCT exist because SHORT_DELTA
+    drives every mark on all 13 symbols, and moving it would silently rebase a
+    record that is one week old.
+
+WHAT THIS BET ACTUALLY RESTS ON. CRWV's RV/IV of 0.46, measured from EIGHT
+overlapping pairs across FOUR sessions, and the 3-day horizon on the same name
+reads 0.88. At 0.88 most of the +42 disappears. This is a well-shaped bet on
+thin evidence, which is the whole reason it is one contract.
+
+EARNINGS ARE NOW GUARDED. weekly_signals.earnings_between refuses the ORDER
+when a published earnings date falls inside the hold, and refuses on an
+exception too -- a guard that passes when its data source fails reads as
+protection while providing none. The shadow row is still written. NVDA
+2026-11-17, CRWV 2026-11-11 and SNDK 2026-11-06 are all outside the current
+window; QQQ has none, being an ETF.
+
+NVDA IS TRACKED, NOT TRADED. Added to both symbol lists and it starts
+accumulating shadow rows and chain snapshots immediately. It has zero RV/IV
+pairs and its $5 strike grid makes the nearest usable spread one strike wide:
+every width and delta tested came out negative, and widening made it worse
+because there is nothing left to buy three strikes out.

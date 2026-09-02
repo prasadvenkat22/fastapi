@@ -140,7 +140,7 @@ SYMBOLS = tuple(
     v.strip().upper()
     for v in os.getenv(
         "TRADING_WEEKLY_SYMBOLS",
-        "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN,MRVL"
+        "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN,MRVL,NVDA"
     ).split(",")
     if v.strip()
 )
@@ -171,6 +171,16 @@ LIVE_VARIANTS = frozenset(
     if v.strip()
 )
 LIVE_CONTRACTS = int(os.getenv("TRADING_WEEKLY_LIVE_CONTRACTS", "1"))
+
+# The live slice may trade a DIFFERENT strike and target from the one the
+# shadow marks. SHORT_DELTA drives every row on all 13 symbols, so moving
+# it to trade one name at 0.25 would silently rebase the whole record and
+# make this Friday's marks incomparable with last Friday's. Same for the
+# 25% target, which is the number target_hit_at is measured against.
+#
+# Unset, both fall through to the shadow's values and nothing changes.
+LIVE_DELTA = float(os.getenv("TRADING_WEEKLY_LIVE_DELTA", "0")) or None
+LIVE_TARGET_PCT = float(os.getenv("TRADING_WEEKLY_LIVE_TARGET_PCT", "0")) or None
 
 # CLOSE BEFORE EXPIRY, ALWAYS. A put credit spread carried through
 # expiration with spot below the short strike is ASSIGNED -- 100 shares a
@@ -272,7 +282,7 @@ def observe(db, now: "datetime | None" = None) -> None:
             _maybe_open(db, now, symbol)
 
 
-def _legs(chain, variant, width: float):
+def _legs(chain, variant, width: float, delta: "float | None" = None):
     """Strikes for one variant, or None when the chain cannot supply them.
 
     Returns (call_short, call_long, put_short, put_long) with None where a
@@ -280,12 +290,12 @@ def _legs(chain, variant, width: float):
     """
     cs = cl = ps = pl = None
     if variant in ("CALL", "CONDOR"):
-        cs = strike_for_delta(chain, "call", SHORT_DELTA)
+        cs = strike_for_delta(chain, "call", delta or SHORT_DELTA)
         if cs is None:
             return None
         cl = cs + width
     if variant in ("PUT", "CONDOR"):
-        ps = strike_for_delta(chain, "put", SHORT_DELTA)
+        ps = strike_for_delta(chain, "put", delta or SHORT_DELTA)
         if ps is None:
             return None
         pl = ps - width
@@ -347,6 +357,26 @@ def _maybe_trade(symbol, variant, expiry, cs, cl, ps, pl, priced):
     credit = round(max(priced["natural_sell"], 0.0), 2)
     if credit < MIN_CREDIT:
         return None, None
+
+    # EARNINGS REFUSE THE WEEK. A 0.12-delta strike prices an ordinary five
+    # days; an earnings print is the tail that delta is not describing, and the
+    # position cannot be managed while it happens. The shadow row is still
+    # written -- the observation is worth having -- only the ORDER is refused.
+    #
+    # An exception refuses too. A guard that silently passes when its data
+    # source fails is worse than no guard, because it reads as protection.
+    try:
+        from datetime import date as _date
+        exp_date = _date.fromisoformat(expiry)
+        hit = weekly_signals.earnings_between(symbol, _date.today(), exp_date)
+    except Exception:
+        logger.exception("Weekly live: earnings lookup failed for %s — refusing the "
+                         "order rather than assuming the week is clear.", symbol)
+        return None, None
+    if hit is not None:
+        logger.info("Weekly live: %s reports earnings %s, inside this hold — refusing "
+                    "the order. The row is still marked.", symbol, hit)
+        return None, None
     try:
         res = tradier_orders.submit_vertical(
             underlying=symbol, expiry=expiry, call_put=call_put,
@@ -387,7 +417,12 @@ def _maybe_open(db, now: datetime, symbol: str) -> None:
     width = _width_for(chain)
 
     for variant in VARIANTS:
-        legs = _legs(chain, variant, width)
+        # A traded row is built at the LIVE delta; every other row keeps the
+        # shadow's, so the record stays comparable week to week.
+        is_live_row = (LIVE and symbol.upper() in LIVE_SYMBOLS
+                       and variant.upper() in LIVE_VARIANTS)
+        legs = _legs(chain, variant, width,
+                     LIVE_DELTA if is_live_row else None)
         if legs is None:
             logger.info("Weekly shadow %s %s: no strike near %.2f delta on %s.",
                         symbol, variant, SHORT_DELTA, expiry)
@@ -498,7 +533,7 @@ def _mark(db, row: WeeklyShadow, now: datetime, chain, spot) -> None:
     if row.live_order_id and not row.live_closed_at:
         expiring = now.date().isoformat() >= row.expiration
         deadline = expiring and now.time() >= CLOSE_BY
-        if ret >= TARGET_PCT or deadline:
+        if ret >= (LIVE_TARGET_PCT or TARGET_PCT) or deadline:
             _close_live(db, row, now, priced, "deadline" if deadline else "target")
     db.commit()
 

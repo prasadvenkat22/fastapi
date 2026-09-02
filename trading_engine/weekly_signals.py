@@ -174,6 +174,44 @@ def _cached(symbol: str, day) -> dict:
     return _CACHE[key]
 
 
+_EARNINGS_CACHE: dict = {}
+
+
+def earnings_between(symbol: str, start, end) -> "object | None":
+    """The symbol's next earnings date if it falls inside [start, end].
+
+    A weekly credit spread held over an earnings print is a different trade
+    from the one a 0.12-delta strike was chosen for. The delta prices an
+    ordinary five days; an earnings gap is the tail that delta is not
+    describing, and the position cannot be managed while it happens.
+
+    Returns None for an ETF, for a symbol with no published date, or when
+    yfinance fails -- and the CALLER must treat None as "unknown", not as
+    "safe". A guard that silently passes on a data outage is worse than no
+    guard, so the live path refuses on an exception rather than proceeding.
+
+    Cached per symbol per day: this runs once a week in practice but sits in
+    the same cycle as everything else.
+    """
+    key = (symbol.upper(), start)
+    if key in _EARNINGS_CACHE:
+        return _EARNINGS_CACHE[key]
+    try:
+        rows = yf.Ticker(symbol).get_earnings_dates(limit=8)
+    except Exception:
+        logger.exception("Earnings lookup failed for %s", symbol)
+        raise
+    hit = None
+    if rows is not None and len(rows):
+        for ts in rows.index:
+            d = ts.date()
+            if start <= d <= end:
+                hit = d
+                break
+    _EARNINGS_CACHE[key] = hit
+    return hit
+
+
 def entry_signals(symbol: str, short_iv: "float | None" = None,
                   day=None) -> dict:
     """Columns for one weekly_shadow row: the name's state and the index's.

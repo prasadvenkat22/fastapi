@@ -1398,12 +1398,27 @@ def sweep_forceclose(sessions: dict):
     base_h, base_m = N.FORCE_CLOSE_HOUR, N.FORCE_CLOSE_MINUTE
     for h, m in ((15, 15), (15, 30), (15, 45), (15, 55), (16, 0)):
         N.FORCE_CLOSE_HOUR, N.FORCE_CLOSE_MINUTE = h, m
-        trades, per_day = _run_arm(sessions, dtime(9, 45))
+        # The replay window has to OUTLAST the force close being tested.
+        # _run_arm defaults end=15:45, so the 15:55 and 16:00 arms were
+        # bounded by the harness rather than by the setting and could only
+        # ever reproduce the 15:45 result. Run every arm to 16:00 and let
+        # is_past_force_close do the closing, which is the thing under test.
+        trades, per_day = _run_arm(sessions, dtime(9, 45), end=dtime(16, 0))
         label = f"flatten at {h:02d}:{m:02d}" + ("  (current)" if (h, m) == (15, 45) else "")
         _report_daily(label, per_day)
+        # ALWAYS report the count, including zero. Five identical rows with no
+        # sub-line under them reads as a broken sweep; five identical rows each
+        # saying "0 forced exits" reads as the finding it actually is -- at the
+        # deployed configuration nothing is still open that late, so the
+        # setting cannot matter. The docstring above claims this exit "ends the
+        # most trades in the credit window", which was true of an older config
+        # and is not true now.
         fc = [t for t in trades if t["reason"] == "FORCE_CLOSE"]
         if fc:
             _report("    the forced exits", fc, len(sessions))
+        else:
+            print(f"    {'no position reached the force close':32s} "
+                  f"0 of {len(trades)} trades")
     N.FORCE_CLOSE_HOUR, N.FORCE_CLOSE_MINUTE = base_h, base_m
 
 
@@ -3057,6 +3072,115 @@ def sweep_creditstall(sessions: dict):
     STALL_MINUTES, STALL_GIVEBACK_PCT = base_m, base_g
 
 
+def sweep_breakeven(sessions: dict):
+    """Once a position has shown a profit, never let it go negative.
+
+    The gap, observed live on 2026-09-02: a book peaked at +152.50 and gave
+    back to -207.50 with nothing watching. Every profit-protection rule in the
+    engine starts at a level that peak never reached -- the stall needs the
+    target to arm it, the ratchet needs RATCHET_ARM_PCT, and
+    RIDE_RATCHET_ARM_PCT is 0. A trade that makes a small profit and hands it
+    all back falls through all of them.
+
+    Measured on the MORNING book, not the credit one. The credit window turns
+    8-10 trades in 60 sessions and cannot support a conclusion -- that sample
+    is what sank the credit-stall measurement in section 55. The morning book
+    has 50-60 and the same gap.
+
+    TWO KNOBS. How much peak profit arms it, and where "flat" is: a stop at
+    precisely zero is taken out by the spread on the way past, so the exit
+    level is swept separately rather than assumed to be 0.
+
+    Read the BREAKEVEN count in the exit mix. If it stays at zero the rule is
+    not engaging and the arms are measuring nothing -- the tell that has cost
+    four separate investigations in this file.
+    """
+    print("")
+    print("BREAKEVEN STOP -- a shown profit does not become a loss")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base_a, base_e = N.BREAKEVEN_ARM_PCT, N.BREAKEVEN_EXIT_PCT
+
+    def _arm(label, arm, exit_pct):
+        N.BREAKEVEN_ARM_PCT, N.BREAKEVEN_EXIT_PCT = arm, exit_pct
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        trades, per_day = _run_arm(sessions, dtime(10, 15))
+        mix = {}
+        for t in trades:
+            mix[t["reason"]] = mix.get(t["reason"], 0) + 1
+        _report_daily(label + f"  {mix}", per_day)
+
+    _arm("off  (deployed)", 0.0, 0.0)
+    print("")
+    print("  HOW MUCH PEAK PROFIT ARMS IT (exit at flat)")
+    for arm in (10.0, 15.0, 20.0, 30.0, 50.0):
+        _arm(f"arm at +{arm:.0f}%, exit at 0%", arm, 0.0)
+    print("")
+    print("  WHERE FLAT IS (armed at +20%)")
+    for ex in (-5.0, -2.0, 0.0, 2.0, 5.0):
+        _arm(f"arm at +20%, exit at {ex:+.0f}%", 20.0, ex)
+
+    N.BREAKEVEN_ARM_PCT, N.BREAKEVEN_EXIT_PCT = base_a, base_e
+
+
+def sweep_strikeexit(sessions: dict):
+    """Leave a short spread BEFORE spot reaches the short strike.
+
+    2026-09-02 is the whole argument. A 20-lot 709 call credit spread went
+    -7.50 at 708.55, -397.50 at 708.96, and -657.50 by the time spot crossed
+    709 and the breach condition was finally true. Every dollar of the loss
+    happened in the 45 cents BEFORE the strike. A rule that fires on the
+    crossing is not a control; it is a notification.
+
+    Two mechanisms, swept together because they address the same session from
+    different ends:
+
+      CREDIT_STRIKE_EXIT_BUFFER -- exit at a DISTANCE from the short strike,
+      in dollars of underlying, on the threatening side.
+
+      CREDIT_STALL_REQUIRES_ARM -- the credit stall currently arms at the
+      target. That book peaked at 14.2% of max while the ratchet arms at 32%
+      and the stall at 50%, so nothing watched it. With the arm off the stall
+      watches from entry, as the morning ride's does.
+
+    Watch the STRIKE_APPROACH count in the exit mix; zero means it is not
+    engaging and the arms measure nothing.
+    """
+    print("")
+    print("STRIKE APPROACH -- leave before the strike, not after")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print("")
+    base_b, base_a = N.CREDIT_STRIKE_EXIT_BUFFER, N.CREDIT_STALL_REQUIRES_ARM
+    base_s = N.STALL_ON_CREDIT
+
+    def _arm(label, buf, requires_arm=True, stall_on=True):
+        N.CREDIT_STRIKE_EXIT_BUFFER = buf
+        N.CREDIT_STALL_REQUIRES_ARM = requires_arm
+        N.STALL_ON_CREDIT = stall_on
+        PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
+        trades, per_day = _run_arm(sessions, dtime(10, 15))
+        cr = [t for t in trades if is_credit(t["strategy"])]
+        mix = {}
+        for t in cr:
+            mix[t["reason"]] = mix.get(t["reason"], 0) + 1
+        tot = sum(t["pnl"] for t in cr)
+        _report_daily(label + f"  [{len(cr)} credit tr {tot:+.0f}, {mix}]", per_day)
+
+    _arm("deployed (armed stall, no buffer)", 0.0, True, True)
+    print("")
+    print("  HOW FAR FROM THE SHORT STRIKE TO LEAVE")
+    for buf in (0.25, 0.50, 1.00, 2.00):
+        _arm(f"exit within ${buf:.2f} of the strike", buf, True, True)
+    print("")
+    print("  CREDIT STALL WATCHING FROM ENTRY (no arm)")
+    _arm("stall from entry, no buffer", 0.0, False, True)
+    for buf in (0.50, 1.00):
+        _arm(f"stall from entry + ${buf:.2f} buffer", buf, False, True)
+
+    N.CREDIT_STRIKE_EXIT_BUFFER, N.CREDIT_STALL_REQUIRES_ARM = base_b, base_a
+    N.STALL_ON_CREDIT = base_s
+
+
 def sweep_indicators(sessions: dict):
     """Two indicator definitions the engine never examined, from outside notes.
 
@@ -3602,6 +3726,10 @@ def main():
         sweep_zonetier(sessions)
     if which in ("creditstall", "all"):
         sweep_creditstall(sessions)
+    if which in ("breakeven", "all"):
+        sweep_breakeven(sessions)
+    if which in ("strikeexit", "all"):
+        sweep_strikeexit(sessions)
     if which in ("events", "all"):
         sweep_events(sessions)
     if which in ("forceclose", "all"):

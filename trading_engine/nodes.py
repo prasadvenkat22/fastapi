@@ -473,6 +473,83 @@ STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
 # Off by default. Section 55 has the measurement.
 STALL_ON_CREDIT = os.getenv("TRADING_STALL_ON_CREDIT", "false").lower() == "true"
 
+# BREAKEVEN STOP: once a position has shown a real profit, it does not go
+# negative.
+#
+# THE GAP THIS COVERS, observed live 2026-09-02. A credit book peaked at
+# +152.50 and gave back to -207.50. Nothing in the engine saw it: the stall
+# only guards a peak once the target has ARMED it, the ratchet arms at
+# RATCHET_ARM_PCT, and RIDE_RATCHET_ARM_PCT is 0. Every profit-protection rule
+# here starts watching at a level this position never reached, so a trade that
+# makes a small profit and hands it all back falls through all of them.
+#
+# LOWERING AN ARM DOES NOT FIX IT. Guarding a small peak means booking on
+# noise -- that same book swung 290 dollars in one minute on a 35-cent move in
+# QQQ -- and truncating the trades that were about to work. The arm is high
+# because small peaks are not information.
+#
+# A BREAKEVEN STOP IS A DIFFERENT SHAPE. It never fires above zero, so it
+# cannot truncate a winner; it requires a full round trip from profit back to
+# flat, which noise does not produce; and it is defined by exactly the path
+# that beat every other rule.
+#
+# EXIT is not necessarily 0. A stop at precisely breakeven is hit by the
+# spread on the way past, so the exit level is its own knob.
+#
+# Both default off. It converts a class of small losses into a class of small
+# nothings and gives up the recoveries in exchange, and whether that trades
+# well is a question for the sweep, not for this comment.
+# STRIKE APPROACH: leave a short spread BEFORE spot reaches the short strike.
+#
+# Observed live 2026-09-02, and it is the clearest lesson of that session. A
+# 20-lot 709 call credit spread ran:
+#
+#     15:42  QQQ 708.55   -7.50   (flat)
+#     15:46  QQQ 708.96  -397.50
+#     15:48  QQQ 709.04  -657.50  <- breach trigger finally true
+#
+# EVERY DOLLAR OF THAT LOSS HAPPENED IN THE 45 CENTS BEFORE THE STRIKE. A rule
+# that fires when spot crosses the short strike is not a risk control on 0DTE
+# short premium; it is a notification that the risk already happened. Gamma in
+# the last half hour turns a 40-cent move into a 400-dollar swing on 20
+# contracts, and the crossing itself adds nothing new.
+#
+# So: exit while spot is still on the right side, at a DISTANCE. Measured in
+# dollars of underlying rather than percent, because the thing being avoided
+# is a strike, which is a price and not a ratio.
+#
+# Separate from CREDIT_TRAIL_STRIKE_BUFFER above, which only qualifies a
+# trend-break exit and cannot fire on its own. This one fires on distance
+# alone -- being 40 cents under your short strike at 15:45 IS the signal, and
+# waiting for a second confirmation is how the 45 cents got spent.
+#
+# 0 disables. Deliberately off until swept, but the argument for a nonzero
+# value on the 0DTE credit leg is the transcript above.
+CREDIT_STRIKE_EXIT_BUFFER = float(os.getenv("TRADING_CREDIT_STRIKE_EXIT", "0"))
+
+# Whether the credit stall must be ARMED by the target first.
+#
+# STALL_ON_CREDIT arms at final_take_profit_pct, which is the right shape for
+# protecting a large gain and the wrong shape for the loss above: that book
+# peaked at 14.2% of max, the ratchet arms at 32% and the stall at 50%, so no
+# profit-protection rule was ever watching it. The morning ride has no such
+# hole -- its stall is always on, which is why the breakeven stop measured as
+# a no-op there (section 55) and why the gap is credit-only.
+#
+# With this false the credit stall watches from entry, exactly as the ride's
+# does.
+CREDIT_STALL_REQUIRES_ARM = os.getenv("TRADING_CREDIT_STALL_ARM", "true").lower() == "true"
+
+BREAKEVEN_ARM_PCT = float(os.getenv("TRADING_BREAKEVEN_ARM", "0"))
+BREAKEVEN_EXIT_PCT = float(os.getenv("TRADING_BREAKEVEN_EXIT", "0"))
+
+
+def _broke_even(peak_return: float, return_pct: float) -> bool:
+    """Armed by a real peak, fires on the round trip back to flat."""
+    return (BREAKEVEN_ARM_PCT > 0
+            and peak_return >= BREAKEVEN_ARM_PCT
+            and return_pct <= BREAKEVEN_EXIT_PCT)
+
 # What the 9 EMA is compared against for the ema_cross reading.
 #
 # Three specifications have been in play and only one was ever deployed.
@@ -1834,6 +1911,14 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             if stalled:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "STALL"
+            elif _broke_even(peak_return, return_pct):
+                logger.info(
+                    "Breakeven stop: %s peaked %+.1f%% and has come back to %+.1f%% — "
+                    "booking flat rather than letting a winner become a loser.",
+                    position.strategy, peak_return, return_pct,
+                )
+                broker.sell_all(position.underlying)
+                action, exit_reason = "SELL_ALL", "BREAKEVEN"
             elif RIDE_TAKE_PROFIT_PCT > 0 and return_pct >= RIDE_TAKE_PROFIT_PCT:
                 logger.info(
                     "Ride take-profit: %s at %+.1f%% reached the absolute +%.0f%% "
@@ -1934,7 +2019,9 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # governed by the branch above, which has its own stall.
             credit_stalled = False
             peak_at = getattr(position, "peak_at", None)
-            if (STALL_ON_CREDIT and is_credit_pos and hit_final and STALL_MINUTES > 0
+            if (STALL_ON_CREDIT and is_credit_pos
+                    and (hit_final or not CREDIT_STALL_REQUIRES_ARM)
+                    and STALL_MINUTES > 0
                     and peak_at is not None and peak_return > 0):
                 # Disarm the target ONLY when there is a working stall to hand
                 # the decision to. Without peak_at there is nothing to detect a
@@ -1960,9 +2047,37 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         position.strategy, return_pct, final_tp, peak_return, quiet_min,
                     )
 
-            if hit_final or credit_stalled or books_at_target or trend_broken or gave_back:
+            # Distance to the short strike, on the threatening side. For a
+            # short CALL the danger is spot rising to it; for a short PUT,
+            # falling to it.
+            near_strike = False
+            if CREDIT_STRIKE_EXIT_BUFFER > 0 and is_credit_pos:
+                _spot = state.get("qqq_close")
+                if _spot:
+                    gap = (float(_spot) - position.short_strike
+                           if position.strategy == CALL_CREDIT_SPREAD
+                           else position.short_strike - float(_spot))
+                    near_strike = gap >= -CREDIT_STRIKE_EXIT_BUFFER
+                    if near_strike:
+                        logger.info(
+                            "Strike approach: %s spot %.2f is within %.2f of the %.0f short "
+                            "strike — leaving before it is reached, not after.",
+                            position.strategy, float(_spot), CREDIT_STRIKE_EXIT_BUFFER,
+                            position.short_strike,
+                        )
+
+            broke_even = _broke_even(peak_return, return_pct)
+            if broke_even:
+                logger.info(
+                    "Breakeven stop: %s peaked %+.1f%%, now %+.1f%% — booking flat.",
+                    position.strategy, peak_return, return_pct,
+                )
+            if (hit_final or credit_stalled or books_at_target or trend_broken
+                    or gave_back or broke_even or near_strike):
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", (
+                    "STRIKE_APPROACH" if near_strike else
+                    "BREAKEVEN" if broke_even else
                     "STALL" if credit_stalled else
                     "TAKE_PROFIT" if (hit_final or books_at_target)
                     else ("RATCHET" if gave_back else "TRAIL_STOP")

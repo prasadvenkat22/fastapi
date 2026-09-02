@@ -3412,3 +3412,107 @@ opening auction produces whipsaws the indicators read as trend.
 11:00 ranks above 10:15 here as it did in section 27, on 0.68 trades a day.
 That cell has moved between best and worst across three runs on 23-30 trades
 and is not a finding.
+
+--------------------------------------------------------------------------------
+55. THE HARNESS SHADOWED THE ENGINE, AND A DEPLOYMENT WAS MADE ON IT  (2026-09-02)
+--------------------------------------------------------------------------------
+
+Section 51 recorded three harness divergences in one afternoon. This is the
+fifth and the worst, because unlike the others it did not produce identical
+rows that announced themselves -- it produced a plausible, varying result that
+a live setting was changed on.
+
+replay_session ran its OWN stalled-peak check before calling the engine, on
+ANY open position, and `continue`d when it fired:
+
+    if STALL_MINUTES > 0 and before is not None and entry is not None:
+        ...
+        closed = _close(entry, before, spot, ts, "STALL")
+        continue                    # the engine's exit logic never runs
+
+So the engine's credit exit branch was unreachable. STALL_ON_CREDIT,
+CREDIT_STALL_REQUIRES_ARM and CREDIT_STRIKE_EXIT_BUFFER could not be measured
+at all: sweep_strikeexit returned byte-identical rows for every arm including
+a $2.00 buffer on a $4-wide spread, which is what finally exposed it.
+
+AND SWEEP_CREDITSTALL LOOKED LIKE IT WORKED. Its arms genuinely differed --
+3/5/8/12 minutes gave -15.11, -15.11, -3.66 and +7.47 a day -- because they
+also set STALL_MINUTES, which drives the HARNESS copy. The credit stall was
+never exercised. TRADING_STALL_ON_CREDIT=true was deployed on that number and
+has been reverted to false pending an honest measurement.
+
+THE GENERAL LESSON, now stated for the fifth time in nine sections: THE
+HARNESS MUST NOT REIMPLEMENT AN ENGINE RULE. Every copy drifts. The stall
+copy existed because peak_at was not stamped in replay; once it was (section
+51), the copy became redundant AND harmful. It is now restricted to riding
+positions, where the intrabar stop check also needs to pre-empt the agent.
+
+--------------------------------------------------------------------------------
+56. A REJECTED ENTRY LEFT A PHANTOM POSITION FOR FIVE HOURS  (2026-09-02)
+--------------------------------------------------------------------------------
+
+The most expensive defect of the session, and it is not a strategy question.
+
+    14:45:14.640755  OpenPosition row written: BULL_CALL_SPREAD 708/718 x3
+    14:45:14.730     order created
+    14:45:14.777     order REJECTED
+      "Buy order cannot be placed to cover short position, order must be
+       placed as a Buy to Cover."
+
+THE ROW IS WRITTEN BEFORE THE ORDER IS SUBMITTED AND IS NOT ROLLED BACK WHEN
+THE ORDER IS REJECTED. The engine then believed it held a spread that had
+never existed, and spent the rest of the session trying to close it: 189
+rejected close orders between 14:58 and 15:32, one every thirteen seconds,
+each one a two-leg buy_to_close against a 718 short that was never opened.
+It also meant the -25% stop and the stall were offline for the real book,
+because the engine was managing a fiction.
+
+THE COLLISION THAT CAUSED THE REJECTION IS ITS OWN LESSON. The account held a
+manual short 5x QQQ 708 from 09:43. The engine's entry wanted to BUY 708, and
+Tradier read that as covering an existing short and refused it. The engine
+places entries with no knowledge of what else the account holds at that
+strike -- the same blindness that had it size the 10:20 entry as though the
+account were empty.
+
+TWO FIXES, neither of which is a parameter:
+  - Do not persist an OpenPosition row until the order is confirmed filled,
+    and roll it back on rejection.
+  - Refuse an entry on a strike where the account already holds an opposing
+    leg, rather than discovering it in a broker rejection.
+
+--------------------------------------------------------------------------------
+57. WHAT THE 2026-09-02 CREDIT BOOK COST, AND WHAT IT PROVED  (2026-09-02)
+--------------------------------------------------------------------------------
+
+A manual 20-lot QQQ 709 call credit spread, wings at 712 and 713, credit
+collected 1072.50. Closed at 15:50 for a 1730.00 debit: -657.50.
+
+    14:53  +152.50   peak, 14.2% of max
+    15:40   +32.50
+    15:42    -7.50   monitor deadline fired; close needed authorisation
+    15:46  -397.50
+    15:48  -657.50   QQQ 709.04, breach condition finally true
+    15:50  filled
+
+THREE THINGS THIS ESTABLISHED, all of which cost money to learn:
+
+ONE. A BREACH TRIGGER IS NOT A RISK CONTROL. Every dollar of the loss happened
+in the 45 cents BEFORE spot reached the short strike. By the time the crossing
+is true the move has already happened; gamma in the last half hour turned a
+40-cent move into a 400-dollar swing on 20 contracts. CREDIT_STRIKE_EXIT_BUFFER
+exits at a distance instead. Built, not yet honestly measured -- see section 55.
+
+TWO. THE PROFIT-PROTECTION GAP IS CREDIT-ONLY. The peak of 14.2% of max was
+invisible to every rule: the ratchet arms at 32%, the credit stall at 50%. The
+morning ride has no such hole because its stall is always on. That was
+confirmed rather than assumed: a breakeven stop forced to arm +20% / exit +50%
+fires 17 times and takes them from STALL, so the code is wired; at any sane
+exit level it fires zero, because the always-on stall books the position long
+before it round-trips to flat. The fix belongs on the credit side
+(CREDIT_STALL_REQUIRES_ARM), not in a new rule.
+
+THREE. A READ-ONLY MONITOR IS NOT A CONTROL. The deadline fired at 15:42 with
+the position at -7.50. It closed at 15:50 at -657.50. The gap was the round
+trip for authorisation plus a first pair of limit orders priced at the natural,
+which stopped being marketable within seconds at $390 a minute. Roughly 250 of
+the 650 was the delay, not the trade.

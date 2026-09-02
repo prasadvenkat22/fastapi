@@ -591,7 +591,26 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
         before = broker.get_open_position()
 
         # Stalled-peak check, ahead of the agent so it can pre-empt the ride.
-        if STALL_MINUTES > 0 and before is not None and entry is not None:
+        #
+        # RIDING POSITIONS ONLY. This used to run on ANY open position and
+        # `continue` when it fired, which meant it SHADOWED the engine's own
+        # credit exit branch entirely: STALL_ON_CREDIT, CREDIT_STALL_REQUIRES_ARM
+        # and CREDIT_STRIKE_EXIT_BUFFER could never be reached, and a sweep of
+        # them returned identical rows at every setting including a $2.00
+        # buffer on a $4-wide spread.
+        #
+        # WORSE, IT LOOKED LIKE IT WORKED. sweep_creditstall's arms did differ
+        # from one another -- but only because they also set STALL_MINUTES,
+        # which drives THIS rule. The +7.47/day attributed to the credit stall
+        # was this copy being retimed. A deployment decision was made on it.
+        #
+        # The engine implements the stall in both branches itself, and since
+        # peak_at is stamped above its own code actually runs now, so this
+        # copy is redundant as well as harmful. Kept only for the ride, where
+        # the intrabar stop check below also needs to pre-empt the agent.
+        _riding = (before is not None
+                   and PB.rides_to_close(getattr(before, "playbook", "") or ""))
+        if STALL_MINUTES > 0 and _riding and entry is not None:
             r = before.return_pct
             if r > _stall["peak"]:
                 _stall["peak"], _stall["at"] = r, ts

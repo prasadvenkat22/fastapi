@@ -372,7 +372,13 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
     cached = _load().get("structures") or {}
     for key, rec in cached.items():
         syms = tuple(key.split("|"))
-        if len(syms) != 2 or syms in book:
+        # A key already in `book` blocks the cache -- but only if it is LIVE.
+        # An opened-and-closed pair leaves a qty 0 entry, which blocked the
+        # cached copy of a REOPENED structure at the same strikes and then
+        # dropped out itself, leaving the legs to fall through to inferred
+        # pairing and be skipped for want of a price. Observed 2026-09-03 on a
+        # SNDK 1500/1560 rolled twice in one session.
+        if len(syms) != 2 or (syms in book and book[syms]["qty"] > 0):
             continue
         if any(s in engine_symbols for s in syms):
             continue
@@ -771,11 +777,24 @@ def review(engine_symbols: "set | None" = None) -> list:
         seen, reported = set(), []
         # Cache today's reconstruction so tomorrow can still price a position
         # held overnight. See the note in open_structures.
-        state["structures"] = {
-            st["key"]: {"qty": st["qty"], "net": st["entry"],
-                        "credit": st["credit"], "opened": st["opened"]}
-            for st in structures
-        }
+        # MERGE, DO NOT REPLACE.
+        #
+        # This used to rebuild the cache from whatever open_structures returned
+        # this pass, which silently erased any entry it could not reproduce --
+        # including a hand-seeded one, within a minute. On 2026-09-03 a SNDK
+        # 1500/1560 could not be priced (the 1500 was bought the previous
+        # session, and /orders is session-only, so today's fills net its
+        # quantity to zero) and every attempt to seed its entry was wiped by
+        # the next cycle.
+        #
+        # The cache is a RECORD, not a mirror of the current pass. Entries are
+        # dropped when a structure closes -- handled at the close site -- not
+        # because one pass failed to rebuild it.
+        for st in structures:
+            state["structures"][st["key"]] = {
+                "qty": st["qty"], "net": st["entry"],
+                "credit": st["credit"], "opened": st["opened"],
+            }
 
         for st in structures:
             key = st["key"]

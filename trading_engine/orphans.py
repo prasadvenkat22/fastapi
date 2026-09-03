@@ -557,17 +557,34 @@ def review(engine_symbols: "set | None" = None) -> list:
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)
                           and _quotes_tradeable(
                               tradier_orders.quotes([st["long"], st["short"]]), st))
-            if not zero_dte and reason is None:
-                _armed = rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
-                verdict_scope = "  [expires %s — ceiling + stall %s]" % (
-                    st.get("expiry"),
-                    "ARMED" if _armed else "arms at +%.0f%%" % ORPHAN_LATER_STALL_ARM_PCT)
+            # SAY ONLY WHAT APPLIES TO THIS POSITION.
+            #
+            # The verdict used to print "stop -25%" on every line including
+            # positions expiring later, where zero_dte gates the stop off and
+            # it can never fire. The behaviour was right and the log lied about
+            # it -- which is worse than a cosmetic problem here, because the
+            # whole point of these lines is to let a human check that the rules
+            # in force are the rules intended.
+            if reason:
+                verdict, verdict_scope = reason, ""
             else:
-                verdict_scope = ""
-            verdict = reason or (
-                f"holding (ceiling {ceiling:+.0f}%, stop {stop_pct:+.0f}%, "
-                f"stall {STALL_GIVEBACK_PCT:.0f}pts)" if ceiling is not None
-                else f"holding (stop {stop_pct:+.0f}%)")
+                parts = []
+                if ceiling is not None:
+                    parts.append("ceiling %+.0f%%" % ceiling)
+                if zero_dte:
+                    parts.append("stop %+.0f%%" % stop_pct)
+                    if STALL_MINUTES > 0:
+                        parts.append("stall %.1fpts/%.0fmin" % (
+                            STALL_GIVEBACK_PCT, STALL_MINUTES))
+                    if ORPHAN_FORCE_CLOSE:
+                        parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)
+                elif ORPHAN_LATER_STALL_MINUTES > 0:
+                    parts.append("stall %.1fpts/%.0fmin %s" % (
+                        ORPHAN_LATER_STALL_GIVEBACK_PCT, ORPHAN_LATER_STALL_MINUTES,
+                        "ARMED" if rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
+                        else "arms +%.0f%%" % ORPHAN_LATER_STALL_ARM_PCT))
+                verdict = "holding (%s)" % ", ".join(parts) if parts else "holding"
+                verdict_scope = "" if zero_dte else "  [expires %s]" % st.get("expiry")
             logger.info(
                 "ORPHAN %s %s %.0f/%.0f x%d %s: entry %.2f value %.2f %+.1f%% "
                 "(peak %+.1f%%, %.0f min ago) — %s%s",

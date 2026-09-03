@@ -97,8 +97,23 @@ ORPHAN_CREDIT_STOP_PCT = float(os.getenv("TRADING_ORPHAN_CREDIT_STOP_PCT", "-600
 # enough to reject the case above at 0.50.
 ORPHAN_MAX_LEG_SPREAD = float(os.getenv("TRADING_ORPHAN_MAX_LEG_SPREAD", "0.25"))
 
-STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
-STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
+# THE STALL, WITH ITS OWN GIVEBACK.
+#
+# TRADING_STALL_GIVEBACK_PCT is shared by the morning ride, the afternoon
+# credit trade and this module, and five points means something different in
+# each. On the engine's morning debit spread it is a fraction of a premium
+# priced near the money. On a credit spread it is five points of the credit
+# COLLECTED, which can be a couple of cents. On a manual deep-ITM spread --
+# a QQQ 700/710 bought at 7.49, $10 wide -- five points is 37 cents of value,
+# which a position drifting with the underlying gives back without the thesis
+# changing at all.
+#
+# One number cannot serve three structures. These default to the shared values
+# so nothing moves until they are set deliberately.
+STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_STALL_MINUTES",
+                                os.getenv("TRADING_STALL_MINUTES", "0")))
+STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT",
+                                     os.getenv("TRADING_STALL_GIVEBACK_PCT", "0")))
 
 # Peak tracking must survive a container recreate or the stall resets on every
 # deploy and can never fire. A file under the mounted working directory.

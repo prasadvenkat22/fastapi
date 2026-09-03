@@ -3990,3 +3990,81 @@ Section 48's caveat stands and is worth restating: single-name RV/IV was
 unstable across lookbacks (AMZN 1.56 at 2 days against 0.26 at 3). A 20-day
 realised vol against a 2-day implied is also a horizon mismatch. One reading
 is not a decision.
+
+--------------------------------------------------------------------------------
+64. SIX DEFECTS IN ONE SESSION, AND THE TWO THAT WERE LUCK  (2026-09-03)
+--------------------------------------------------------------------------------
+
+Orphan management ran live for a full session. It worked -- two stalls fired
+and booked winners unaided -- and it carried six defects, every one of them in
+code deployed within the previous 24 hours. They are listed by how they would
+have been discovered, because that is the part worth learning.
+
+FOUND BY A LOG LINE THAT LOOKED WRONG:
+  1. {"orders": "null"} as a string raised AttributeError, was caught, and
+     returned an empty list -- indistinguishable from "nothing to manage".
+  2. /orders covers the current session only, so overnight holds rebuilt to
+     nothing. /history reaches back but is per-leg and cannot recover pairing.
+  3. The verdict line advertised "stop -25%" on later expiries where zero_dte
+     gates the stop off and it can never fire.
+
+FOUND BY CHECKING A NUMBER AGAINST WHAT IT SHOULD BE:
+  4. _book recorded the MARK, not the fill. CRWV closed at 4.55 and booked
+     4.20: +260 recorded against a real +435. The mark is the natural and
+     deliberately pessimistic, so every orphan result was wrong in the same
+     direction -- into the daily loss limit.
+  5. _book recorded st["qty"], not the contracts that filled. A QQQ 714/716
+     ten-lot closed as two orders of five and each row claimed ten: 340 booked
+     against a real 170. IT READ EXACTLY LIKE A DUPLICATE AND WAS NOT. Deleting
+     the "duplicate" would have destroyed a real close.
+
+AND ONE FOUND ONLY BECAUSE A NUMBER WAS IMPOSSIBLE:
+  6. open_structures assigned the long leg to the lower strike for every debit.
+     That is right for calls and backwards for PUTS, where a debit is long the
+     HIGHER strike. _mark computes bid(long) - ask(short), so a reversed put
+     spread marks NEGATIVE: a manual AVGO 365/355 put debit bought at 7.88
+     marked -8.40, a return of -206.6%.
+
+TWO OF THESE WERE CAUGHT BY LUCK AND THAT SHOULD BE SAID PLAINLY.
+
+AVGO was not in MANAGE_UNDERLYING when its orientation bug was found. Had it
+been, -206.6% would have tripped the -25% stop on the first cycle and closed a
+position that was down 11.8%. Nothing in the design prevented that; the symbol
+list happened not to include it yet.
+
+And defect 5 was nearly "fixed" by deleting a row. The two 714/716 rows were
+identical in every visible field, which is what a double-booking looks like.
+Only the ORDER history showed two separate five-lot closes. THE LESSON IS THE
+PROCEDURE: reconstruct from the broker's orders before correcting the
+database, every time, even when the database looks obviously wrong.
+
+WHAT ACTUALLY WORKED, AND IT IS THE POINT OF ALL OF IT:
+
+    CRWV 75/80  x5  entry 3.68  peak +18.2%  fired +14.1%  fill 4.55  +435
+    MRVL 195/205 x1 entry 7.53  peak +17.5%  fired +12.9%  fill 8.60  +107
+
+Neither hit a target. Both armed at +10%, rode the move, and booked when the
+profit stopped making new highs. MRVL is the better demonstration: it reached
+the stall condition at 15:23, made a NEW HIGH at 15:39 which reset the quiet
+timer, and only fired at 15:55. A plain ratchet would have booked it thirty
+minutes earlier and about five points lower.
+
+A partial close no longer ends a structure. Previously any fill dropped it from
+the cache and the peaks, so remaining contracts became invisible -- unmanaged,
+and unrecoverable until the next day's orders rebuilt them.
+
+--------------------------------------------------------------------------------
+WHAT TO CHECK AT THE CLOSE
+
+  grep "ORPHAN booked"          does each row's quantity match its order?
+  grep "partial close"          new; should be rare and must leave a remainder
+  grep "fill .* against a .* mark"  how pessimistic is the natural, really?
+  grep "quote unusable"         during REGULAR hours means the threshold is wrong
+  grep -c "cycle failed"        was 3 today, all anthropic 529 at the open
+  grep "Stalled peak"           the engine's own stall at its new 3.3 points
+
+AND THE ONE THAT IS STILL OWED. A news-sentiment lookup killed three cycles at
+the open: anthropic.OverloadedError propagated out of market_signals_agent,
+through run_trading_cycle, and stopped everything -- indicators, exits, orphan
+review. It recovered on its own. An observational agent must not be able to
+halt execution, and every other network call in this engine is wrapped.

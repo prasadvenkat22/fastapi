@@ -310,13 +310,22 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
     # LEGS THE ORDERS COULD NOT PAIR. A position legged into across separate
     # orders looks like two unrelated singles; pair the leftovers by strike and
     # mark the result inferred. See MANAGE_INFERRED for why that flag matters.
-    covered = set()
-    for syms in book:
-        covered.update(syms)
+    # QUANTITY-AWARE, not symbol-aware. A first version treated a symbol as
+    # consumed if it appeared in ANY stated pair, so a SNDK 1500 held twice
+    # with one contract inside a stated 1500/1540 left the OTHER contract
+    # invisible -- and the 1530 short it belonged with had nothing to pair
+    # against. The leftover is what the account holds MINUS what the stated
+    # structures actually use.
+    consumed = {}
+    for syms, rec in book.items():
+        for sym in syms:
+            consumed[sym] = consumed.get(sym, 0) + rec["qty"]
     leftover = {}
     for sym, n in held.items():
-        if sym in covered or not n:
+        free = abs(n) - consumed.get(sym, 0)
+        if free <= 0:
             continue
+        n = free if n > 0 else -free
         parsed = _parse(sym)
         if parsed is None:
             continue

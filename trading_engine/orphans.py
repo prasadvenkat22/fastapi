@@ -437,8 +437,15 @@ def _mark(st: dict) -> "tuple | None":
 _DEAD = {"rejected", "canceled", "cancelled", "expired", "error"}
 
 
-def _fill_value(order_id) -> "float | None":
-    """What the close ACTUALLY filled at, per spread, or None if unknown.
+def _fill_value(order_id) -> "tuple | None":
+    """(value per spread, contracts filled) for the close, or None if unknown.
+
+    THE QUANTITY MATTERS AS MUCH AS THE PRICE. A close can fill in parts, and
+    _book used to record st["qty"] -- the size of the whole structure --
+    whatever actually filled. On 2026-09-03 a QQQ 714/716 credit spread of ten
+    contracts closed as two orders of five, and each wrote a row claiming ten:
+    170 dollars booked twice against a real 170 total. Both rows were genuine
+    closes; only the quantity was wrong.
 
     submit_vertical answering {'status': 'ok'} means accepted, not filled --
     the distinction that cost a false TradeHistory row on 2026-08-27 and, in
@@ -460,11 +467,15 @@ def _fill_value(order_id) -> "float | None":
                 legs = o.get("leg")
                 if not isinstance(legs, list):
                     return None
-                total = 0.0
+                total, qty = 0.0, None
                 for lg in legs:
                     px = float(lg.get("avg_fill_price") or 0.0)
                     total += -px if (lg.get("side") or "").lower().startswith("buy") else px
-                return abs(round(total, 4))
+                    n = int(float(lg.get("exec_quantity") or 0))
+                    qty = n if qty is None else min(qty, n)
+                if not qty:
+                    return None
+                return abs(round(total, 4)), qty
             if status in _DEAD:
                 logger.error("ORPHAN close %s came back %s — not booking.", order_id, status)
                 return None
@@ -476,8 +487,8 @@ def _fill_value(order_id) -> "float | None":
     return None
 
 
-def _close(st: dict, reason: str, limit_price: float) -> "float | None":
-    """Send the closing order; return the FILLED value per spread, or None.
+def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
+    """Send the closing order; return (filled value, contracts), or None.
 
     None means it did not fill -- rejected, or still working. The caller must
     not book a result for it: the position is either still open or never left,
@@ -501,7 +512,8 @@ def _close(st: dict, reason: str, limit_price: float) -> "float | None":
         return None
 
 
-def _book(st: dict, value: float, ret_pct: float, reason: str) -> None:
+def _book(st: dict, value: float, ret_pct: float, reason: str,
+          qty: "int | None" = None) -> None:
     """Write a TradeHistory row so manual results reach the circuit breakers.
 
     Without this, a manual loss is invisible to the daily loss limit and the
@@ -514,12 +526,14 @@ def _book(st: dict, value: float, ret_pct: float, reason: str) -> None:
         from config.db_pgrs import SessionLocal
         from models_pgdb.trading_models import TradeHistory
         entry = abs(st["entry"])
-        pnl = ((entry - value) if st["credit"] else (value - entry)) * st["qty"] * 100
+        # The contracts that actually FILLED, not the structure's size.
+        n = qty or st["qty"]
+        pnl = ((entry - value) if st["credit"] else (value - entry)) * n * 100
         db = SessionLocal()
         try:
             db.add(TradeHistory(
                 strategy=("CALL_CREDIT_SPREAD" if st["credit"] else "BULL_CALL_SPREAD"),
-                underlying=st["root"], quantity=st["qty"],
+                underlying=st["root"], quantity=n,
                 long_strike=st["long_strike"], short_strike=st["short_strike"],
                 entry_net_debit=entry, exit_net_value=value,
                 realized_pnl_dollars=round(pnl, 2), realized_pnl_pct=round(ret_pct, 2),
@@ -528,7 +542,7 @@ def _book(st: dict, value: float, ret_pct: float, reason: str) -> None:
             db.commit()
             logger.info("ORPHAN booked to history: %s %.0f/%.0f x%d %+.2f (%s)",
                         st["root"], st["long_strike"], st["short_strike"],
-                        st["qty"], pnl, reason)
+                        n, pnl, reason)
         finally:
             db.close()
     except Exception:
@@ -657,8 +671,9 @@ def review(engine_symbols: "set | None" = None) -> list:
                 "" if manageable else "  [observation only]",
             )
             if reason and manageable:
-                filled = _close(st, reason, value)
-                if filled is not None:
+                got = _close(st, reason, value)
+                if got is not None:
+                    filled, filled_qty = got
                     # Book what it FILLED at, not the mark that triggered it.
                     entry = abs(st["entry"])
                     real_pct = ((((entry - filled) if st["credit"] else (filled - entry))
@@ -667,9 +682,21 @@ def review(engine_symbols: "set | None" = None) -> list:
                         logger.info(
                             "ORPHAN fill %.2f against a %.2f mark (%+.1f%% not %+.1f%%) "
                             "— booking the fill.", filled, value, real_pct, ret_pct)
-                    _book(st, filled, real_pct, reason)
-                    peaks.pop(key, None)
-                    state["structures"].pop(key, None)
+                    _book(st, filled, real_pct, reason, qty=filled_qty)
+                    if filled_qty >= st["qty"]:
+                        peaks.pop(key, None)
+                        state["structures"].pop(key, None)
+                    else:
+                        # A PARTIAL close leaves a smaller structure open. Keep
+                        # the peak, shrink the cache, and let the next pass see
+                        # what is left rather than treating it as finished.
+                        logger.warning(
+                            "ORPHAN partial close: %d of %d %s %.0f/%.0f filled — "
+                            "%d contracts remain.", filled_qty, st["qty"], st["root"],
+                            st["long_strike"], st["short_strike"], st["qty"] - filled_qty)
+                        rec_s = state["structures"].get(key)
+                        if rec_s:
+                            rec_s["qty"] = st["qty"] - filled_qty
             reported.append(st)
 
         # A structure that has vanished since the last pass was closed by

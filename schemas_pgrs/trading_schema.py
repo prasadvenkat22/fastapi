@@ -48,6 +48,42 @@ class SchedulerStatusResponse(BaseModel):
     interval_seconds: int
 
 
+class BrokerPosition(BaseModel):
+    """One reconstructed spread, as orphans.py sees it.
+
+    Distinct from OpenPositionResponse, which describes the ENGINE's own row
+    and knows nothing about anything a human opened. On 2026-09-03 that
+    endpoint would have reported nothing while seven structures were live.
+    """
+    underlying: str
+    right: str                      # 'C' or 'P'
+    long_strike: float
+    short_strike: float
+    quantity: int
+    expiry: str                     # YYMMDD, as it appears in the OCC symbol
+    credit: bool
+    entry: float                    # from the OPENING FILLS, not cost_basis
+    current_value: Optional[float] = None
+    return_pct: Optional[float] = None
+    peak_pct: Optional[float] = None
+    minutes_since_peak: Optional[float] = None
+    ceiling_value: Optional[float] = None
+    stop_pct: Optional[float] = None        # null when the rule does not apply
+    stall_giveback_pct: Optional[float] = None
+    stall_armed: Optional[bool] = None
+    expires_today: bool
+    managed: bool
+    quote_tradeable: Optional[bool] = None
+    note: Optional[str] = None
+
+
+class BrokerPositionsResponse(BaseModel):
+    positions: list[BrokerPosition]
+    count: int
+    managed_underlyings: list[str]
+    total_unrealized_dollars: Optional[float] = None
+
+
 class OpenPositionResponse(BaseModel):
     open: bool
     strategy: Optional[str] = None

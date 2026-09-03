@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -7,6 +8,8 @@ from sqlalchemy.orm import Session
 from config.db_pgrs import SessionLocal
 from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 from schemas_pgrs.trading_schema import (
+    BrokerPosition,
+    BrokerPositionsResponse,
     KillSwitchResponse,
     OpenPositionResponse,
     PlaybookPerformanceResponse,
@@ -16,7 +19,7 @@ from schemas_pgrs.trading_schema import (
     TradingCycleResponse,
     TradingStatusResponse,
 )
-from trading_engine import scheduler
+from trading_engine import orphans, scheduler, tradier_orders
 from trading_engine.broker import estimate_credit_value, estimate_spread_value, fill_price, is_credit
 from trading_engine.playbook import WINDOWS
 from trading_engine.data_feed import TradierDataError, fetch_qqq_spot
@@ -109,6 +112,99 @@ async def get_open_position(db: db_dependency):
     feed is wired up, so this is a mocked approximation of real premium."""
 
     return _build_open_position_response(db)
+
+
+@router.get("/positions", response_model=BrokerPositionsResponse)
+async def get_broker_positions():
+    """EVERYTHING the broker holds, not just what the engine opened.
+
+    /position above reports the engine's own OpenPosition row and knows
+    nothing about a position a human opened. On 2026-09-03 it would have shown
+    nothing while seven manual structures were live and being managed.
+
+    This reads the same reconstruction orphans.py runs every cycle: legs
+    paired by the ORDER that opened them rather than guessed by strike, and
+    entry taken from the fills rather than from Tradier's cost_basis, which
+    averages across contracts bought and sold and drifted 3540 -> 4251.92 on
+    an unchanged quantity of 5.
+
+    Read-only. Nothing here places, closes or modifies anything -- the exit
+    rules run in the cycle, not in a request handler, and a dashboard that can
+    trade is a dashboard that will.
+    """
+    try:
+        structures = orphans.open_structures()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Broker positions unavailable: {exc}")
+
+    state = orphans._load()
+    peaks = state.get("peaks") or {}
+    out, total = [], 0.0
+    for st in structures:
+        mark = orphans._mark(st)
+        value = ret = None
+        if mark is not None:
+            value, ret = mark
+            entry = abs(st["entry"])
+            per = ((entry - value) if st["credit"] else (value - entry))
+            total += per * st["qty"] * 100
+
+        rec = peaks.get(st["key"]) or {}
+        peak = rec.get("peak")
+        quiet = None
+        if rec.get("peak_at"):
+            try:
+                quiet = round((datetime.now(timezone.utc)
+                               - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0, 1)
+            except Exception:
+                quiet = None
+
+        today = orphans._expires_today(st)
+        zero_dte = (not orphans.ORPHAN_TODAY_ONLY) or today
+        max_ret = orphans._max_return_pct(st)
+        entry = abs(st["entry"])
+        ceiling_value = (
+            entry * (1 + orphans.ORPHAN_CEILING_FRACTION * max_ret / 100.0)
+            if (max_ret and not st["credit"]) else None
+        )
+        managed = (orphans.MANAGE_ORPHANS
+                   and (not orphans.MANAGE_UNDERLYING
+                        or st["root"] in orphans.MANAGE_UNDERLYING))
+        # Say which stall governs this one rather than printing both, for the
+        # same reason the log line was fixed: a field that names a rule which
+        # cannot fire is worse than no field.
+        if zero_dte:
+            giveback, armed = orphans.STALL_GIVEBACK_PCT, (peak or 0) > 0
+        else:
+            giveback = orphans.ORPHAN_LATER_STALL_GIVEBACK_PCT
+            armed = peak is not None and peak >= orphans.ORPHAN_LATER_STALL_ARM_PCT
+
+        out.append(BrokerPosition(
+            underlying=st["root"], right=st["right"],
+            long_strike=st["long_strike"], short_strike=st["short_strike"],
+            quantity=st["qty"], expiry=st["expiry"], credit=st["credit"],
+            entry=round(entry, 4),
+            current_value=round(value, 4) if value is not None else None,
+            return_pct=round(ret, 2) if ret is not None else None,
+            peak_pct=round(peak, 2) if peak is not None else None,
+            minutes_since_peak=quiet,
+            ceiling_value=round(ceiling_value, 2) if ceiling_value else None,
+            stop_pct=((orphans.ORPHAN_CREDIT_STOP_PCT if st["credit"]
+                       else orphans.ORPHAN_STOP_PCT) if zero_dte else None),
+            stall_giveback_pct=giveback,
+            stall_armed=armed,
+            expires_today=today,
+            managed=managed,
+            quote_tradeable=orphans._quotes_tradeable(
+                tradier_orders.quotes([st["long"], st["short"]]), st),
+            note=None if zero_dte else "ceiling and stall only; stop and force close are 0DTE rules",
+        ))
+
+    return BrokerPositionsResponse(
+        positions=out, count=len(out),
+        managed_underlyings=sorted(orphans.MANAGE_UNDERLYING),
+        total_unrealized_dollars=round(total, 2) if out else None,
+    )
 
 
 @router.get("/history", response_model=TradeHistoryResponse)

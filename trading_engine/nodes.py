@@ -473,6 +473,30 @@ STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
 # Off by default. Section 55 has the measurement.
 STALL_ON_CREDIT = os.getenv("TRADING_STALL_ON_CREDIT", "false").lower() == "true"
 
+# ITS OWN TIMER, RATHER THAN THE RIDE'S.
+#
+# These two rules shared STALL_MINUTES and STALL_GIVEBACK_PCT, which made them
+# impossible to tune apart: retiming the credit stall retimed the morning ride
+# with it, in production and in the harness alike. That is not a cosmetic
+# problem. It is the confound section 55 was written about -- sweep_creditstall
+# attributed +7.47/day to the credit stall when its arms were also retiming the
+# ride, and a deployment decision was made on the number.
+#
+# THE TWO RULES WANT DIFFERENT TIMERS ANYWAY. On the morning ride the profit
+# curve tracks spot, so a few quiet minutes genuinely means the move is over.
+# On a 0DTE credit spread with spot sitting still, THETA prints a new high
+# nearly every cycle -- so an absence of new highs means something has changed,
+# and it means it sooner. Forcing one number to serve both makes at most one of
+# them right.
+#
+# UNSET, EACH FALLS BACK TO THE RIDE'S VALUE, so this changes nothing that is
+# deployed today: the split exists to make the question askable, not to answer
+# it. TRADING_CREDIT_STALL_MINUTES / TRADING_CREDIT_STALL_GIVEBACK_PCT.
+CREDIT_STALL_MINUTES = float(
+    os.getenv("TRADING_CREDIT_STALL_MINUTES", "").strip() or STALL_MINUTES)
+CREDIT_STALL_GIVEBACK_PCT = float(
+    os.getenv("TRADING_CREDIT_STALL_GIVEBACK_PCT", "").strip() or STALL_GIVEBACK_PCT)
+
 # BREAKEVEN STOP: once a position has shown a real profit, it does not go
 # negative.
 #
@@ -2076,7 +2100,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             peak_at = getattr(position, "peak_at", None)
             if (STALL_ON_CREDIT and is_credit_pos
                     and (hit_final or not CREDIT_STALL_REQUIRES_ARM)
-                    and STALL_MINUTES > 0
+                    and CREDIT_STALL_MINUTES > 0
                     and peak_at is not None and peak_return > 0):
                 # Disarm the target ONLY when there is a working stall to hand
                 # the decision to. Without peak_at there is nothing to detect a
@@ -2087,8 +2111,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 # mock position does not carry one.
                 hit_final = False
                 quiet_min = (datetime.now(timezone.utc) - peak_at).total_seconds() / 60.0
-                credit_stalled = (quiet_min >= STALL_MINUTES
-                                  and return_pct <= peak_return - STALL_GIVEBACK_PCT)
+                credit_stalled = (quiet_min >= CREDIT_STALL_MINUTES
+                                  and return_pct <= peak_return - CREDIT_STALL_GIVEBACK_PCT)
                 if credit_stalled:
                     logger.info(
                         "Stalled peak (credit): %s peaked %+.1f%% and has made no new "

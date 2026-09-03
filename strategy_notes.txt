@@ -4651,3 +4651,62 @@ AND A SECOND, NARROWER RULE: A GUARD SHOULD KNOW WHAT IT IS GUARDING. One
 tradeability test served four decisions with different stakes -- three about
 how much money to book, one about whether shares get delivered. Asking what
 the refusal COSTS in each case is what separated them.
+
+--------------------------------------------------------------------------------
+74. THE CREDIT STALL AND THE MORNING RIDE SHARED ONE TIMER  (2026-09-03)
+--------------------------------------------------------------------------------
+
+STALL_MINUTES and STALL_GIVEBACK_PCT drove two different rules:
+
+    nodes.py:1958   stalled        = quiet >= STALL_MINUTES and ...   the ride
+    nodes.py:2090   credit_stalled = quiet >= STALL_MINUTES and ...   the credit
+
+So the two could not be tuned apart -- not in a sweep, and not in production
+either, where they are the same two environment variables.
+
+THIS IS SECTION 55 ONE LAYER DOWN. That section records sweep_creditstall
+attributing +7.47/day to the credit stall when its arms were also retiming the
+morning ride, and a deployment decision being made on the number. The harness
+shadowing that caused it was fixed. The SHARED KNOB was not, so the arms still
+moved both rules -- the report filters to credit trades, which handles the
+direct contamination, but the ride's changes still move the account's
+compounding equity within an arm, and that feeds credit position sizing.
+
+A weaker version of the same defect, and the same shape: the number was real,
+the attribution was not.
+
+THE TWO RULES WANT DIFFERENT TIMERS ANYWAY, which is the part that makes this
+more than tidiness. On the morning ride the profit curve tracks spot, so a few
+quiet minutes genuinely means the move is done. On a 0DTE credit spread with
+spot sitting still, THETA prints a new high nearly every cycle -- so an absence
+of new highs is not quiet, it means the underlying has come back toward the
+short strike and decay has stopped winning. That is a different signal arriving
+on a different clock. One number serving both makes at most one of them right.
+
+NOW SPLIT: TRADING_CREDIT_STALL_MINUTES and TRADING_CREDIT_STALL_GIVEBACK_PCT.
+Unset, each falls back to the ride's value, so nothing deployed changes:
+
+    deployed today (credit unset)   ride 5.0/3.3   credit 5.0/3.3
+    credit timer only               ride 5.0/3.3   credit 12.0/3.3
+    both split                      ride 5.0/3.3   credit 12.0/8.0
+    empty string is unset           ride 5.0/3.3   credit 5.0/3.3
+
+THE SPLIT EXISTS TO MAKE THE QUESTION ASKABLE, NOT TO ANSWER IT. No value
+changes on the droplet as a result of this.
+
+AND THE SWEEP HAD TO CHANGE WITH IT. sweep_creditstall now holds the ride at
+the deployed timer in every arm and moves only the credit knobs.
+
+ONE TRAP FOUND WHILE WRITING IT, worth recording because it would have
+reproduced the original bug exactly. The late-stall test retimes the stall from
+inside replay_session, which is shared by EVERY sweep. Written
+unconditionally, that assignment overwrote whatever knobs the current sweep had
+just set -- so sweep_creditstall would have run eight arms with identical
+settings and reported eight plausible, slightly different rows. It is now
+gated on the late-stall test actually being the one running, and the globals it
+writes are restored when it finishes.
+
+THE PATTERN TO WATCH: shared mutable module state, written per-bar by one
+sweep, read per-bar by all of them. Three separate bugs in this file now trace
+to it. A sweep that sets a knob and a harness that sets the same knob will
+always produce a number, and the number will always look like an answer.

@@ -568,10 +568,21 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
         # because BOTH engine stall sites -- the ride at 1954 and the credit
         # branch at 2079 -- read the global at call time, so this reaches the
         # rules the engine actually runs rather than a copy of them.
+        # ONLY WHEN THE LATE-STALL TEST IS THE ONE RUNNING. replay_session is
+        # shared by every sweep, so an unconditional assignment here would
+        # overwrite whatever stall knobs the CURRENT sweep had just set -- and
+        # sweep_creditstall's whole purpose is to set them. Writing this the
+        # unconditional way silently reduced that sweep to a single repeated
+        # arm, which is the section 55 failure exactly.
         eff_stall = STALL_MINUTES
-        if LATE_STALL_AFTER is not None and ts.time() >= LATE_STALL_AFTER:
-            eff_stall = LATE_STALL_MINUTES
-        N.STALL_MINUTES = eff_stall
+        if LATE_STALL_AFTER is not None:
+            eff_stall = (LATE_STALL_MINUTES if ts.time() >= LATE_STALL_AFTER
+                         else STALL_MINUTES)
+            # BOTH stall rules. A position still open at 15:30 is as likely to
+            # be the afternoon credit spread as the morning ride, and retiming
+            # only one would answer half the question while reading like the
+            # whole of it.
+            N.STALL_MINUTES = N.CREDIT_STALL_MINUTES = eff_stall
 
         seen = _seen_at(ts)
         spot = float(seen["Close"].iloc[-1])
@@ -3110,6 +3121,10 @@ def sweep_latestall(sessions: dict):
           f"sessions run to 16:00")
     print("")
     base_after, base_late = LATE_STALL_AFTER, LATE_STALL_MINUTES
+    # Restored at the end: the per-bar assignment below writes onto the nodes
+    # module, and an "all" run would otherwise hand the next sweep whatever
+    # the last bar happened to leave there.
+    base_ride, base_credit = N.STALL_MINUTES, N.CREDIT_STALL_MINUTES
 
     def _arm(label, after, minutes):
         global LATE_STALL_AFTER, LATE_STALL_MINUTES
@@ -3137,6 +3152,7 @@ def sweep_latestall(sessions: dict):
         _arm(f"15 min after {hh:02d}:{mm:02d}", dtime(hh, mm), 15.0)
 
     LATE_STALL_AFTER, LATE_STALL_MINUTES = base_after, base_late
+    N.STALL_MINUTES, N.CREDIT_STALL_MINUTES = base_ride, base_credit
 
 
 def sweep_creditstall(sessions: dict):
@@ -3161,12 +3177,25 @@ def sweep_creditstall(sessions: dict):
     print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
     print("")
     base_on, base_m, base_g = N.STALL_ON_CREDIT, STALL_MINUTES, STALL_GIVEBACK_PCT
+    base_cm, base_cg = N.CREDIT_STALL_MINUTES, N.CREDIT_STALL_GIVEBACK_PCT
 
     def _arm(label, on, minutes, giveback):
         global STALL_MINUTES, STALL_GIVEBACK_PCT
         N.STALL_ON_CREDIT = on
-        N.STALL_MINUTES, N.STALL_GIVEBACK_PCT = minutes, giveback
-        STALL_MINUTES, STALL_GIVEBACK_PCT = minutes, giveback
+        # THE RIDE STAYS AT THE DEPLOYED TIMER IN EVERY ARM.
+        #
+        # It did not. These arms used to assign STALL_MINUTES, which nodes.py
+        # then shared between the credit branch and the morning ride, so every
+        # arm retimed BOTH rules and the credit-only totals below still moved
+        # with the ride through the account's compounding equity. That is the
+        # same confound section 55 records, one layer down: the number was
+        # real, the attribution was not.
+        #
+        # nodes.py now carries CREDIT_STALL_MINUTES / CREDIT_STALL_GIVEBACK_PCT
+        # separately, so only they move here.
+        N.STALL_MINUTES, N.STALL_GIVEBACK_PCT = base_m, base_g
+        STALL_MINUTES, STALL_GIVEBACK_PCT = base_m, base_g
+        N.CREDIT_STALL_MINUTES, N.CREDIT_STALL_GIVEBACK_PCT = minutes, giveback
         PB.ENABLED_WINDOWS = frozenset({"MORNING_DRIFT", "AFTERNOON_CREDIT"})
         trades, per_day = _run_arm(sessions, dtime(10, 15))
         cr = [t for t in trades if is_credit(t["strategy"])]
@@ -3189,6 +3218,7 @@ def sweep_creditstall(sessions: dict):
 
     N.STALL_ON_CREDIT = base_on
     N.STALL_MINUTES, N.STALL_GIVEBACK_PCT = base_m, base_g
+    N.CREDIT_STALL_MINUTES, N.CREDIT_STALL_GIVEBACK_PCT = base_cm, base_cg
     STALL_MINUTES, STALL_GIVEBACK_PCT = base_m, base_g
 
 

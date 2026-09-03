@@ -3834,3 +3834,74 @@ were actually going before treating the change as settled.
 WHAT TO CHECK TONIGHT, added to the section 59 list:
     grep "Wide book marking"     during regular hours means the guard is owed
     grep "Stalled peak"          is 3.3 booking winners that were still running?
+
+--------------------------------------------------------------------------------
+62. THE CEILING IS NOT AN EXPIRY RULE  (2026-09-03)
+--------------------------------------------------------------------------------
+
+ORPHAN_TODAY_ONLY scoped every orphan rule to the expiry day. That was right
+for three of them and wrong for the fourth, and the distinction is worth
+stating because it is about what each rule is FOR rather than about when it
+runs.
+
+    STOP -25%       0DTE only.  A multi-day drawdown can recover. A -25% stop
+                                on a Friday position closes a thesis that has
+                                two more days to be right.
+    FORCE_CLOSE     0DTE only.  Flattening a Friday spread on Wednesday is
+                                closing it for no reason at all.
+    STALL           0DTE only.  A multi-day thesis should not die on one quiet
+                                five-minute window.
+    CEILING 90%     ALWAYS.     A structure worth 90% of its maximum has the
+                                same tiny upside left whenever it expires.
+
+THE CEILING ARGUMENT GETS STRONGER WITH TIME TO EXPIRY, NOT WEAKER. Holding
+the full width of risk for the last few cents is worse over two days than over
+two hours. On the live book: a NVDA 215/225 x10 at 9.76 is about +2,190 booked
+against 24 cents of remaining upside on 10,000 of width, carried for two more
+days. Nobody would open that trade; there is no reason to keep holding it.
+
+So the expiry test moved out of `manageable` and into the reason logic, where
+each rule is scoped on its own terms rather than all four sharing one gate.
+
+WHAT TO CHECK TODAY -- this is the first session any of it runs live.
+
+  1. DO ORPHAN LINES APPEAR AT 09:30, not 10:15?
+         grep "ORPHAN" | head
+     _reconcile runs at the END of every cycle and the cycle's only gate is
+     MARKET_OPEN=(9,30). The 10:15 window and the 15-minute warmup gate the
+     engine's ENTRIES and nothing else. If the first ORPHAN line is at 10:15,
+     the orphan path is wired to the wrong place.
+
+  2. DOES THE SEEDED ENTRY HOLD UP?
+         grep "ORPHAN QQQ" | head -1
+     Must read entry 7.49. That is the reconstruction from fills of 9.69 and
+     2.20, cross-checked against /history, and every threshold below it is a
+     return computed from that one number.
+
+  3. IS THE SCOPE SPLIT VISIBLE?
+         grep "ceiling only"
+     NVDA and SNDK must print "[expires 260904 — ceiling only]" every cycle.
+     If they are absent entirely, section 62 did not take and they are back to
+     watch-only. If they say nothing about scope, they are being managed as
+     0DTE and a Friday position is about to meet a 15:45 force close.
+
+  4. DOES THE QUOTE GUARD RELEASE AFTER THE AUCTION?
+         grep "quote unusable"
+     Expected for a cycle or two at 09:30 while the book is forming -- that is
+     the guard working. Persisting past 09:35 means 25% is too tight for a
+     deep-ITM leg, and the fix is to loosen the threshold rather than leave
+     the position unwatched.
+
+  5. THE ENGINE'S STALL AT ITS NEW NUMBER.
+         grep "Stalled peak"
+     3.3 points replaced 5 for the alignment in section 61 and has no forward
+     history. Read each firing against where the trade was going, not against
+     the day's total: the question is whether it booked winners that were
+     still climbing.
+
+  6. AND THE TWO THAT SHOULD BE SILENT.
+         grep "Wide book marking"   during REGULAR hours means the engine is
+                                    owed the guard orphans already have
+         grep -c "came back rejected"   was 189 on 2026-09-02; anything above
+                                    single digits is a close looping against a
+                                    position that does not exist

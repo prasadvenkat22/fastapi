@@ -3175,6 +3175,13 @@ def sweep_creditstall(sessions: dict):
     print("")
     print("CREDIT STALL -- target arms the exit rather than firing it")
     print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print(f"  LIVE now: STALL_ON_CREDIT={N.STALL_ON_CREDIT}  "
+          f"CREDIT_STALL_ARM={N.CREDIT_STALL_REQUIRES_ARM}  "
+          f"credit timer {N.CREDIT_STALL_MINUTES:.0f} min / "
+          f"{N.CREDIT_STALL_GIVEBACK_PCT:.1f} pts")
+    if not N.CREDIT_STALL_REQUIRES_ARM:
+        print("  NOTE: arm=false, so every 'arm,' row below books on quiet ALONE, "
+              "without waiting for the target.")
     print("")
     base_on, base_m, base_g = N.STALL_ON_CREDIT, STALL_MINUTES, STALL_GIVEBACK_PCT
     base_cm, base_cg = N.CREDIT_STALL_MINUTES, N.CREDIT_STALL_GIVEBACK_PCT
@@ -3206,7 +3213,12 @@ def sweep_creditstall(sessions: dict):
         extra = f"  [{len(cr)} credit tr {tot:+.0f}, {mix}]"
         _report_daily(label + extra, per_day)
 
-    _arm("books at target  (deployed)", False, 5.0, 5.0)
+    # NOT "(deployed)". Production runs STALL_ON_CREDIT=true with
+    # CREDIT_STALL_ARM=false, so the label on this arm was describing a
+    # configuration that stopped being live at some point and nobody noticed.
+    # The banner above now prints both values, so the labels cannot drift from
+    # the droplet again without it being visible in the same output.
+    _arm("stall off, books at target", False, 5.0, 5.0)
     print("")
     print("  TARGET ARMS, STALL BOOKS -- how long to wait for a new high")
     for m in (3.0, 5.0, 8.0, 12.0):

@@ -4765,3 +4765,64 @@ the engine opened, orphans.py for positions it adopted. They have separate
 knobs, separate defaults, and only one of them is measurable in the harness.
 When a live trade behaves wrongly, the first question is WHICH ONE MANAGED IT,
 and answering that after building the test rather than before cost an evening.
+
+--------------------------------------------------------------------------------
+76. THE CREDIT STALL IS NOT THE DRAG. THE MORNING RIDE IS.  (2026-09-03)
+--------------------------------------------------------------------------------
+
+sweep_creditstall re-run with the ride held fixed and only the credit knobs
+moving (section 74), 60 sessions, chain-calibrated:
+
+    arm                          credit tr    total P&L    per day
+    stall off, books at target     11    -6    -1026.20    -17.10
+    arm, book after 3 min quiet    10    -1    -1020.80    -17.01
+    arm, book after 5 min quiet    10    -1    -1020.80    -17.01
+    arm, book after 8 min quiet    10    +3    -1016.80    -16.95
+    arm, book after 12 min quiet   10    +3    -1016.80    -16.95
+    arm, 2 pts off the peak        10    -9    -1028.80    -17.15
+    arm, 20 pts off the peak       10    +3    -1016.80    -16.95
+
+TWO FINDINGS, AND THE SECOND IS THE IMPORTANT ONE.
+
+ONE. THE CREDIT STALL DOES NOT MATTER AT THIS SAMPLE SIZE. Twelve dollars
+separates the best arm from the worst across sixty sessions. The rule touches
+ten or eleven trades in three months and moves them by single-digit dollars.
+Section 55's +7.47/day is now fully retired: with the shadowing fixed AND the
+knob split, the honest number is roughly zero either way. Nothing to deploy,
+nothing to revert. STALL_ON_CREDIT can stay on; it is not earning anything and
+it is not costing anything.
+
+TWO. THE ARITHMETIC POINTS SOMEWHERE ELSE ENTIRELY.
+
+    credit trades, all arms      about  -6 to +3
+    every arm, total             about  -1,020
+    therefore the rest           about  -1,020
+
+The afternoon credit spread is roughly flat over sixty sessions. Essentially
+ALL of the loss is the MORNING DEBIT RIDE. No further run is needed to
+establish this -- the credit-only total and the overall total are both printed
+on every row, and the difference is the morning side by subtraction.
+
+This also settles the doubt raised against section 75's number. That figure
+came from a run framed to 16:00 for the late-stall arms, so it was fair to ask
+whether the framing produced it. This run uses the standard 10:15 / 15:45
+framing and lands at -17.10/day against -17.74/tr. The loss is real and it is
+not an artifact of how the harness was invoked.
+
+    58 trades, 45% win, worst -213.45, halves -2.94 / -31.27, 20% green days
+
+TWELVE GREEN DAYS IN SIXTY. And the halves say it is getting worse, not
+reverting: the second half loses ten times what the first does. That is the
+opposite of the pattern a bad-sample explanation would produce.
+
+FOR CONTEXT, AND THIS IS THE THING TO CHASE: the morning window measured
++19.63/tr at a 10:15 open when the entry-time sweep was run. It now measures
+about -21/tr by subtraction. Either the deployed configuration has drifted from
+what was measured, or the June-to-September regime is hostile to the morning
+ride in a way the earlier window was not. Those call for different responses
+and the sweeps here do not distinguish them.
+
+WHAT IS NOT IN THESE NUMBERS: every hand-opened position. orphans.py is not
+replayed, and PANW, DELL, SNDK, MU and NVDA are where the account's recent P&L
+actually came from. This measures the engine's own QQQ 0DTE trades and nothing
+else -- which is exactly the scope in which it says the strategy is losing.

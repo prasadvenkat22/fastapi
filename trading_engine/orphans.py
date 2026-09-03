@@ -294,6 +294,31 @@ ORPHAN_CEILING_FRACTION = float(os.getenv("TRADING_ORPHAN_CEILING", "0.90"))
 # exactly that reason, and leaving orphans to expire contradicts it.
 ORPHAN_FORCE_CLOSE = os.getenv("TRADING_ORPHAN_FORCE_CLOSE", "15:45").strip()
 
+# NO STALL EXIT BEFORE THIS TIME. Empty disables the gate, which is the
+# default and leaves behaviour unchanged.
+#
+# THE OPEN IS NOT A STALL, IT IS A SPREAD. For the first stretch of the
+# session the book is at its widest and the mark is at its least trustworthy,
+# so a structure can print a "peak" on one wide quote and a 3.3-point giveback
+# on the next without anything having happened to the underlying. On a Friday
+# expiry, where these positions dip early and come back, that reads as a stall
+# and books a position that had hours left to work.
+#
+# ONLY THE STALL IS GATED. The stop, the ceiling and the force close all stay
+# live from the first cycle:
+#
+#   the stop     exists FOR a bad open. Suppressing it through the most
+#                violent part of the session is how a bad gap becomes a
+#                disaster, and on 0DTE a 2% adverse move frequently does not
+#                come back.
+#   the ceiling  fires at 90% of maximum. Taking that at 09:35 is a good
+#                outcome, not a premature one.
+#   force close  is about assignment and runs at 15:45 regardless.
+#
+# So this narrows exactly one rule -- the one that sells a WINNER early on a
+# judgment about a mark, which is the judgment the open is worst at.
+ORPHAN_STALL_FROM = os.getenv("TRADING_ORPHAN_STALL_FROM", "").strip()
+
 STATE_PATH = os.getenv("TRADING_ORPHAN_STATE", "orphan_peaks.json")
 
 
@@ -555,6 +580,24 @@ def _past_force_close() -> bool:
         return (now.hour, now.minute) >= (hh, mm)
     except Exception:
         return False
+
+
+def _stall_allowed_yet() -> bool:
+    """Is it past the opening quiet period, in New York? See ORPHAN_STALL_FROM.
+
+    Fails OPEN on a bad value -- an unparseable time leaves the stall working
+    as it does today rather than silently disabling an exit rule for the whole
+    session.
+    """
+    if not ORPHAN_STALL_FROM:
+        return True
+    try:
+        from zoneinfo import ZoneInfo
+        hh, mm = (int(x) for x in ORPHAN_STALL_FROM.split(":"))
+        now = datetime.now(ZoneInfo("America/New_York"))
+        return (now.hour, now.minute) >= (hh, mm)
+    except Exception:
+        return True
 
 
 def _quotes_tradeable(q: dict, st: dict, reason: str = "") -> bool:
@@ -914,6 +957,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                 (abs(st["entry"]) - value) > 0 if st["credit"]
                 else (value - abs(st["entry"])) > 0)
 
+            # Computed once per structure so the log line below can say the
+            # stall is waiting rather than just omitting it.
+            stall_ready = _stall_allowed_yet()
+
             reason = None
             if zero_dte and ret_pct <= stop_pct and intrinsic_ok:
                 logger.info(
@@ -930,14 +977,14 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "FORCE_CLOSE"
             elif ceiling is not None and ret_pct >= ceiling:
                 reason = "CEILING"
-            elif (zero_dte and STALL_MINUTES > 0 and rec["peak"] > 0
+            elif (zero_dte and stall_ready and STALL_MINUTES > 0 and rec["peak"] > 0
                   and quiet >= STALL_MINUTES and books_a_gain
                   and stall_pct <= rec["peak"] - STALL_GIVEBACK_PCT):
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
                 reason = "STALL"
-            elif ((not zero_dte) and ORPHAN_LATER_STALL_MINUTES > 0
+            elif ((not zero_dte) and stall_ready and ORPHAN_LATER_STALL_MINUTES > 0
                   and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
                   and quiet >= ORPHAN_LATER_STALL_MINUTES and books_a_gain
                   and stall_pct <= rec["peak"] - ORPHAN_LATER_STALL_GIVEBACK_PCT):
@@ -970,8 +1017,9 @@ def review(engine_symbols: "set | None" = None) -> list:
                 if zero_dte:
                     parts.append("stop %+.0f%%" % stop_pct)
                     if STALL_MINUTES > 0:
-                        parts.append("stall %.1fpts/%.0fmin" % (
-                            STALL_GIVEBACK_PCT, STALL_MINUTES))
+                            parts.append("stall %.1fpts/%.0fmin%s" % (
+                            STALL_GIVEBACK_PCT, STALL_MINUTES,
+                            "" if stall_ready else " from %s" % ORPHAN_STALL_FROM))
                     if ORPHAN_FORCE_CLOSE:
                         parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)
                 elif ORPHAN_LATER_STALL_MINUTES > 0:

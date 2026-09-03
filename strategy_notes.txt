@@ -4826,3 +4826,60 @@ WHAT IS NOT IN THESE NUMBERS: every hand-opened position. orphans.py is not
 replayed, and PANW, DELL, SNDK, MU and NVDA are where the account's recent P&L
 actually came from. This measures the engine's own QQQ 0DTE trades and nothing
 else -- which is exactly the scope in which it says the strategy is losing.
+
+--------------------------------------------------------------------------------
+77. AN OPENING QUIET PERIOD FOR THE STALL, AND ONLY FOR THE STALL  (2026-09-03)
+--------------------------------------------------------------------------------
+
+Three positions carry into Friday 2026-09-04 -- PANW 310/327.5 C, DELL 530/520
+P, SNDK 1500/1560 C -- all expiring that day, all deep in the money, all
+managed by orphans.py. The concern raised against them: a Friday expiry is
+volatile at the open, dips, and comes back, and a 5-minute stall timer will
+book them into that dip.
+
+THE OPEN IS NOT A STALL, IT IS A SPREAD. In the first stretch of the session
+the book is at its widest and the mark at its least trustworthy. A structure
+can print a "peak" on one wide quote and a 3.3-point giveback on the next with
+nothing having happened to the underlying at all. That is the stall's entry
+signal reproduced exactly by microstructure.
+
+TRADING_ORPHAN_STALL_FROM gates it. Empty by default, so nothing changes
+unless a time is set. Set to 10:00 for Friday.
+
+ONLY THE STALL IS GATED, and the reasoning for each of the others is the point
+of the section:
+
+  the stop     EXISTS for a bad open. Suppressing it through the most violent
+               part of the session is how a bad gap becomes a disaster, and on
+               0DTE a 2% adverse move frequently does not come back. It stays
+               live from the first cycle.
+  the ceiling  fires at 90% of maximum. Taking that at 09:35 is a good
+               outcome, not a premature one. Ungated.
+  force close  is about assignment, not value, and runs at 15:45 regardless.
+
+So exactly one rule narrows: the one that sells a WINNER early on a judgment
+about a mark, which is the judgment the open is worst at making.
+
+WHAT THE GATE COSTS, stated plainly because it is not free: a position that
+peaks at 09:35 and fades all morning is not booked until 10:00, and whatever
+it gives back in between is given back. The gate buys protection from false
+stalls by accepting real ones late.
+
+WHERE THE FLOOR IS. The stop stays live, and STOP_RESPECTS_INTRINSIC means it
+re-arms the moment a position stops being profitable at expiry. Those levels
+are computable and worth writing down:
+
+    PANW  310/327.5 C  entry 13.35   stop re-arms below  323.35
+    DELL  530/520   P  entry  6.28   stop re-arms above  523.72
+    SNDK 1500/1560  C  entry 31.84   stop re-arms below 1531.84
+
+Above those, each holds more intrinsic than it cost and the mark-based stop is
+correctly suppressed. Below them, the position is genuinely losing at expiry
+and the stop is live during the quiet period like any other time. The gate
+does not remove the floor, it removes one profit-taking rule from the half
+hour where its input is noise.
+
+FAILS OPEN ON A BAD VALUE. An unparseable time leaves the stall working
+normally rather than silently disabling an exit rule for a whole session --
+the opposite of the quote guard in section 73, which failed closed and
+blocked an exit nobody noticed for eleven minutes.

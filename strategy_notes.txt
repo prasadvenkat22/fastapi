@@ -3905,3 +3905,88 @@ WHAT TO CHECK TODAY -- this is the first session any of it runs live.
          grep -c "came back rejected"   was 189 on 2026-09-02; anything above
                                     single digits is a close looping against a
                                     position that does not exist
+
+--------------------------------------------------------------------------------
+63. FIRST LIVE SESSION OF ORPHAN MANAGEMENT  (2026-09-03)
+--------------------------------------------------------------------------------
+
+Everything in sections 59-62 ran live for the first time today. What follows is
+what actually happened, not what was expected.
+
+THE CYCLE CRASHED AT THE OPEN, THREE TIMES.
+
+    09:30  ERROR cycle failed
+    anthropic.OverloadedError: Error code: 529 - overloaded_error
+      trading_engine/nodes.py:1460  market_signals_agent
+      trading_engine/vector_store.py:82  query_similar_headlines
+
+A NEWS-SENTIMENT LOOKUP TOOK DOWN THE WHOLE TRADING CYCLE. The exception
+propagated out of the LangGraph node, through run_trading_cycle, and killed
+the run -- no indicators, no exits, no orphan review, for three minutes at the
+open. It recovered on its own and has not recurred, which is why it is
+recorded rather than hot-fixed mid-session, but the shape is wrong: an
+observational agent must not be able to halt execution. Everything else in
+this engine that reaches the network is wrapped; this one is not.
+
+THE RECONSTRUCTION WORKED WITHOUT SEEDING. Yesterday's positions needed the
+cache seeded by hand because /orders covers the current session only. Every
+position opened TODAY was rebuilt from its own fills with no intervention --
+seven structures across six symbols, entries matching to the cent. That is
+the mechanism working as designed rather than as patched.
+
+THE SCOPE SPLIT HELD. QQQ 0DTE carried the full ladder; the six Friday
+structures carried ceiling and armed stall only, with no stop and no force
+close. NVDA 220/228 x5 is the case that justifies it: it reached -18.1% at
+11:05 and recovered to -5.9% by 11:46. A 0DTE stop would have booked that
+loss; the position had two more days and used them.
+
+MANAGE_UNDERLYING WAS TOO NARROW AGAIN. CRWV, MRVL and PANW logged as
+"[observation only]" while armed and climbing, because the list was still
+QQQ,NVDA,SNDK. Widened to include them. This is the second time the symbol
+list has been the thing that was wrong -- the maintenance burden is real, and
+the alternative (empty = manage everything) is one setting away if it happens
+a third time.
+
+THE VERDICT LINE WAS LYING. It printed "stop -25%" on every position including
+later expiries, where zero_dte gates the stop off and it can never fire. The
+behaviour was right; the log was wrong. That matters more here than a cosmetic
+bug normally would: these lines are the ONLY verification available on rules
+that mostly act by not acting, and section 62's checklist is built entirely on
+reading them. A line advertising a stop that is not armed defeats the purpose
+of having the line. Now a 0DTE position lists ceiling, stop, stall and
+flatten; a later expiry lists ceiling and the armed-stall state.
+
+THE STALL BEHAVED AS INTENDED ON ITS FIRST DAY. MRVL 195/205 peaked at +17.5%
+and fell to +10.2% -- 7.3 points of giveback against a 3.3 threshold, already
+satisfied, waiting only on the 15-minute quiet timer. That is the rule doing
+what it was built for: it let the run happen and moved to book because the
+profit was fading, not because a number was hit.
+
+RV/IV ACROSS THE WEEKLY UNIVERSE, first reading (2026-09-03, 2-day options):
+
+    CRWV   IV 0.74  RV20 0.89  ratio 1.21   cheap
+    MU     IV 0.57  RV20 0.51  ratio 0.90   fair
+    AVGO   IV 1.37  RV20 0.36  ratio 0.26   "rich"
+    MRVL   IV 0.68  RV20 0.79  ratio 1.15   cheap
+    PANW   IV 0.59  RV20 0.69  ratio 1.17   cheap
+    QQQ    IV 0.18  RV20 0.13  ratio 0.73   rich
+
+TWO THINGS IN THAT TABLE MATTER MORE THAN THE NUMBERS.
+
+AVGO IS THE TRAP. 0.26 is the richest premium in the book and it is rich for a
+reason: the entire strip prices at 1.36-1.37 with tight widths and open
+interest of 250-2150, so it is a real quote, and an ATM two-day call costs 4%
+of spot. The market is pricing an event that a backward-looking RV20 of 36%
+cannot see. earnings_between returned "none", which its own docstring says
+must be read as UNKNOWN rather than safe. A ratio gate without a working
+earnings guard would sell exactly this.
+
+CRWV CONTRADICTS THE LIVE BOOK. It reads 1.21 -- realising 89% while charging
+74% -- and it is the name the weekly book sells premium on. AVGO and PANW were
+added to the shadow universe (15 names) so the question can be asked on
+recorded data rather than on one afternoon's snapshot.
+
+Section 48's caveat stands and is worth restating: single-name RV/IV was
+unstable across lookbacks (AMZN 1.56 at 2 days against 0.26 at 3). A 20-day
+realised vol against a 2-day implied is also a horizon mismatch. One reading
+is not a decision.

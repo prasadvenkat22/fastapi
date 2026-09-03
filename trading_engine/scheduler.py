@@ -4,7 +4,25 @@ stop-loss/force-close rules actually get re-checked throughout the day
 instead of only when someone manually hits the endpoint.
 
 Never starts on its own — only via POST /trading/scheduler/start, and only
-runs until POST /trading/scheduler/stop or the app restarts."""
+runs until POST /trading/scheduler/stop or the app restarts.
+
+DISABLED BY DEFAULT SINCE 2026-09-03, AND THE REASON MATTERS.
+
+A cron entry already runs scripts/run_cycle.py every minute. This loop does
+the SAME JOB. Run both and every cycle happens twice, concurrently, with no
+lock between them — and two cycles that both see the same position can both
+act on it. On 2026-09-03 a QQQ 714/716 ten-lot closed as two separate
+five-lot orders rather than one, which is exactly the shape a race produces;
+not proven, but it cost an hour of untangling TradeHistory rows that looked
+like duplicates and were not (see sections 64 and 65).
+
+The failure is also invisible while it is happening. Both runners log the
+same lines to different places — cron to /var/log/qqq-trading.log, this loop
+to the container log — so nothing in either says "something else is also
+trading". It was only found by counting cycles per minute.
+
+TRADING_ALLOW_APP_SCHEDULER=true re-enables it. Set that ONLY when the cron
+entry has been removed; the two are alternatives, not layers."""
 
 import asyncio
 import logging
@@ -69,9 +87,30 @@ async def _loop():
         await asyncio.sleep(_interval_seconds)
 
 
+ALLOW_APP_SCHEDULER = os.getenv("TRADING_ALLOW_APP_SCHEDULER", "false").lower() == "true"
+
+
+class SchedulerDisabled(RuntimeError):
+    """Raised when start() is called while cron is the designated runner."""
+
+
 def start(interval_seconds: int = 60) -> bool:
-    """Returns False if already running (no-op), True if it just started."""
+    """Returns False if already running (no-op), True if it just started.
+
+    Raises SchedulerDisabled when TRADING_ALLOW_APP_SCHEDULER is not set --
+    refusing loudly rather than starting a second concurrent runner. A silent
+    no-op would be worse: the caller would believe the scheduler was running
+    and cron would be doing the work, which is the same confusion that started
+    this.
+    """
     global _task, _interval_seconds
+    if not ALLOW_APP_SCHEDULER:
+        raise SchedulerDisabled(
+            "The in-app scheduler is disabled: cron already runs the cycle every "
+            "minute and running both means two concurrent cycles with no lock "
+            "between them. Set TRADING_ALLOW_APP_SCHEDULER=true only after "
+            "removing the cron entry."
+        )
     if is_running():
         return False
     _interval_seconds = interval_seconds

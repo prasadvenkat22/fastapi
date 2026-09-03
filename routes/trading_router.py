@@ -281,7 +281,12 @@ async def start_scheduler(interval_minutes: int = Query(1, ge=1, le=60)):
     starts on its own, only via this endpoint. Calling it again while
     already running just reports the current status."""
 
-    scheduler.start(interval_seconds=interval_minutes * 60)
+    try:
+        scheduler.start(interval_seconds=interval_minutes * 60)
+    except scheduler.SchedulerDisabled as exc:
+        # 409, not 500: the request is well formed and the server is healthy,
+        # it is the state that forbids it. See trading_engine/scheduler.py.
+        raise HTTPException(status_code=409, detail=str(exc))
     return SchedulerStatusResponse(
         scheduler_running=scheduler.is_running(),
         interval_seconds=scheduler.get_interval_seconds(),

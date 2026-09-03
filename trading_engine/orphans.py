@@ -142,6 +142,31 @@ ORPHAN_MAX_LEG_SPREAD = float(os.getenv("TRADING_ORPHAN_MAX_LEG_SPREAD", "0.25")
 # default.
 MANAGE_INFERRED = os.getenv("TRADING_ORPHAN_MANAGE_INFERRED", "false").lower() == "true"
 
+# NEVER STOP OUT A POSITION THAT IS ALREADY PROFITABLE AT EXPIRY.
+#
+# The stop fires on the MARK, and a deep in-the-money spread marks far below
+# what it is worth. Observed live 2026-09-03, an hour before the close:
+#
+#   AVGO 365/355 put, entry 7.88, spot 354.37 -- BELOW the short strike, so
+#   the spread holds its full 10.00 of intrinsic. It marked 6.45, a return of
+#   -18%, because the short 355 put still carried 3.27 of time premium.
+#
+# Tomorrow that position becomes 0DTE and the -25% stop goes live at a mark of
+# 5.91. One tick and the engine books -190 on a structure worth +212 held to
+# expiry. The underlying had moved IN ITS FAVOUR and the rule would have sold
+# it for that reason.
+#
+# So: if INTRINSIC exceeds what was paid, holding to expiry pays more than the
+# entry cost and a mark depressed by time value is not a reason to sell. Time
+# premium on the short leg goes to zero on its own; that is arithmetic, not a
+# forecast. The stop still fires when intrinsic itself has fallen through the
+# entry, which is the case it was built for -- a genuine adverse move.
+#
+# This does NOT disable the stop. It removes the one situation where the stop
+# does the opposite of its job.
+STOP_RESPECTS_INTRINSIC = os.getenv(
+    "TRADING_ORPHAN_STOP_RESPECTS_INTRINSIC", "true").lower() == "true"
+
 # THE STALL FOR POSITIONS THAT EXPIRE LATER.
 #
 # The 0DTE stall is deliberately unarmed -- any positive peak starts it --
@@ -476,6 +501,44 @@ def _quotes_tradeable(q: dict, st: dict) -> bool:
     return True
 
 
+def _decompose(st: dict, value: float) -> "tuple | None":
+    """(intrinsic, extrinsic) for a spread, or None without a spot.
+
+    WHY THIS EXISTS. A deep in-the-money spread marks far below what it is
+    worth, and the reason is invisible in the return alone. On 2026-09-03 a
+    SNDK 1500/1540 with spot at 1557.60 held its FULL 40-dollar width in
+    intrinsic value and marked at 27.80, reading +15.6% against a possible
+    +66.3%. Nothing was wrong with it: the short 1530 sits nearer the money
+    than the long 1500 and so carries more time premium, and that premium is
+    subtracted from the spread.
+
+    Extrinsic goes to zero at expiry. So a NEGATIVE extrinsic on an ITM spread
+    is not a loss, it is the part that comes back -- and telling that apart
+    from a real adverse move is exactly what a bare percentage cannot do.
+
+    Intrinsic is capped at the width: a spread cannot be worth more than the
+    distance between its strikes however far past them the underlying runs.
+    """
+    try:
+        spot = tradier_orders.quotes([st["root"]]).get(st["root"], {})
+        px = float(spot.get("last") or spot.get("bid") or 0.0)
+        if px <= 0:
+            return None
+        lo, hi = sorted((st["long_strike"], st["short_strike"]))
+        width = hi - lo
+        if st["right"].upper() == "P":
+            intrinsic = max(0.0, min(hi - px, width))
+        else:
+            intrinsic = max(0.0, min(px - lo, width))
+        if st["credit"]:
+            # A credit structure's "value" is the cost to buy it back, so its
+            # intrinsic is what the short owes, not what a long holds.
+            intrinsic = width - intrinsic
+        return round(intrinsic, 2), round(value - intrinsic, 2)
+    except Exception:
+        return None
+
+
 def _mark(st: dict) -> "tuple | None":
     """(value, return_pct) at prices we could actually transact at.
 
@@ -676,8 +739,25 @@ def review(engine_symbols: "set | None" = None) -> list:
             # over two hours, not better. So the ceiling applies at any expiry.
             zero_dte = (not ORPHAN_TODAY_ONLY) or _expires_today(st)
 
+            # Intrinsic is computed once here: the stop guard reads it, and so
+            # does the log line below.
+            parts_iv = _decompose(st, value)
+            intrinsic_ok = False
+            if parts_iv and STOP_RESPECTS_INTRINSIC:
+                # Strictly greater: at exactly the entry, holding to expiry
+                # returns the cost and there is nothing to protect.
+                intrinsic_ok = parts_iv[0] > abs(st["entry"])
+
             reason = None
-            if zero_dte and ret_pct <= stop_pct:
+            if zero_dte and ret_pct <= stop_pct and intrinsic_ok:
+                logger.info(
+                    "ORPHAN %s %.0f/%.0f is %+.1f%% on the mark but holds %.2f of "
+                    "intrinsic against a %.2f entry — NOT stopping out a position "
+                    "that pays at expiry. The gap is time premium on the short leg.",
+                    st["root"], st["long_strike"], st["short_strike"], ret_pct,
+                    parts_iv[0], abs(st["entry"]),
+                )
+            elif zero_dte and ret_pct <= stop_pct:
                 reason = "STOP_LOSS"
             elif zero_dte and _past_force_close():
                 # Time beats everything. These settle in shares, not cash.
@@ -734,13 +814,17 @@ def review(engine_symbols: "set | None" = None) -> list:
                         else "arms +%.0f%%" % ORPHAN_LATER_STALL_ARM_PCT))
                 verdict = "holding (%s)" % ", ".join(parts) if parts else "holding"
                 verdict_scope = "" if zero_dte else "  [expires %s]" % st.get("expiry")
+            iv_note = ""
+            if parts_iv:
+                intr, extr = parts_iv
+                iv_note = "  [intrinsic %.2f, extrinsic %+.2f]" % (intr, extr)
             logger.info(
                 "ORPHAN %s %s %.0f/%.0f x%d %s: entry %.2f value %.2f %+.1f%% "
                 "(peak %+.1f%%, %.0f min ago) — %s%s",
                 st["root"], st["right"], st["long_strike"], st["short_strike"],
                 st["qty"], "credit" if st["credit"] else "debit",
                 abs(st["entry"]), value, ret_pct, rec["peak"], quiet,
-                verdict + verdict_scope,
+                verdict + verdict_scope + iv_note,
                 ("  [INFERRED pairing — observation only]"
                  if st.get("inferred") and not MANAGE_INFERRED
                  else ("" if manageable else "  [observation only]")),

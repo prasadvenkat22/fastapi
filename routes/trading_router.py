@@ -185,6 +185,10 @@ async def get_broker_positions():
             quantity=st["qty"], expiry=st["expiry"], credit=st["credit"],
             entry=round(entry, 4),
             current_value=round(value, 4) if value is not None else None,
+            intrinsic=(orphans._decompose(st, value) or (None, None))[0]
+            if value is not None else None,
+            extrinsic=(orphans._decompose(st, value) or (None, None))[1]
+            if value is not None else None,
             return_pct=round(ret, 2) if ret is not None else None,
             peak_pct=round(peak, 2) if peak is not None else None,
             minutes_since_peak=quiet,

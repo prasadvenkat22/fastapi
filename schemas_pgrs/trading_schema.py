@@ -64,6 +64,12 @@ class BrokerPosition(BaseModel):
     credit: bool
     entry: float                    # from the OPENING FILLS, not cost_basis
     current_value: Optional[float] = None
+    # WHY the value is what it is. A deep ITM spread marks far below its worth
+    # because the short leg carries time premium; extrinsic goes to zero at
+    # expiry, so a negative extrinsic is the part that comes back rather than a
+    # loss. A bare return cannot tell that from a real adverse move.
+    intrinsic: Optional[float] = None
+    extrinsic: Optional[float] = None
     return_pct: Optional[float] = None
     peak_pct: Optional[float] = None
     minutes_since_peak: Optional[float] = None

@@ -4374,3 +4374,58 @@ from fills, the stall books fading profits unaided, results reach
 TradeHistory. And nine defects were found in code less than 48 hours old, two
 caught by luck rather than design, and the most expensive was not a crash but
 a rule quietly measuring the wrong number while looking entirely healthy.
+
+--------------------------------------------------------------------------------
+69. A ROLL PRODUCES AN UNMANAGED POSITION BY CONSTRUCTION  (2026-09-03)
+--------------------------------------------------------------------------------
+
+Rolling a short strike leaves the new structure INFERRED, and inferred pairs
+were report-only. So the act of managing a position by hand removed it from
+the engine's management.
+
+    18:03  buy_to_close SNDK 1530 @ 47.03, sell_to_open SNDK 1540 @ 40.08
+
+One order, a 6.95 debit. It closed one short and opened another, so the new
+1540 short has NO OPENING ORDER tying it to a 1500 long. The pairer sees a
+leftover long and a leftover short, pairs them by strike, and marks the result
+inferred -- correctly, since strike pairing is a guess. That guess was then
+excluded from management by default, leaving the largest position in the book
+(+1,924 at expiry) with no ceiling, no stall and no stop.
+
+TRADING_ORPHAN_MANAGE_INFERRED is now true. The reasoning that made it default
+false still holds -- pairing by strike is the guess that misread a covered
+book as naked earlier the same day -- but a ROLL is the ordinary case, not an
+edge case, and leaving rolled positions unmanaged is worse than acting on a
+pairing that is obviously right.
+
+THE ENTRY AFTER A ROLL IS 20.76, AND THAT IS CORRECT.
+
+I first called this wrong. It is not. The reconstruction pairs the 1500 fill
+(60.84) with the 1540 fill (40.08) and reports 20.76, ignoring the 21.41 lost
+on the 1530 round trip (sold 25.62, bought back 47.03).
+
+THAT LOSS IS SUNK. Whether to hold or close the CURRENT 1500/1540 depends on
+what it is worth now against what exiting costs. A past loss does not change
+that, and folding it into the basis would make the ceiling and the stall fire
+on history rather than on the position -- a ceiling computed against 42.17
+would sit above the structure's own 40-dollar width and could never fire at
+all.
+
+WHERE IT DOES MISLEAD IS TOTAL P&L, and that is worth stating because the
+per-structure numbers look better than the campaign:
+
+    2 x 1500 long                          -12,224
+    1530  sold +2,562, bought back -4,703   -2,141   <- the roll
+    1550  sold                              +2,700
+    1540  sold                              +4,008
+                              net invested  -7,657
+    at expiry above 1550: 4,000 + 5,000     +9,000
+                                     P&L    +1,343
+
+The two structures imply +3,540 between them. The campaign is +1,343. The
+difference is the roll, and no per-structure view will ever show it -- a
+structure knows what it cost, not what was spent getting to it.
+
+THE GENERAL SHAPE, worth remembering: EXIT RULES SHOULD READ THE STRUCTURE,
+REPORTING SHOULD READ THE CAMPAIGN. Mixing them makes exits act on sunk costs
+or makes P&L flatter itself, and both were one small decision away here.

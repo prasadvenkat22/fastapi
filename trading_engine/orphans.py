@@ -122,6 +122,26 @@ ORPHAN_CREDIT_STOP_PCT = float(os.getenv("TRADING_ORPHAN_CREDIT_STOP_PCT", "-600
 # enough to reject the case above at 0.50.
 ORPHAN_MAX_LEG_SPREAD = float(os.getenv("TRADING_ORPHAN_MAX_LEG_SPREAD", "0.25"))
 
+# ACT ON INFERRED PAIRS, or only report them.
+#
+# Order-based pairing recovers the structure the human actually put on. It
+# cannot recover one they LEGGED INTO across separate orders: on 2026-09-03 a
+# SNDK 1500 bought on 09-02 and a 1530 sold at 14:14 today are economically a
+# spread and appear to the pairer as two unrelated legs.
+#
+# The fallback pairs leftovers by strike, which is a GUESS -- the same guess
+# that made the engine's naked-leg check read a covered book as naked. It is
+# usually right and it is not stated fact, so an inferred pair is REPORTED by
+# default and acted on only when this is set.
+#
+# The distinction matters more than it sounds. An inferred entry is the sum of
+# two independent fills, which can exceed the structure's own width -- SNDK
+# 1500/1530 nets 35.78 against a 30-dollar width, so its BEST possible return
+# is -16% and a stop would fire the moment it were managed. Booking that
+# automatically, on a pairing nobody stated, is not a decision to take by
+# default.
+MANAGE_INFERRED = os.getenv("TRADING_ORPHAN_MANAGE_INFERRED", "false").lower() == "true"
+
 # THE STALL FOR POSITIONS THAT EXPIRE LATER.
 #
 # The 0DTE stall is deliberately unarmed -- any positive peak starts it --
@@ -287,6 +307,48 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
                       "net": rec.get("net", 0.0), "credit": rec.get("credit", False),
                       "opened": rec.get("opened")}
 
+    # LEGS THE ORDERS COULD NOT PAIR. A position legged into across separate
+    # orders looks like two unrelated singles; pair the leftovers by strike and
+    # mark the result inferred. See MANAGE_INFERRED for why that flag matters.
+    covered = set()
+    for syms in book:
+        covered.update(syms)
+    leftover = {}
+    for sym, n in held.items():
+        if sym in covered or not n:
+            continue
+        parsed = _parse(sym)
+        if parsed is None:
+            continue
+        root, expiry, right, strike = parsed
+        leftover.setdefault((root, expiry, right), []).append((strike, sym, n))
+    fills = tradier_orders.filled_legs() if leftover else {}
+    for (root, expiry, right), legs_ in leftover.items():
+        longs = sorted([l for l in legs_ if l[2] > 0])
+        shorts = sorted([l for l in legs_ if l[2] < 0])
+        li = si = 0
+        while li < len(longs) and si < len(shorts):
+            (lk, lsym, lq), (sk, ssym, sq) = longs[li], shorts[si]
+            n = min(lq, -sq)
+            lp = (fills.get(lsym) or {}).get("price")
+            sp = (fills.get(ssym) or {}).get("price")
+            if lp is None or sp is None:
+                logger.warning(
+                    "ORPHAN inferred pair %s %.0f/%.0f has no fill price — skipped, "
+                    "since a return without a true entry is not a number worth acting on.",
+                    root, lk, sk)
+            else:
+                book[tuple(sorted((lsym, ssym)))] = {
+                    "symbols": (lsym, ssym), "qty": n, "net": round(lp - sp, 4),
+                    "credit": (lp - sp) < 0, "opened": None, "inferred": True,
+                }
+            longs[li] = (lk, lsym, lq - n)
+            shorts[si] = (sk, ssym, sq + n)
+            if longs[li][2] == 0:
+                li += 1
+            if shorts[si][2] == 0:
+                si += 1
+
     out = []
     for syms, rec in book.items():
         if rec["qty"] <= 0:
@@ -330,6 +392,7 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             "long_strike": long_strike, "short_strike": short_strike,
             "qty": rec["qty"], "entry": rec["net"], "credit": rec["credit"],
             "opened": rec["opened"], "key": "|".join(syms),
+            "inferred": bool(rec.get("inferred")),
         })
     return out
 
@@ -630,6 +693,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             # The expiry check has moved INTO the reason logic above, so the
             # ceiling can act on a later expiry while the 0DTE rules cannot.
             manageable = (MANAGE_ORPHANS
+                          and (not st.get("inferred") or MANAGE_INFERRED)
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)
                           and _quotes_tradeable(
                               tradier_orders.quotes([st["long"], st["short"]]), st))
@@ -668,7 +732,9 @@ def review(engine_symbols: "set | None" = None) -> list:
                 st["qty"], "credit" if st["credit"] else "debit",
                 abs(st["entry"]), value, ret_pct, rec["peak"], quiet,
                 verdict + verdict_scope,
-                "" if manageable else "  [observation only]",
+                ("  [INFERRED pairing — observation only]"
+                 if st.get("inferred") and not MANAGE_INFERRED
+                 else ("" if manageable else "  [observation only]")),
             )
             if reason and manageable:
                 got = _close(st, reason, value)

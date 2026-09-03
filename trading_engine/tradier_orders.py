@@ -352,6 +352,63 @@ def filled_spread_orders() -> list:
         return []
 
 
+def filled_legs() -> dict:
+    """Every filled option leg, per symbol, from orders of ANY leg count.
+
+    filled_spread_orders only returns two-leg orders, because pairing is the
+    thing it exists to recover. But a position legged into across SEPARATE
+    orders leaves legs that pairing never sees -- and those legs still have
+    real fill prices, which is what an inferred pair needs to compute a return
+    from something better than Tradier's averaged cost_basis.
+
+    Returns {symbol: {"qty": net contracts, "price": weighted average}}, where
+    opening fills add and closing fills subtract, so a leg opened and partly
+    closed reports what is actually left.
+    """
+    if not LIVE_ORDERS:
+        return {}
+    try:
+        url = f"{_base()}/accounts/{_account()}/orders"
+        r = httpx.get(url, headers=_headers(), timeout=15.0)
+        if r.status_code >= 400:
+            return {}
+        orders = (r.json() or {}).get("orders")
+        if orders in ("null", None, "", {}):
+            return {}
+        rows = orders.get("order") if isinstance(orders, dict) else None
+        if isinstance(rows, dict):
+            rows = [rows]
+        out = {}
+        for o in (rows or []):
+            if (o.get("status") or "").lower() != "filled":
+                continue
+            legs = o.get("leg")
+            legs = legs if isinstance(legs, list) else [o]
+            for lg in legs:
+                if (lg.get("status") or "").lower() != "filled":
+                    continue
+                sym = lg.get("option_symbol")
+                n = int(float(lg.get("exec_quantity") or 0))
+                if not sym or n <= 0:
+                    continue
+                px = float(lg.get("avg_fill_price") or 0.0)
+                side = (lg.get("side") or "").lower()
+                signed = n if "to_open" in side else -n
+                rec = out.setdefault(sym, {"qty": 0, "price": 0.0})
+                if signed > 0:
+                    total = rec["qty"] + signed
+                    if total > 0:
+                        rec["price"] = round(
+                            (rec["price"] * max(rec["qty"], 0) + px * signed) / total, 4)
+                    rec["qty"] = total
+                else:
+                    rec["qty"] += signed
+        return {k: v for k, v in out.items() if v["qty"] > 0}
+    except Exception:
+        logger.exception("Could not read filled legs.")
+        return {}
+
+
 def opposing_leg(underlying: str, expiry, call_put: str, strike: float,
                  want_long: bool) -> "dict | None":
     """The account's existing position at this strike, if it opposes us.

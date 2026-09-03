@@ -268,6 +268,80 @@ def open_positions() -> list:
     return rows or []
 
 
+def filled_spread_orders() -> list:
+    """Every FILLED two-leg spread order, newest last, normalised.
+
+    The account's positions say what is held; only the ORDERS say how it got
+    there. That difference is the whole reason this exists:
+
+      PAIRING. A position list of nine long calls against nine short calls
+      across five strikes admits several readings, and pairing them by strike
+      is a guess. A multileg order states which two legs the human or the
+      engine actually put on together.
+
+      ENTRY PRICE. Tradier averages cost_basis across contracts bought and
+      sold under one position id -- on 2026-09-02 a 700 leg read 3540.00 then
+      4251.92 at an unchanged quantity of 5. Fill prices do not drift. Any
+      rule expressed as a RETURN needs the real one.
+
+    Returns dicts with: legs (symbol, side, qty, price), net (signed per-unit
+    price, positive = debit paid), credit (bool), qty, created.
+    Never raises; an empty list means "cannot tell", and every caller treats
+    that as a reason to do nothing rather than a reason to guess.
+    """
+    if not LIVE_ORDERS:
+        return []
+    try:
+        url = f"{_base()}/accounts/{_account()}/orders"
+        r = httpx.get(url, headers=_headers(), timeout=15.0)
+        if r.status_code >= 400:
+            return []
+        rows = ((r.json() or {}).get("orders") or {}).get("order")
+        if isinstance(rows, dict):
+            rows = [rows]
+        out = []
+        for o in (rows or []):
+            if (o.get("status") or "").lower() != "filled":
+                continue
+            legs = o.get("leg")
+            if not isinstance(legs, list) or len(legs) != 2:
+                continue
+            parsed = []
+            for lg in legs:
+                if (lg.get("status") or "").lower() != "filled":
+                    parsed = []
+                    break
+                parsed.append({
+                    "symbol": lg.get("option_symbol"),
+                    "side": (lg.get("side") or "").lower(),
+                    "qty": int(float(lg.get("exec_quantity") or 0)),
+                    "price": float(lg.get("avg_fill_price") or 0.0),
+                })
+            if len(parsed) != 2 or any(l["qty"] <= 0 for l in parsed):
+                continue
+            # Net per unit, signed: what was PAID is positive. A buy adds, a
+            # sell subtracts, which makes a debit spread positive and a credit
+            # spread negative regardless of how the order was typed.
+            net = 0.0
+            for l in parsed:
+                net += l["price"] if l["side"].startswith("buy") else -l["price"]
+            out.append({
+                "id": o.get("id"),
+                "legs": parsed,
+                "net": round(net, 4),
+                "credit": net < 0,
+                "qty": min(l["qty"] for l in parsed),
+                "opening": all("to_open" in l["side"] for l in parsed),
+                "closing": all("to_close" in l["side"] for l in parsed),
+                "created": o.get("create_date"),
+            })
+        out.sort(key=lambda d: d.get("created") or "")
+        return out
+    except Exception:
+        logger.exception("Could not read filled spread orders.")
+        return []
+
+
 def opposing_leg(underlying: str, expiry, call_put: str, strike: float,
                  want_long: bool) -> "dict | None":
     """The account's existing position at this strike, if it opposes us.

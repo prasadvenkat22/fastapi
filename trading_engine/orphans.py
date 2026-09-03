@@ -1,52 +1,51 @@
-"""Positions the engine did not open, watched with the engine's own rules.
+"""Positions the engine did not open, managed by the engine's own rules.
 
 Why this exists
 ---------------
-2026-09-02: a manual QQQ 700/708 spread was opened at 09:43. The engine logged
-RECONCILE at ERROR once a minute for the rest of the session and did nothing
-else with it -- no stop, no stalled-peak exit, no ratchet. It then opened its
-own position sized as though the account were empty. A position nobody is
-watching is the one that hurts, and "it isn't ours" is not a reason for it to
-go unwatched when the same account, the same underlying and the same expiry
-are involved.
+2026-09-02: a manual QQQ 700/708 spread was opened at 09:43 and ran unmanaged
+all session while RECONCILE logged an ERROR once a minute and did nothing
+else. Later the same day a manual 20-lot 709 credit spread peaked at +152.50
+and closed at -657.50 with no rule watching it. Neither loss counted toward
+the daily loss limit or the consecutive-loss breaker, because both read
+TradeHistory and TradeHistory only records trades the ENGINE closed. The
+account's real risk was invisible to every circuit breaker it had.
 
-STAGE ONE: THIS OBSERVES. IT DOES NOT CLOSE.
---------------------------------------------
-Every rule here logs and stops. Nothing in this module places an order and
-nothing calls the broker's sell path. That is deliberate and it is not
-timidity -- the four reasons are all live, and every one of them would have
-produced a wrong action today:
+RECONSTRUCTED FROM ORDERS, NOT FROM POSITIONS
+---------------------------------------------
+The position list says what is held. Only the orders say how it got there,
+and two things this module needs live only there:
 
-  ONE POSITION. The engine's exit ladder models a single open position. On
-  2026-09-02 the account held three distinct structures at once.
+  PAIRING. Nine long calls against nine short calls across five strikes admit
+  several readings. Pairing by strike is a guess -- and the engine's own
+  naked-leg check made exactly that guess on 2026-09-02 and called a fully
+  covered book naked. A multileg order states which legs were put on together.
 
-  PAIRING IS AMBIGUOUS. Nine long calls against nine short calls across five
-  strikes admit several valid pairings. The engine's own naked-leg check got
-  this wrong the same afternoon: it read a fully covered book as naked,
-  because it looked only at the two strikes it expected and found one of them
-  missing.
+  ENTRY PRICE. Tradier averages cost_basis across contracts bought and sold
+  under one position id: a 700 leg read 3540.00, then 4251.92, at an unchanged
+  quantity of 5. Fill prices do not drift. Every rule below is expressed as a
+  RETURN, and a return is meaningless without a true entry price. The previous
+  version of this module measured value as a percent of spread WIDTH precisely
+  because it could not trust the basis -- fine for a report, useless as a
+  trigger.
 
-  COST BASIS LIES. Tradier averages basis across contracts bought and sold
-  under one position id. The 700 leg's basis moved from 3540.00 to 4251.92
-  while the quantity stayed at 5. Any return computed from that is wrong, and
-  every rule below reads a return.
+WHAT IT DOES
+------------
+Marks each reconstructed structure, applies the same ladder the engine applies
+to its own positions, and -- only when MANAGE_ORPHANS is set -- acts on it.
+When a structure disappears from the account it books a TradeHistory row, so
+manual results reach the daily loss limit and the consecutive-loss breaker
+like any other trade.
 
-  INTENT IS UNKNOWN. A -25% stop applied to a spread a human meant to carry
-  into expiry closes something they wanted kept. The engine can see the
-  position; it cannot see the plan.
+THE STOP IS STRUCTURE-AWARE, and it has to be. A -25% stop is right for a
+debit spread and absurd for a credit one, where the return is measured against
+the credit collected and -100% is an ordinary bad day. Applying one number to
+both would close every credit spread within minutes. Debit and credit get
+their own, matched to what the playbook uses for the engine's own windows.
 
-So this reports what the ladder WOULD have said. If the pairing and the
-marks prove reliable over some weeks, an opt-in can let it act -- and that
-decision should be made on this module's own logs, not on an argument.
-
-WHAT IT PAIRS
--------------
-Legs are grouped by underlying, expiry and right, then longs and shorts are
-matched cheapest-strike-first into verticals. That is the pairing that
-maximises the value of the resulting spreads, which is the conservative
-reading: it never invents a naked leg that a different pairing would have
-covered. Genuinely unpaired legs are reported as singles rather than folded
-into a spread they do not belong to.
+INTENT IS THE PART THIS CANNOT SEE. On 2026-09-02 a -25% stop would have
+closed the credit book hours before the operator chose to ride it to 15:45.
+MANAGE_ORPHANS is therefore opt-in and off by default, and MANAGE_UNDERLYING
+narrows it further to the engine's own symbol.
 """
 import json
 import logging
@@ -57,21 +56,29 @@ from . import tradier_orders
 
 logger = logging.getLogger(__name__)
 
-# Watch orphans at all. Off leaves today's behaviour exactly as it was: a
-# RECONCILE line and nothing else.
+# Watch orphans at all. Off leaves the old behaviour: a RECONCILE line, and
+# nothing else.
 WATCH_ORPHANS = os.getenv("TRADING_WATCH_ORPHANS", "false").lower() == "true"
 
-# The thresholds the report is written against. Deliberately the same
-# variables the engine manages its own positions with, so the log reads as
-# "what the ladder would have said" rather than as a second opinion.
+# ACT on them. Separate from watching on purpose -- see the intent paragraph
+# above. Watching costs nothing and can only inform; acting closes positions a
+# human opened for reasons the engine cannot read.
+MANAGE_ORPHANS = os.getenv("TRADING_MANAGE_ORPHANS", "false").lower() == "true"
+# ... and only in this underlying. Empty means every symbol.
+MANAGE_UNDERLYING = os.getenv("TRADING_MANAGE_UNDERLYING", "QQQ").strip().upper()
+
+# The ladder. Same shape as the engine's own, same variables where they are
+# genuinely the same question.
+ORPHAN_TAKE_PROFIT_PCT = float(os.getenv("TRADING_ORPHAN_TAKE_PROFIT", "50"))
+ORPHAN_STOP_PCT = float(os.getenv("TRADING_ORPHAN_STOP_PCT", "-25"))
+# Credit gets its own, for the reason in the docstring: -25% of a collected
+# credit is a few cents and would close everything.
+ORPHAN_CREDIT_STOP_PCT = float(os.getenv("TRADING_ORPHAN_CREDIT_STOP_PCT", "-600"))
 STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
 STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
-ORPHAN_STOP_PCT = float(os.getenv("TRADING_ORPHAN_STOP_PCT", "-25"))
 
-# Peak tracking has to survive a container recreate or the stall resets to
-# zero every deploy and can never fire. A file under the mounted working
-# directory, not a table: this is observational, and a migration for data
-# nothing reads back is a cost with no return yet.
+# Peak tracking must survive a container recreate or the stall resets on every
+# deploy and can never fire. A file under the mounted working directory.
 STATE_PATH = os.getenv("TRADING_ORPHAN_STATE", "orphan_peaks.json")
 
 
@@ -88,17 +95,11 @@ def _save(state: dict) -> None:
         with open(STATE_PATH, "w") as fh:
             json.dump(state, fh)
     except Exception:
-        logger.exception("Could not persist orphan peaks — the stall will restart cold.")
+        logger.exception("Could not persist orphan state — the stall will restart cold.")
 
 
 def _parse(symbol: str) -> "tuple | None":
-    """(root, expiry, right, strike) from an OCC symbol, or None.
-
-    The tail is fixed width -- 6 digits of date, one letter, 8 digits of
-    strike in thousandths -- so the root is whatever precedes it. Same rule as
-    tradier_orders.occ_root, which is why that is used for the root rather
-    than re-deriving it here.
-    """
+    """(root, expiry, right, strike) from an OCC symbol, or None."""
     try:
         root = tradier_orders.occ_root(symbol)
         tail = symbol[len(root):]
@@ -109,134 +110,226 @@ def _parse(symbol: str) -> "tuple | None":
         return None
 
 
-def _pair(legs: list) -> list:
-    """Match longs against shorts into verticals, cheapest strike first.
+def open_structures(engine_symbols: "set | None" = None) -> list:
+    """Reconstruct what is open, from the orders that opened it.
 
-    Conservative on purpose: pairing the lowest long with the lowest short
-    maximises the intrinsic value of the resulting spreads, so this never
-    reports a naked short that some other pairing would have covered. The
-    opposite convention would manufacture alarms.
+    Opening fills add, closing fills subtract, and whatever still has quantity
+    left is open. Matched on the leg PAIR rather than on single symbols, so a
+    strike used by two different spreads does not merge them.
+
+    Cross-checked against the position list: a structure the account no longer
+    holds is dropped even if the closing order was never seen, because an
+    assignment or an expiry leaves no closing fill at all.
     """
-    longs = sorted([l for l in legs if l["qty"] > 0], key=lambda l: l["strike"])
-    shorts = sorted([s for s in legs if s["qty"] < 0], key=lambda s: s["strike"])
-    spreads, li, si = [], 0, 0
-    while li < len(longs) and si < len(shorts):
-        lo, sh = longs[li], shorts[si]
-        n = min(lo["qty"], -sh["qty"])
-        spreads.append({"long": lo["symbol"], "short": sh["symbol"],
-                        "long_strike": lo["strike"], "short_strike": sh["strike"],
-                        "qty": n, "right": lo["right"], "expiry": lo["expiry"]})
-        lo["qty"] -= n
-        sh["qty"] += n
-        if lo["qty"] == 0:
-            li += 1
-        if sh["qty"] == 0:
-            si += 1
-    singles = ([l for l in longs if l["qty"] > 0] + [s for s in shorts if s["qty"] < 0])
-    return spreads, singles
+    engine_symbols = engine_symbols or set()
+    orders = tradier_orders.filled_spread_orders()
+    if not orders:
+        return []
+    held = {}
+    try:
+        for p in tradier_orders.open_positions():
+            held[p.get("symbol")] = int(float(p.get("quantity") or 0))
+    except Exception:
+        logger.exception("Position cross-check unavailable — reporting from orders alone.")
+
+    book = {}
+    for o in orders:
+        syms = tuple(sorted(l["symbol"] for l in o["legs"]))
+        if any(s in engine_symbols for s in syms):
+            continue
+        rec = book.get(syms)
+        if rec is None:
+            rec = book[syms] = {"symbols": syms, "qty": 0, "net": o["net"],
+                                "credit": o["credit"], "opened": o["created"]}
+        if o["opening"]:
+            # Weighted so a scaled-in structure carries a true average.
+            total = rec["qty"] + o["qty"]
+            if total > 0:
+                rec["net"] = round((rec["net"] * rec["qty"] + o["net"] * o["qty"]) / total, 4)
+            rec["qty"] = total
+            rec["credit"] = o["credit"]
+        elif o["closing"]:
+            rec["qty"] -= o["qty"]
+
+    out = []
+    for syms, rec in book.items():
+        if rec["qty"] <= 0:
+            continue
+        # Still actually held? An expiry or assignment leaves no closing fill.
+        if held and not all(abs(held.get(s, 0)) > 0 for s in syms):
+            continue
+        legs = [(_parse(s), s) for s in syms]
+        if any(p is None for p, _ in legs):
+            continue
+        root = legs[0][0][0]
+        right = legs[0][0][2]
+        expiry = legs[0][0][1]
+        # For a debit the LONG is the leg we paid for; identify it by strike
+        # and structure rather than by re-reading the order sides.
+        strikes = sorted((p[3], s) for p, s in legs)
+        low, high = strikes[0], strikes[1]
+        if rec["credit"]:
+            short_strike, short_sym = low
+            long_strike, long_sym = high
+        else:
+            long_strike, long_sym = low
+            short_strike, short_sym = high
+        out.append({
+            "root": root, "expiry": expiry, "right": right,
+            "long": long_sym, "short": short_sym,
+            "long_strike": long_strike, "short_strike": short_strike,
+            "qty": rec["qty"], "entry": rec["net"], "credit": rec["credit"],
+            "opened": rec["opened"], "key": "|".join(syms),
+        })
+    return out
+
+
+def _mark(st: dict) -> "tuple | None":
+    """(value, return_pct) at prices we could actually transact at.
+
+    Return is against the REAL entry price from the fills. For a debit that is
+    (value - paid) / paid; for a credit, (collected - cost to close) /
+    collected -- the same convention the engine uses for its own windows, so
+    the thresholds mean the same thing in both places.
+    """
+    try:
+        q = tradier_orders.quotes([st["long"], st["short"]])
+        lq, sq = q.get(st["long"]), q.get(st["short"])
+        if not lq or not sq:
+            return None
+        if st["credit"]:
+            # Cost to buy the structure back: pay the ask on the short, receive
+            # the bid on the long wing.
+            cost = float(sq.get("ask") or 0.0) - float(lq.get("bid") or 0.0)
+            collected = abs(st["entry"])
+            if collected <= 0:
+                return None
+            return cost, (collected - cost) / collected * 100.0
+        value = float(lq.get("bid") or 0.0) - float(sq.get("ask") or 0.0)
+        paid = st["entry"]
+        if paid <= 0:
+            return None
+        return value, (value - paid) / paid * 100.0
+    except Exception:
+        return None
+
+
+def _close(st: dict, reason: str, limit_price: float) -> bool:
+    """Send the closing order. Only reached when MANAGE_ORPHANS is set."""
+    try:
+        res = tradier_orders.submit_vertical(
+            st["root"],
+            f"20{st['expiry'][:2]}-{st['expiry'][2:4]}-{st['expiry'][4:6]}",
+            "call" if st["right"].upper() == "C" else "put",
+            long_strike=st["long_strike"], short_strike=st["short_strike"],
+            quantity=st["qty"], opening=False,
+            limit_price=abs(limit_price), is_credit=st["credit"],
+        )
+        logger.error("ORPHAN %s: closing %s %.0f/%.0f x%d — %s",
+                     reason, st["root"], st["long_strike"], st["short_strike"],
+                     st["qty"], res)
+        return True
+    except Exception:
+        logger.exception("ORPHAN close failed for %s — position left open.", st["key"])
+        return False
+
+
+def _book(st: dict, value: float, ret_pct: float, reason: str) -> None:
+    """Write a TradeHistory row so manual results reach the circuit breakers.
+
+    Without this, a manual loss is invisible to the daily loss limit and the
+    consecutive-loss breaker -- both read TradeHistory, which only ever
+    recorded trades the engine itself closed. On 2026-09-02 a -657.50 manual
+    loss counted toward neither, and the engine's risk budget was untouched by
+    it.
+    """
+    try:
+        from config.db_pgrs import SessionLocal
+        from models_pgdb.trading_models import TradeHistory
+        entry = abs(st["entry"])
+        pnl = ((entry - value) if st["credit"] else (value - entry)) * st["qty"] * 100
+        db = SessionLocal()
+        try:
+            db.add(TradeHistory(
+                strategy=("CALL_CREDIT_SPREAD" if st["credit"] else "BULL_CALL_SPREAD"),
+                underlying=st["root"], quantity=st["qty"],
+                long_strike=st["long_strike"], short_strike=st["short_strike"],
+                entry_net_debit=entry, exit_net_value=value,
+                realized_pnl_dollars=round(pnl, 2), realized_pnl_pct=round(ret_pct, 2),
+                close_reason=reason, playbook="MANUAL",
+            ))
+            db.commit()
+            logger.info("ORPHAN booked to history: %s %.0f/%.0f x%d %+.2f (%s)",
+                        st["root"], st["long_strike"], st["short_strike"],
+                        st["qty"], pnl, reason)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Could not book orphan result — it will not reach the loss limit.")
 
 
 def review(engine_symbols: "set | None" = None) -> list:
-    """Log what the exit ladder would say about every position we did not open.
+    """Mark every structure the engine did not open, and say what the ladder says.
 
-    engine_symbols are the legs belonging to the engine's own open row; they
-    are excluded so this never double-reports the position the engine is
-    already managing.
-
-    Returns the spread dicts it reported, for callers that want to assert on
-    them. Never raises: an observational pass must not be able to break a
-    trading cycle.
+    Returns the structures it reported. Never raises: this must not be able to
+    break a trading cycle.
     """
     if not WATCH_ORPHANS:
         return []
     try:
-        engine_symbols = engine_symbols or set()
-        legs = []
-        for p in tradier_orders.open_positions():
-            sym = p.get("symbol")
-            if not sym or sym in engine_symbols:
-                continue
-            parsed = _parse(sym)
-            if parsed is None:
-                continue
-            root, expiry, right, strike = parsed
-            legs.append({"symbol": sym, "root": root, "expiry": expiry,
-                         "right": right, "strike": strike,
-                         "qty": int(float(p.get("quantity") or 0)),
-                         "basis": float(p.get("cost_basis") or 0.0)})
-        if not legs:
-            return []
-
-        groups = {}
-        for l in legs:
-            groups.setdefault((l["root"], l["expiry"], l["right"]), []).append(l)
-
+        structures = open_structures(engine_symbols)
         state = _load()
         now = datetime.now(timezone.utc)
-        reported = []
-        for (root, expiry, right), grp in sorted(groups.items()):
-            spreads, singles = _pair(grp)
-            for sp in spreads:
-                key = f"{sp['long']}|{sp['short']}"
-                mark = _mark(sp)
-                if mark is None:
-                    continue
-                value, ret_pct = mark
-                st = state.get(key) or {"peak": ret_pct, "peak_at": now.isoformat()}
-                if ret_pct > st["peak"]:
-                    st = {"peak": ret_pct, "peak_at": now.isoformat()}
-                state[key] = st
-                quiet = (now - datetime.fromisoformat(st["peak_at"])).total_seconds() / 60.0
+        seen, reported = set(), []
 
-                verdict = "holding"
-                if ret_pct <= ORPHAN_STOP_PCT:
-                    verdict = f"WOULD STOP OUT (past {ORPHAN_STOP_PCT:+.0f}%)"
-                elif (STALL_MINUTES > 0 and st["peak"] > 0
-                      and quiet >= STALL_MINUTES
-                      and ret_pct <= st["peak"] - STALL_GIVEBACK_PCT):
-                    verdict = (f"WOULD BOOK ON STALL (peaked {st['peak']:+.1f}% "
-                               f"{quiet:.0f} min ago)")
-                logger.info(
-                    "ORPHAN %s %s %.0f/%.0f x%d: value %.2f, %+.1f%% "
-                    "(peak %+.1f%%, %.0f min ago) — %s. Observation only, no order placed.",
-                    root, right, sp["long_strike"], sp["short_strike"], sp["qty"],
-                    value, ret_pct, st["peak"], quiet, verdict,
-                )
-                reported.append(sp)
-            for sg in singles:
-                logger.warning(
-                    "ORPHAN SINGLE %s %s %.0f x%d — unpaired leg, no vertical to mark it against.",
-                    root, right, sg["strike"], sg["qty"],
-                )
+        for st in structures:
+            key = st["key"]
+            seen.add(key)
+            mark = _mark(st)
+            if mark is None:
+                continue
+            value, ret_pct = mark
+
+            rec = state.get(key) or {"peak": ret_pct, "peak_at": now.isoformat()}
+            if ret_pct > rec["peak"]:
+                rec = {"peak": ret_pct, "peak_at": now.isoformat()}
+            state[key] = rec
+            quiet = (now - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0
+            stop_pct = ORPHAN_CREDIT_STOP_PCT if st["credit"] else ORPHAN_STOP_PCT
+
+            reason = None
+            if ret_pct <= stop_pct:
+                reason = "STOP_LOSS"
+            elif (STALL_MINUTES > 0 and rec["peak"] > 0 and quiet >= STALL_MINUTES
+                  and ret_pct <= rec["peak"] - STALL_GIVEBACK_PCT):
+                # The take-profit ARMS this rather than firing it, exactly as
+                # the engine's own credit window now does: a structure that
+                # keeps making new highs is not finished.
+                reason = "STALL"
+            manageable = (MANAGE_ORPHANS
+                          and (not MANAGE_UNDERLYING or st["root"] == MANAGE_UNDERLYING))
+            verdict = reason or (
+                f"holding (target {ORPHAN_TAKE_PROFIT_PCT:+.0f}%, stop {stop_pct:+.0f}%)")
+            logger.info(
+                "ORPHAN %s %s %.0f/%.0f x%d %s: entry %.2f value %.2f %+.1f%% "
+                "(peak %+.1f%%, %.0f min ago) — %s%s",
+                st["root"], st["right"], st["long_strike"], st["short_strike"],
+                st["qty"], "credit" if st["credit"] else "debit",
+                abs(st["entry"]), value, ret_pct, rec["peak"], quiet, verdict,
+                "" if manageable else "  [observation only]",
+            )
+            if reason and manageable and _close(st, reason, value):
+                _book(st, value, ret_pct, reason)
+                state.pop(key, None)
+            reported.append(st)
+
+        # A structure that has vanished since the last pass was closed by
+        # someone -- the human, an assignment, an expiry. Book what we can and
+        # stop tracking its peak.
+        for gone in [k for k in state if k not in seen]:
+            state.pop(gone, None)
         _save(state)
         return reported
     except Exception:
-        logger.exception("Orphan review failed — continuing; this watches, it does not trade.")
+        logger.exception("Orphan review failed — continuing; this must not break a cycle.")
         return []
-
-
-def _mark(sp: dict) -> "tuple | None":
-    """(value, return_pct) for one spread, from live quotes.
-
-    Return is measured against the spread's CURRENT width-normalised value,
-    not against cost basis -- see the module docstring on why Tradier's basis
-    cannot be trusted here. For a debit structure that means return against
-    what the spread is worth versus its maximum; it is a coarser number than
-    the engine's own return_pct and it is the honest one available.
-    """
-    try:
-        quotes = tradier_orders.quotes([sp["long"], sp["short"]])
-        if not quotes:
-            return None
-        lq, sq = quotes.get(sp["long"]), quotes.get(sp["short"])
-        if not lq or not sq:
-            return None
-        value = float(lq.get("bid") or 0.0) - float(sq.get("ask") or 0.0)
-        width = abs(sp["long_strike"] - sp["short_strike"])
-        if width <= 0:
-            return None
-        # Percent of the structure's maximum value. At 100% the spread is worth
-        # its full width and there is nothing left to gain by holding.
-        return value, value / width * 100.0
-    except Exception:
-        return None

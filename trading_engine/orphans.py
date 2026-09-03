@@ -80,6 +80,19 @@ MANAGE_UNDERLYING = {
 
 # The ladder. Same shape as the engine's own, same variables where they are
 # genuinely the same question.
+# ONLY WHAT EXPIRES TODAY.
+#
+# The ladder is built for 0DTE: a -25% stop, a 90% ceiling and a 15:45 flatten
+# all assume the position has hours to live, not days. Applied to a spread
+# expiring later they are simply wrong -- the force close would flatten a
+# Friday position on Wednesday for no reason, and a stall would book a
+# multi-day thesis on one quiet afternoon.
+#
+# So the scope is the EXPIRY, not the symbol. A name is managed on the day its
+# contracts expire and left alone before that, which is what makes one rule
+# correct for every position rather than a list that has to be maintained.
+ORPHAN_TODAY_ONLY = os.getenv("TRADING_ORPHAN_TODAY_ONLY", "true").lower() == "true"
+
 ORPHAN_TAKE_PROFIT_PCT = float(os.getenv("TRADING_ORPHAN_TAKE_PROFIT", "50"))
 ORPHAN_STOP_PCT = float(os.getenv("TRADING_ORPHAN_STOP_PCT", "-25"))
 # Credit gets its own, for the reason in the docstring: -25% of a collected
@@ -303,6 +316,20 @@ def _max_return_pct(st: dict) -> "float | None":
     return (width - entry) / entry * 100.0
 
 
+def _expires_today(st: dict) -> bool:
+    """Does this structure expire in the current New York session?
+
+    The expiry is the YYMMDD from the OCC symbol, compared against the New
+    York date rather than UTC -- after 20:00 ET the two disagree, and the
+    disagreement would silently change which positions are in scope.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        return st.get("expiry") == datetime.now(ZoneInfo("America/New_York")).strftime("%y%m%d")
+    except Exception:
+        return False
+
+
 def _past_force_close() -> bool:
     """Is it past the orphan flatten time, in New York?"""
     if not ORPHAN_FORCE_CLOSE:
@@ -482,6 +509,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "STALL"
             manageable = (MANAGE_ORPHANS
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)
+                          and (not ORPHAN_TODAY_ONLY or _expires_today(st))
                           and _quotes_tradeable(
                               tradier_orders.quotes([st["long"], st["short"]]), st))
             verdict = reason or (
@@ -494,7 +522,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                 st["root"], st["right"], st["long_strike"], st["short_strike"],
                 st["qty"], "credit" if st["credit"] else "debit",
                 abs(st["entry"]), value, ret_pct, rec["peak"], quiet, verdict,
-                "" if manageable else "  [observation only]",
+                "" if manageable else (
+                    "  [observation only — expires %s, not today]" % st.get("expiry")
+                    if ORPHAN_TODAY_ONLY and not _expires_today(st)
+                    else "  [observation only]"),
             )
             if reason and manageable and _close(st, reason, value):
                 _book(st, value, ret_pct, reason)

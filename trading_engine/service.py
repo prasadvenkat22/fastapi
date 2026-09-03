@@ -299,6 +299,33 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         # Mid, not natural: the mid is what a position is worth, the natural
         # is what a fill costs, and entries price at the natural separately.
         if market_quote is not None:
+            # WIDTH CHECK, recorded not enforced.
+            #
+            # The mid of a five-dollar-wide book is not a price. Orphan
+            # management refuses to ACT on one (orphans.ORPHAN_MAX_LEG_SPREAD)
+            # because it saw the failure directly: a 700/710 quoted 7.50/12.46
+            # after the close, whose natural read -31% against a position that
+            # was flat.
+            #
+            # The engine is far less exposed -- it marks from the MID, which on
+            # that same book gives 7.69 rather than 5.17, and it only runs
+            # during regular hours when QQQ 0DTE quotes are tight. So this
+            # logs the width rather than blocking an exit on it: refusing to
+            # act would be a change to the exit path of a system about to
+            # trade, and the evidence for needing it here does not exist yet.
+            # If this line appears during the session, it does.
+            try:
+                _b, _a = float(market_quote["bid"]), float(market_quote["ask"])
+                _m = (_b + _a) / 2.0
+                if _m > 0 and (_a - _b) / _m > 0.25:
+                    logger.warning(
+                        "Wide book marking %s: bid %.2f ask %.2f is %.0f%% of mid — "
+                        "the mark is being trusted anyway, see orphans.ORPHAN_MAX_LEG_SPREAD.",
+                        open_row.playbook or open_row.strategy, _b, _a,
+                        (_a - _b) / _m * 100.0,
+                    )
+            except (TypeError, ValueError, KeyError):
+                pass
             current_value = max(market_quote["mid"], 0.0)
 
         position = MockSpreadPosition(

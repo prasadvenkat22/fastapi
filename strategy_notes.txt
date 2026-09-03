@@ -4234,3 +4234,75 @@ Note for the review: if it stops out in the first minutes, check the FILL
 against the mark. An opening auction is exactly the wide book the orphan quote
 guard rejects, and a stop that fires at 09:30 is the first live test of whether
 ORPHAN_MAX_LEG_SPREAD holds the line or blocks a stop that needed to happen.
+
+--------------------------------------------------------------------------------
+67. THE MARK IS NOT THE POSITION  (2026-09-03)
+--------------------------------------------------------------------------------
+
+The single most expensive misunderstanding in this file, found and fixed in
+one afternoon, and it cost about 1,250 dollars in between.
+
+AN IN-THE-MONEY SPREAD MARKS FAR BELOW WHAT IT IS WORTH. The short leg sits
+nearer the money than the long, so it carries more time premium, and that
+premium is SUBTRACTED from the spread. The gap goes to zero at expiry. It is
+not a loss; it is the position not having expired yet.
+
+Live, an hour before the close:
+
+    sym   strikes        entry   mark     intrinsic   held to expiry
+    AVGO  365/355 P       7.88   6.45      10.00        +26.9%
+    SNDK  1500/1540 C    24.05  27.70      40.00        +66.3%
+    DELL  530/520 P       6.28   6.75      10.00        +59.2%
+
+AVGO read -18% on the mark while holding its FULL width in intrinsic. Every
+one of eight live positions was in the money and above its entry, and five of
+them showed a negative return.
+
+TWO RULES WERE READING THE WRONG NUMBER.
+
+THE STOP. Tomorrow AVGO becomes 0DTE and the -25% stop goes live at a mark of
+5.91. One tick books -190 on a structure worth +212 at expiry -- and the
+underlying had moved IN ITS FAVOUR to get there, falling through the short
+strike. Fixed first: the stop is suppressed when intrinsic exceeds what was
+paid.
+
+THE STALL, WHICH WAS THE EXPENSIVE HALF AND WAS FIXED SECOND. The stop guard
+was built and I stopped there. That was the error. The stop only fires on
+LOSERS; the stall fires on WINNERS, which is exactly where surrendering
+intrinsic costs the most. Within the hour:
+
+    17:20  ORPHAN STALL_LATER: closing SNDK 1500/1540 x1 -> booked +345
+
+Entry 24.05, sold near 27.50, SNDK at 1558 and above both strikes. The spread
+held 40.00 of intrinsic and pays +1,595 held to expiry. The stall read a mark
+fading from time premium and called it a profit that had stopped climbing. It
+was the profit ARRIVING. MU closed on the same rule eight minutes earlier.
+
+The stall now tracks its peak and giveback on INTRINSIC versus entry, falling
+back to the mark only when intrinsic cannot be computed. It is not weakened: a
+genuine reversal shrinks intrinsic and still books the trade. Only decay stops
+triggering it.
+
+WHAT THE ATTRIBUTION SHOWS, and why it was added. Every ORPHAN line and the
+/trading/positions response now carry intrinsic and extrinsic beside the
+value. A negative extrinsic on an ITM spread is the part that comes back; a
+bare percentage cannot tell that from a real adverse move, and both rules
+above were built on the bare percentage.
+
+AND THE ACCOUNT-LEVEL VERSION OF THE SAME MISTAKE. The account marked 15,530
+against 16,000 earlier and the question was whether to guard total value. It
+should not be guarded on marks. The book held 4,214 of extrinsic due back and
+was +2,298 above cost held to expiry at that day's spots, while showing -3,183
+unrealised. An account-value stop would have liquidated all of it at once, at
+whatever the book offered -- the same error as the position rules, scaled up
+and made simultaneous.
+
+The existing 6% daily limit counts REALISED P&L and halts entries only. That
+is the correct shape. It was nowhere near firing: realised on the day was
++2,235.
+
+THE GENERAL RULE, worth carrying past this engine: A RULE EXPRESSED AS A
+RETURN MUST NAME WHICH VALUE IT MEANS. Mark, intrinsic, and value-at-expiry
+are three different series, they diverge most exactly when a position is
+working, and every exit rule in this file was written against the first
+without ever saying so.

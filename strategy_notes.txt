@@ -4306,3 +4306,71 @@ RETURN MUST NAME WHICH VALUE IT MEANS. Mark, intrinsic, and value-at-expiry
 are three different series, they diverge most exactly when a position is
 working, and every exit rule in this file was written against the first
 without ever saying so.
+
+--------------------------------------------------------------------------------
+68. LEGGED-IN SPREADS, AND THE FIRST FULL DAY OF ORPHAN MANAGEMENT  (2026-09-03)
+--------------------------------------------------------------------------------
+
+PAIRING BY ORDER MISSES A SPREAD LEGGED INTO ACROSS ORDERS.
+
+Order-based pairing recovers the structure a human actually put on, which is
+what makes the entry prices trustworthy. It cannot recover one assembled from
+separate orders: a SNDK 1500 bought on 09-02 and a 1530 sold at 14:14 on 09-03
+are economically a spread and look to the pairer like two unrelated singles.
+Two legs sat outside the ladder entirely -- reported as ORPHAN SINGLE, never
+marked, never stopped, never stalled.
+
+The fallback pairs leftovers by strike within one underlying, expiry and right,
+priced from tradier_orders.filled_legs rather than Tradier's averaged
+cost_basis. A pair with no recoverable fill is skipped: a return computed
+without a true entry is not worth acting on, and every rule here is a return.
+
+INFERRED PAIRS ARE REPORTED, NOT ACTED ON, unless TRADING_ORPHAN_MANAGE_INFERRED
+is set. Pairing by strike is a GUESS -- the same guess that made the engine's
+naked-leg check read a fully covered book as naked earlier the same day. It is
+usually right and it is not stated fact.
+
+THE FIRST VERSION OF THE FALLBACK FOUND NOTHING, and the reason is worth
+recording. It treated a symbol as consumed if it appeared in ANY stated pair,
+so a SNDK 1500 held TWICE, with one contract inside a stated 1500/1540, left
+the second contract invisible and the 1530 short with nothing to pair against.
+Leftover is what the account HOLDS minus what the stated structures USE.
+Coverage went 15 of 17 legs to 16.
+
+The recovered entry is also the second demonstration that fills beat cost
+basis: 24.63 from the real fills (50.25 against 25.62), where the averaged
+cost_basis implies 35.78 -- ABOVE the structure's own 30-dollar width, which
+would have made the position look structurally impossible.
+
+The one leg still uncovered is a NVDA 222.5 long x5. It is correctly
+unpaired: there is no spare short above it, so there is no width, and every
+rule here is a return against a width. Its risk is capped at the premium.
+
+--------------------------------------------------------------------------------
+THE DAY
+
+Eight orphan closes, all by the stall, none by a ceiling or a stop:
+
+    QQQ  711/713 x1    +34    STALL
+    QQQ  700/710 x1   +166    STALL
+    QQQ  716/714 x10  +170    STALL   (booked as two 5-lots, see section 64)
+    CRWV 75/80 x5     +260    STALL_LATER
+    MRVL 195/205 x1    +97    STALL_LATER
+    QQQ  715/718 x3    -42    STALL
+    MU   920/940 x1    -32    STALL_LATER
+    SNDK 1500/1540 x1 +345    STALL_LATER
+
+TWO OF THOSE WERE MISTAKES BY THE RULE, NOT BY THE MARKET. SNDK and MU closed
+on a stall reading the MARK while holding intrinsic far above entry -- section
+67. SNDK booked +345 against +1,595 held to expiry. Both predate the fix.
+
+The engine itself opened ONE position all day and rode it to +93.6%.
+
+FOUR CYCLE FAILURES, three at the open on anthropic 529 (section 64, now
+guarded) and one later. Everything else ran a cycle a minute from cron.
+
+WHAT THIS DAY ACTUALLY ESTABLISHED. The mechanism works -- structures rebuild
+from fills, the stall books fading profits unaided, results reach
+TradeHistory. And nine defects were found in code less than 48 hours old, two
+caught by luck rather than design, and the most expensive was not a crash but
+a rule quietly measuring the wrong number while looking entirely healthy.

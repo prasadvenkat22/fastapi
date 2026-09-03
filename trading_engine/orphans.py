@@ -804,9 +804,24 @@ def review(engine_symbols: "set | None" = None) -> list:
             # does the log line below.
             intrinsic_ok = False
             if parts_iv and STOP_RESPECTS_INTRINSIC:
-                # Strictly greater: at exactly the entry, holding to expiry
-                # returns the cost and there is nothing to protect.
-                intrinsic_ok = parts_iv[0] > abs(st["entry"])
+                # THE COMPARISON REVERSES FOR A CREDIT STRUCTURE.
+                #
+                # For a debit, intrinsic is the VALUE at expiry: above what was
+                # paid means profitable, so a mark-based stop should not fire.
+                # For a credit, intrinsic is the COST TO CLOSE: above the credit
+                # collected means a LOSS.
+                #
+                # Written once for debits, this suppressed the stop on exactly
+                # the credit spreads that most needed it -- a structure at
+                # maximum loss reads intrinsic far above its entry and would
+                # have looked profitable at expiry. Found alongside the
+                # inversion in _decompose on 2026-09-03; same bug class, two
+                # places, and both only reachable on credit structures.
+                #
+                # Strictly compared: at exactly the entry there is nothing to
+                # protect either way.
+                intrinsic_ok = (parts_iv[0] < abs(st["entry"]) if st["credit"]
+                                else parts_iv[0] > abs(st["entry"]))
 
             reason = None
             if zero_dte and ret_pct <= stop_pct and intrinsic_ok:

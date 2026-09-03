@@ -1453,11 +1453,42 @@ async def market_signals_agent(state: TradingState) -> dict:
     headlines: List[str] = []
     similar_past_headlines: List[str] = []
     if not cache_fresh:
-        headlines = _scrape_headlines()
-        embeddings = VoyageEmbeddings()
-        if headlines:
-            await store_headlines(headlines, embeddings)
-        similar_past_headlines = await query_similar_headlines(headlines, embeddings, top_k=3) if headlines else []
+        # GUARDED, like the crude fetch above and every other network call in
+        # this agent -- because on 2026-09-03 this one was not.
+        #
+        #   09:30  ERROR cycle failed
+        #   anthropic.OverloadedError: 529 - overloaded_error
+        #     nodes.py:1460 market_signals_agent
+        #     vector_store.py:82 query_similar_headlines
+        #
+        # The exception propagated out of the LangGraph node, through
+        # run_trading_cycle, and killed three whole cycles at the open: no
+        # indicators, no exit checks, no orphan review, on a morning with
+        # seven live positions. A HEADLINE LOOKUP TOOK DOWN EXECUTION.
+        #
+        # This half of the agent is observational -- it feeds a sentiment
+        # verdict whose LLM gate is off by default (TRADING_MACRO_LLM_GATE),
+        # and the objective terms below decide the macro read regardless.
+        # Losing it costs context; losing the cycle costs the stop.
+        #
+        # Degrades to no headlines rather than no cycle. The verdict then
+        # rests on breadth, VIX and yields, which is where the evidence in
+        # this file says the signal actually lives.
+        try:
+            headlines = _scrape_headlines()
+            embeddings = VoyageEmbeddings()
+            if headlines:
+                await store_headlines(headlines, embeddings)
+            similar_past_headlines = (
+                await query_similar_headlines(headlines, embeddings, top_k=3)
+                if headlines else []
+            )
+        except Exception:
+            logger.exception(
+                "Headline read failed — continuing on the objective macro terms. "
+                "The cycle is NOT abandoned."
+            )
+            headlines, similar_past_headlines = [], []
 
     # $TICKQ is intentionally not used — confirmed live against both Tradier
     # sandbox and production that this symbol doesn't exist in their catalog,
@@ -1513,12 +1544,36 @@ async def market_signals_agent(state: TradingState) -> dict:
     if cache_fresh:
         llm_verdict, llm_confidence, llm_risk_factor = cached
     else:
-        llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
-        llm_verdict = llm_result.verdict
-        llm_confidence = llm_result.confidence_score
-        llm_risk_factor = llm_result.risk_factor
-        logger.info("Macro verdict %s (confidence %.2f): %s", llm_verdict, llm_confidence, llm_risk_factor)
-        _write_macro_cache(llm_verdict, llm_confidence, llm_risk_factor)
+        # The SECOND unguarded Anthropic call in this agent, and the same
+        # failure as the headline lookup above: a 529 here propagated out of
+        # the node and killed the cycle on 2026-09-03.
+        #
+        # Degrades to BAD, not GOOD, and that choice is deliberate. Line ~1600
+        # reads `llm_verdict == "GOOD" or not MACRO_LLM_GATE`, so with the gate
+        # OFF -- its deployed state -- the value is inert and this costs
+        # nothing. With the gate ON, an unknown macro read must not be allowed
+        # to PERMIT a bullish entry: refusing on an outage is recoverable,
+        # entering on one is not. BAD is therefore safe in both configurations,
+        # which is the property worth having in a fallback nobody will
+        # re-examine for months.
+        #
+        # Not cached either: _write_macro_cache would persist a verdict the
+        # model never gave and suppress the retry for the cache's whole life.
+        try:
+            llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
+            llm_verdict = llm_result.verdict
+            llm_confidence = llm_result.confidence_score
+            llm_risk_factor = llm_result.risk_factor
+            logger.info("Macro verdict %s (confidence %.2f): %s", llm_verdict, llm_confidence, llm_risk_factor)
+            _write_macro_cache(llm_verdict, llm_confidence, llm_risk_factor)
+        except Exception:
+            logger.exception(
+                "Macro verdict unavailable — treating as BAD%s. The cycle is NOT "
+                "abandoned.",
+                " (inert: TRADING_MACRO_LLM_GATE is off)" if not MACRO_LLM_GATE else "",
+            )
+            llm_verdict, llm_confidence = "BAD", 0.0
+            llm_risk_factor = "macro model unavailable"
 
     # VIX is gated on level *and* velocity — a sharp intraday spike is
     # risk-off even when the absolute level is still under the ceiling,

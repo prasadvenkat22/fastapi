@@ -4710,3 +4710,58 @@ THE PATTERN TO WATCH: shared mutable module state, written per-bar by one
 sweep, read per-bar by all of them. Three separate bugs in this file now trace
 to it. A sweep that sets a knob and a harness that sets the same knob will
 always produce a number, and the number will always look like an answer.
+
+--------------------------------------------------------------------------------
+75. THE LATE-SESSION STALL: NO EVIDENCE, AND THE TEST WAS AIMED AT THE WRONG
+    SUBSYSTEM  (2026-09-03)
+--------------------------------------------------------------------------------
+
+THE CLAIM: after about 15:15 the tape chops as people close for the day, so a
+5-minute quiet timer reads noise as a stall and books positions that would
+have recovered into the bell. Raised by a live MU 930/950 stalled out at 15:17
+for -135 that finished 845 higher.
+
+60 sessions, chain-calibrated, tick grid on, intrabar stops on, deployed
+config, sessions run to 16:00 rather than the usual 15:45:
+
+    arm                      late tr   late STALL      all 58 tr
+    5 min all day (deployed)    5 +6        1 +2      -17.74/tr  -1028.80
+    10 min after 15:15          5 +6        1 +2      -17.74/tr  -1028.80
+    15 min after 15:15          5 +6        0 +0      -17.74/tr  -1028.80
+    20 min after 15:15          5 +6        0 +0      -17.74/tr  -1028.80
+    no stall after 15:15        5 -0        0 +0      -17.84/tr  -1034.80
+    15 min after 14:45          9 -2        0 +0      -17.60/tr  -1020.80
+    15 min after 15:00          6 -9        0 +0      -17.74/tr  -1028.80
+    15 min after 15:30          4 +4        0 +0      -17.74/tr  -1028.80
+
+Every arm sits within 14 dollars of every other on a 1,029-dollar base. The
+answer is NO EVIDENCE -- and specifically not "no effect", because the reason
+the arms agree is that there is almost nothing for them to disagree about.
+
+THE RULE FIRES LATE ONCE IN SIXTY SESSIONS. One late STALL at the deployed
+setting, worth two dollars. Four to nine trades out of fifty-eight reach 15:15
+at all. The engine's own positions are closed by stop, stall or ratchet long
+before the last stretch, so a parameter governing the last stretch has nearly
+nothing to govern.
+
+AND THAT IS THE REAL FINDING. THE MU TRADE WAS NOT AN ENGINE POSITION.
+
+It was opened by hand and managed by orphans.py, which has its OWN stall knobs
+-- ORPHAN_STALL_*, ORPHAN_LATER_STALL_* -- and which this harness does not
+replay at all. A sweep of the engine's stall timing could never have reached
+it. The test was well-formed and answered a question nobody was asking.
+
+WHAT ACTUALLY ADDRESSES THE MU CASE is already deployed and was already the
+answer before this ran: STALL_MUST_BOOK_A_GAIN, live from 15:39 that same day,
+22 minutes after that trade. MU marked 11.50 against a 12.90 entry, so the
+stall could not have fired at all under the current rules.
+
+NOTHING CHANGES. TRADING_STALL_MINUTES stays at 5 and there is no late-session
+variant.
+
+THE LESSON IS ABOUT WHERE A BUG LIVES, NOT ABOUT STALL TIMING. Two subsystems
+now implement the same rule against different books -- nodes.py for positions
+the engine opened, orphans.py for positions it adopted. They have separate
+knobs, separate defaults, and only one of them is measurable in the harness.
+When a live trade behaves wrongly, the first question is WHICH ONE MANAGED IT,
+and answering that after building the test rather than before cost an evening.

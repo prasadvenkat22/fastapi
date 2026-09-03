@@ -116,7 +116,24 @@ SLIPPAGE_ROUNDTRIP = 0.10
 #
 # Buys round UP to the next tick and sells round DOWN, which is the direction
 # a crossing order actually fills.
-TICK_PRICING = os.getenv("SWEEP_TICK_PRICING", "true").lower() == "true"
+def _flag(name: str, default: bool) -> bool:
+    """One truthiness convention for every SWEEP_ flag.
+
+    These disagreed. SWEEP_TICK_PRICING tested == "true", SWEEP_CHAIN_PRICING
+    tested == "1", and each silently read the other's value as OFF. Both have
+    now cost a run: the tick grid once (recorded above), and chain pricing on
+    2026-09-03, when a late-stall sweep exported SWEEP_CHAIN_PRICING=true and
+    spent twenty minutes measuring MODEL prices while its own banner said so.
+
+    The banner is what caught it both times, which is the argument for the
+    banner -- but a flag that reads its own value as false is not a thing to
+    keep catching.
+    """
+    return (os.getenv(name, "1" if default else "0").strip().lower()
+            in ("1", "true", "yes", "on"))
+
+
+TICK_PRICING = _flag("SWEEP_TICK_PRICING", True)
 TICK_BELOW_3 = 0.01
 TICK_ABOVE_3 = 0.05
 TICK_BREAK = 3.0
@@ -193,7 +210,7 @@ STAND_DOWN_AFTER_RIDE_RATCHET = False
 # optimistic bound: a perfect stop. Off is the pessimistic bound: a stop
 # that waits five minutes. The live engine sits between them, nearer the
 # optimistic end, and reporting both is more honest than picking one.
-INTRABAR_STOPS = os.getenv("SWEEP_INTRABAR_STOPS", "false").lower() == "true"
+INTRABAR_STOPS = _flag("SWEEP_INTRABAR_STOPS", False)
 
 # STALLED-PEAK EXIT. Book when the profit curve stops making new highs.
 #
@@ -344,7 +361,7 @@ class _Account:
 # probability approximation. Off by default so that every result already
 # committed in playbook.py can still be reproduced by re-running this file;
 # turn it on with SWEEP_CHAIN_PRICING=1 and the two are one flag apart.
-CHAIN_PRICING = os.getenv("SWEEP_CHAIN_PRICING", "0") == "1"
+CHAIN_PRICING = _flag("SWEEP_CHAIN_PRICING", False)
 
 # Session VIX, so the smile scales to the day being replayed rather than
 # pricing a March panic at the quiet session it was fitted on.

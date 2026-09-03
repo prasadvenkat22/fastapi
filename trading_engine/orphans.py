@@ -191,6 +191,30 @@ STOP_RESPECTS_INTRINSIC = os.getenv(
 STALL_RESPECTS_INTRINSIC = os.getenv(
     "TRADING_ORPHAN_STALL_RESPECTS_INTRINSIC", "true").lower() == "true"
 
+# A RULE THAT LOCKS IN PROFIT MUST NOT REALISE A LOSS DOING IT.
+#
+# The stall now DECIDES on intrinsic and still EXECUTES at the mark, and on a
+# deep in-the-money spread the mark sits below the entry. So a small intrinsic
+# decline -- a real one, correctly detected -- triggers a sale at a price that
+# books a loss on a position that was profitable at expiry.
+#
+# It cost about 263 dollars on 2026-09-03 across three closes:
+#
+#   AVGO 365/355 -113   intrinsic 9.40 vs 7.88 entry  (+193 at expiry)
+#   NVDA 220/230  -15   intrinsic 9.54 vs 8.15 entry  (+139 at expiry)
+#   MU   930/950 -135   intrinsic 20.00 vs 12.90 entry (+710 at expiry)
+#
+# Each fired legitimately by its own logic. Each sold a winner at a loss.
+#
+# So the stall additionally requires that the exit ACTUALLY BOOKS A GAIN. If
+# the mark is below entry there is no profit to protect, and the case is the
+# STOP's -- which is already intrinsic-aware and fires when intrinsic itself
+# falls through the entry. The two rules then divide cleanly: the stall
+# protects gains, the stop limits losses, and neither does the other's job
+# badly.
+STALL_MUST_BOOK_A_GAIN = os.getenv(
+    "TRADING_ORPHAN_STALL_MUST_BOOK_GAIN", "true").lower() == "true"
+
 # THE STALL FOR POSITIONS THAT EXPIRE LATER.
 #
 # The 0DTE stall is deliberately unarmed -- any positive peak starts it --
@@ -823,6 +847,12 @@ def review(engine_symbols: "set | None" = None) -> list:
                 intrinsic_ok = (parts_iv[0] < abs(st["entry"]) if st["credit"]
                                 else parts_iv[0] > abs(st["entry"]))
 
+            # Would selling right now, at the mark, actually realise a profit?
+            # See STALL_MUST_BOOK_A_GAIN.
+            books_a_gain = (not STALL_MUST_BOOK_A_GAIN) or (
+                (abs(st["entry"]) - value) > 0 if st["credit"]
+                else (value - abs(st["entry"])) > 0)
+
             reason = None
             if zero_dte and ret_pct <= stop_pct and intrinsic_ok:
                 logger.info(
@@ -840,7 +870,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             elif ceiling is not None and ret_pct >= ceiling:
                 reason = "CEILING"
             elif (zero_dte and STALL_MINUTES > 0 and rec["peak"] > 0
-                  and quiet >= STALL_MINUTES
+                  and quiet >= STALL_MINUTES and books_a_gain
                   and stall_pct <= rec["peak"] - STALL_GIVEBACK_PCT):
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
@@ -848,7 +878,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "STALL"
             elif ((not zero_dte) and ORPHAN_LATER_STALL_MINUTES > 0
                   and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
-                  and quiet >= ORPHAN_LATER_STALL_MINUTES
+                  and quiet >= ORPHAN_LATER_STALL_MINUTES and books_a_gain
                   and stall_pct <= rec["peak"] - ORPHAN_LATER_STALL_GIVEBACK_PCT):
                 # Armed by a real profit, booked on a small giveback. See the
                 # knobs above for why arming is what makes the tight giveback

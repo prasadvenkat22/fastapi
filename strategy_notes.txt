@@ -3673,7 +3673,8 @@ P&L summary and completely different in the log.
        grep "ORPHAN STOP_LOSS"        debit -25% / credit -600%
        grep "ORPHAN CEILING"          90% of the structure's maximum
        grep "ORPHAN FORCE_CLOSE"      15:45, beats everything but the stop
-       grep "ORPHAN STALL"            5 min quiet and 6 points off the peak
+       grep "ORPHAN STALL"            5 min quiet and 3.3 points off the peak
+       grep "expires .*, not today"   skipped: managed only on its expiry day
        grep "quote unusable"          refused to act on a wide book
    Read, in order of what would hurt most if wrong:
      - Does the reconstructed entry match the fills? The live QQQ 700/710
@@ -3683,9 +3684,11 @@ P&L summary and completely different in the log.
        because a spread near full width stops MOVING and therefore cannot give
        back enough to trip a stall -- the protection was weakening exactly as
        the upside ran out.
-     - Does the stall hold to 6 points (45 cents of value) and not act on
-       drift? 12 was too wide, 5 -- the shared engine value -- was a 58-cent
-       move in QQQ, which is noise.
+     - Does the stall hold to 3.3 points (25 cents of value) and not act on
+       drift? See section 60 for why this number moved twice; 5 -- the shared
+       engine value -- was a 58-cent move in QQQ, less than one bar's range.
+     - Is only the QQQ managed? NVDA and SNDK expire Friday and must read
+       "expires 260904, not today" every cycle until then.
      - Does FORCE_CLOSE actually flatten at 15:45? Orphans had no time exit at
        all until tonight and would have ridden into a share settlement.
      - Does "quote unusable" appear during REGULAR hours? After the close it
@@ -3706,3 +3709,74 @@ AND ONE THING THAT SHOULD NEVER APPEAR AGAIN:
 DEPLOYMENT REMAINS BY FILE COPY. The droplet is on main with modified files
 while the work lives on chain-priced-sweeps. deploy.sh update would pull main
 and silently revert all of it.
+
+--------------------------------------------------------------------------------
+60. THREE SILENT DEFECTS BEFORE THE OPEN, AND THE FINAL ORPHAN LADDER  (2026-09-03)
+--------------------------------------------------------------------------------
+
+Orphan management was deployed the previous evening. All three defects below
+were found in the ninety minutes before the open, and ALL THREE WOULD HAVE
+BEEN SILENT: the logs would have looked ordinary while nothing was managed.
+That is the pattern worth carrying forward -- for a rule that acts by NOT
+acting, "it worked" and "it never ran" are the same line in a P&L summary.
+
+ONE. TRADIER ANSWERS {"orders": "null"} -- THE STRING.
+filled_spread_orders did ((r.json() or {}).get("orders") or {}).get("order"),
+and "null" is a truthy string, so it raised AttributeError, was caught, and
+returned []. An empty list legitimately means "nothing to manage", so the
+failure was indistinguishable from the normal case. This is the ordinary
+pre-market state on any new day, so orphan management would have done nothing
+for the whole session with one log line to show for it. open_positions had
+guarded this since it was written; now both do.
+
+TWO. /orders COVERS THE CURRENT SESSION ONLY.
+Three spreads held overnight rebuilt to nothing -- "structures: 0" -- because
+there were no opening fills in today's window. /history does reach prior days
+and cannot fix it: it is per-LEG, so it can verify a price but cannot recover
+which legs were PAIRED, which is the one thing the reconstruction needs.
+
+The reconstruction is now cached the day it is made and reused while the
+account still holds both legs. Today's orders always win over the cache, so a
+scale-in or partial close corrects it. Positions predating the cache were
+seeded by hand after verifying every entry against /history:
+
+    QQQ  buy 700 @ 9.69   sell 710 @ 2.20    ->  7.49   x1
+    NVDA buy 215 @ 9.75   sell 225 @ 2.18    ->  7.57   x10
+    SNDK buy 1500 @ 72.55 sell 1550 @ 40.75  -> 31.80   x1
+
+All three matched the order-based reconstruction exactly, which is the first
+independent confirmation that reading fills rather than cost_basis works.
+
+THREE. THE SCOPE WAS THE SYMBOL AND SHOULD HAVE BEEN THE EXPIRY.
+The ladder is built for 0DTE -- a -25% stop, a 90% ceiling and a 15:45 flatten
+all assume hours, not days. Scoped by name, the force close would have
+flattened a Friday NVDA position on Wednesday afternoon for no reason.
+ORPHAN_TODAY_ONLY scopes management to contracts expiring in the current New
+York session, so a name is managed on its expiry day and watched before it,
+with no setting to change in between. Compared against the NEW YORK date: after
+20:00 ET the NY and UTC dates disagree and the disagreement would silently move
+positions in and out of scope.
+
+THE LADDER AS IT STANDS, in priority order. Stop first, because a position
+already down 25% should not wait five minutes for a quiet-period test. Force
+close second, because these settle in SHARES and not cash.
+
+    STOP          -25% debit / -600% credit
+    FORCE_CLOSE   15:45
+    CEILING       90% of the structure's maximum
+    STALL         5 minutes with no new high AND 3.3 points off the peak
+
+For the live QQQ 700/710 at 7.49 that is: ceiling 9.75, stop 5.62, stall on a
+25-cent giveback, flatten at 15:45.
+
+THE GIVEBACK MOVED TWICE AND THE REASONING IS THE POINT. It began shared with
+the engine at 5 points, which on this spread is 37 cents of value and, at a net
+delta near 0.65, a 58-cent move in QQQ -- less than one 5-minute bar's range,
+so it would have fired on drift. Widened to 12, then cut to 3.3 at the
+operator's instruction, which is 25 cents. One number cannot serve the morning
+ride, a credit spread and a deep-ITM manual spread; orphans now have their own.
+
+WHAT THE STALL DOES NOT DO. It requires peak > 0. A position that never shows a
+profit has no peak to stall from, so a spread that goes straight down from
+entry is the STOP's job alone. The stall protects a gain that existed; it is
+not a second stop.

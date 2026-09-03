@@ -493,25 +493,45 @@ def review(engine_symbols: "set | None" = None) -> list:
             ceiling = (ORPHAN_CEILING_FRACTION * max_ret
                        if (max_ret and ORPHAN_CEILING_FRACTION > 0) else None)
 
+            # WHICH RULES ARE ACTUALLY ABOUT THE EXPIRY, AND WHICH ARE NOT.
+            #
+            # The stop, the force close and the stall all assume the position
+            # has hours rather than days: a multi-day drawdown can recover, a
+            # Friday spread flattened on Wednesday is closed for no reason, and
+            # a multi-day thesis should not die on one quiet five minutes. They
+            # are 0DTE rules and stay scoped to the expiry day.
+            #
+            # THE CEILING IS NOT. A structure worth 90% of its maximum has the
+            # same tiny upside left whenever it expires -- and holding the full
+            # width of risk for the last few cents is WORSE over two days than
+            # over two hours, not better. So the ceiling applies at any expiry.
+            zero_dte = (not ORPHAN_TODAY_ONLY) or _expires_today(st)
+
             reason = None
-            if ret_pct <= stop_pct:
+            if zero_dte and ret_pct <= stop_pct:
                 reason = "STOP_LOSS"
-            elif _past_force_close():
+            elif zero_dte and _past_force_close():
                 # Time beats everything. These settle in shares, not cash.
                 reason = "FORCE_CLOSE"
             elif ceiling is not None and ret_pct >= ceiling:
                 reason = "CEILING"
-            elif (STALL_MINUTES > 0 and rec["peak"] > 0 and quiet >= STALL_MINUTES
+            elif (zero_dte and STALL_MINUTES > 0 and rec["peak"] > 0
+                  and quiet >= STALL_MINUTES
                   and ret_pct <= rec["peak"] - STALL_GIVEBACK_PCT):
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
                 reason = "STALL"
+            # The expiry check has moved INTO the reason logic above, so the
+            # ceiling can act on a later expiry while the 0DTE rules cannot.
             manageable = (MANAGE_ORPHANS
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)
-                          and (not ORPHAN_TODAY_ONLY or _expires_today(st))
                           and _quotes_tradeable(
                               tradier_orders.quotes([st["long"], st["short"]]), st))
+            if not zero_dte and reason is None:
+                verdict_scope = "  [expires %s — ceiling only]" % st.get("expiry")
+            else:
+                verdict_scope = ""
             verdict = reason or (
                 f"holding (ceiling {ceiling:+.0f}%, stop {stop_pct:+.0f}%, "
                 f"stall {STALL_GIVEBACK_PCT:.0f}pts)" if ceiling is not None
@@ -521,11 +541,9 @@ def review(engine_symbols: "set | None" = None) -> list:
                 "(peak %+.1f%%, %.0f min ago) — %s%s",
                 st["root"], st["right"], st["long_strike"], st["short_strike"],
                 st["qty"], "credit" if st["credit"] else "debit",
-                abs(st["entry"]), value, ret_pct, rec["peak"], quiet, verdict,
-                "" if manageable else (
-                    "  [observation only — expires %s, not today]" % st.get("expiry")
-                    if ORPHAN_TODAY_ONLY and not _expires_today(st)
-                    else "  [observation only]"),
+                abs(st["entry"]), value, ret_pct, rec["peak"], quiet,
+                verdict + verdict_scope,
+                "" if manageable else "  [observation only]",
             )
             if reason and manageable and _close(st, reason, value):
                 _book(st, value, ret_pct, reason)

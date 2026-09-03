@@ -64,8 +64,19 @@ WATCH_ORPHANS = os.getenv("TRADING_WATCH_ORPHANS", "false").lower() == "true"
 # above. Watching costs nothing and can only inform; acting closes positions a
 # human opened for reasons the engine cannot read.
 MANAGE_ORPHANS = os.getenv("TRADING_MANAGE_ORPHANS", "false").lower() == "true"
-# ... and only in this underlying. Empty means every symbol.
-MANAGE_UNDERLYING = os.getenv("TRADING_MANAGE_UNDERLYING", "QQQ").strip().upper()
+# ... and only in these underlyings, comma separated. Empty means every symbol.
+#
+# A LIST rather than one symbol: the account holds spreads on several names at
+# once, and "manage the engine's own underlying" was too narrow the first
+# morning it ran. Naming them explicitly rather than defaulting to everything,
+# because the failure modes are asymmetric -- forgetting to add a symbol leaves
+# a position watched but unmanaged and visible in the log, while managing a
+# name by accident closes something the operator never offered up.
+MANAGE_UNDERLYING = {
+    s.strip().upper()
+    for s in os.getenv("TRADING_MANAGE_UNDERLYING", "QQQ").split(",")
+    if s.strip()
+}
 
 # The ladder. Same shape as the engine's own, same variables where they are
 # genuinely the same question.
@@ -436,7 +447,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # keeps making new highs is not finished.
                 reason = "STALL"
             manageable = (MANAGE_ORPHANS
-                          and (not MANAGE_UNDERLYING or st["root"] == MANAGE_UNDERLYING)
+                          and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)
                           and _quotes_tradeable(
                               tradier_orders.quotes([st["long"], st["short"]]), st))
             verdict = reason or (

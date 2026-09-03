@@ -304,12 +304,26 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
         # and structure rather than by re-reading the order sides.
         strikes = sorted((p[3], s) for p, s in legs)
         low, high = strikes[0], strikes[1]
+        # WHICH LEG IS LONG DEPENDS ON THE RIGHT, NOT JUST THE SIGN.
+        #
+        # This assumed calls. For a CALL debit the long is the lower strike;
+        # for a PUT debit it is the HIGHER one, because a put gains as price
+        # falls. Getting it backwards does not merely mislabel the row -- _mark
+        # computes bid(long) - ask(short), so the value comes out NEGATIVE.
+        #
+        # Observed 2026-09-03 on a manual AVGO 365/355 put debit spread bought
+        # for 7.88: it marked -8.40, or -206.6%. It was WATCH ONLY, which is
+        # the only reason it was not stopped out instantly on a number that
+        # cannot occur. Every put spread in the book had the same defect.
+        is_put = right.upper() == "P"
         if rec["credit"]:
-            short_strike, short_sym = low
-            long_strike, long_sym = high
+            # Bear call: short the lower strike. Bull put: short the higher.
+            short_strike, short_sym = high if is_put else low
+            long_strike, long_sym = low if is_put else high
         else:
-            long_strike, long_sym = low
-            short_strike, short_sym = high
+            # Call debit: long the lower. Put debit: long the higher.
+            long_strike, long_sym = high if is_put else low
+            short_strike, short_sym = low if is_put else high
         out.append({
             "root": root, "expiry": expiry, "right": right,
             "long": long_sym, "short": short_sym,

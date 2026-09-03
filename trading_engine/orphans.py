@@ -74,6 +74,29 @@ ORPHAN_STOP_PCT = float(os.getenv("TRADING_ORPHAN_STOP_PCT", "-25"))
 # Credit gets its own, for the reason in the docstring: -25% of a collected
 # credit is a few cents and would close everything.
 ORPHAN_CREDIT_STOP_PCT = float(os.getenv("TRADING_ORPHAN_CREDIT_STOP_PCT", "-600"))
+# REFUSE TO ACT ON A QUOTE THAT IS NOT A QUOTE.
+#
+# Caught before this ever ran, on the night it was deployed. After the close on
+# 2026-09-02 a QQQ 700/710 held for the next session quoted:
+#
+#     700 call   bid 7.50   ask 12.46   last 9.86    <- 50% of its own value
+#     710 call   bid 2.25   ask  2.33
+#
+# The natural -- bid minus ask, which is what an exit would actually pay --
+# came to 5.17 against a 7.49 entry, or -31%, and would have tripped the -25%
+# stop on the first cycle of the morning. At sane mids the same spread is worth
+# 7.69, or +2.7%. The position was flat and the engine would have dumped it.
+#
+# A wide book is not a price. Every rule here is a return, a return is only as
+# good as the mark, and the mark is only as good as the quote. When either leg
+# is quoted wider than this fraction of its own mid, the structure is REPORTED
+# and not acted on -- the reading is still logged, so the artefact is visible
+# rather than silently skipped.
+#
+# 0.25 is loose enough for an ordinary 0DTE book late in the day and tight
+# enough to reject the case above at 0.50.
+ORPHAN_MAX_LEG_SPREAD = float(os.getenv("TRADING_ORPHAN_MAX_LEG_SPREAD", "0.25"))
+
 STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
 STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
 
@@ -182,6 +205,31 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             "opened": rec["opened"], "key": "|".join(syms),
         })
     return out
+
+
+def _quotes_tradeable(q: dict, st: dict) -> bool:
+    """Is either leg quoted too wide to price an exit from?
+
+    See ORPHAN_MAX_LEG_SPREAD. Returns False on a missing or nonsensical
+    quote too -- absence of a price is not a reason to act on one.
+    """
+    for sym in (st["long"], st["short"]):
+        row = q.get(sym) or {}
+        try:
+            bid, ask = float(row.get("bid") or 0.0), float(row.get("ask") or 0.0)
+        except (TypeError, ValueError):
+            return False
+        if bid <= 0 or ask <= 0 or ask < bid:
+            return False
+        mid = (bid + ask) / 2.0
+        if mid <= 0 or (ask - bid) / mid > ORPHAN_MAX_LEG_SPREAD:
+            logger.warning(
+                "ORPHAN quote unusable: %s bid %.2f ask %.2f is %.0f%% of mid — "
+                "reporting but not acting.",
+                sym, bid, ask, (ask - bid) / mid * 100.0,
+            )
+            return False
+    return True
 
 
 def _mark(st: dict) -> "tuple | None":
@@ -307,7 +355,9 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # keeps making new highs is not finished.
                 reason = "STALL"
             manageable = (MANAGE_ORPHANS
-                          and (not MANAGE_UNDERLYING or st["root"] == MANAGE_UNDERLYING))
+                          and (not MANAGE_UNDERLYING or st["root"] == MANAGE_UNDERLYING)
+                          and _quotes_tradeable(
+                              tradier_orders.quotes([st["long"], st["short"]]), st))
             verdict = reason or (
                 f"holding (target {ORPHAN_TAKE_PROFIT_PCT:+.0f}%, stop {stop_pct:+.0f}%)")
             logger.info(

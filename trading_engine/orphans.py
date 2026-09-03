@@ -117,6 +117,32 @@ STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT",
 
 # Peak tracking must survive a container recreate or the stall resets on every
 # deploy and can never fire. A file under the mounted working directory.
+# CEILING: book when there is no meaningful upside left to hold for.
+#
+# The engine has this for its own ride (RIDE_CEILING_FRACTION) and orphans did
+# not. It matters more here than there, because of a shape the stall cannot
+# handle: as a debit spread approaches its full width it stops MOVING, and a
+# position that is not moving cannot give back enough to trip a stall. The
+# protection weakens exactly as the remaining upside disappears.
+#
+# A QQQ 700/710 bought at 7.49 can be worth at most 10.00, so 90% of maximum
+# return is a value of about 9.75. Holding past that risks the whole width for
+# the last 25 cents.
+#
+# For a credit structure the maximum is the credit itself -- the spread decays
+# to zero and you keep all of it -- so the ceiling is 90% of the credit.
+ORPHAN_CEILING_FRACTION = float(os.getenv("TRADING_ORPHAN_CEILING", "0.90"))
+
+# FORCE CLOSE. The engine flattens its own book at 15:45; orphans had no time
+# exit at all and would have ridden into expiry.
+#
+# These are physically settled. A spread left to expire is not a cash
+# settlement, it is an exercise and an assignment in shares -- and if the
+# underlying finishes between the strikes it is the pin case. On 2026-09-02
+# the operator deliberately flattened before the 16:00 settlement print for
+# exactly that reason, and leaving orphans to expire contradicts it.
+ORPHAN_FORCE_CLOSE = os.getenv("TRADING_ORPHAN_FORCE_CLOSE", "15:45").strip()
+
 STATE_PATH = os.getenv("TRADING_ORPHAN_STATE", "orphan_peaks.json")
 
 
@@ -220,6 +246,37 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             "opened": rec["opened"], "key": "|".join(syms),
         })
     return out
+
+
+def _max_return_pct(st: dict) -> "float | None":
+    """The most this structure can ever return, as a percent of what was risked.
+
+    A debit spread cannot exceed its width; a credit spread cannot exceed the
+    credit collected. Both are hard ceilings set by the structure, not by the
+    market, which is what makes a fraction of them a meaningful place to stop.
+    """
+    entry = abs(st.get("entry") or 0.0)
+    if entry <= 0:
+        return None
+    if st["credit"]:
+        return 100.0
+    width = abs(st["short_strike"] - st["long_strike"])
+    if width <= 0:
+        return None
+    return (width - entry) / entry * 100.0
+
+
+def _past_force_close() -> bool:
+    """Is it past the orphan flatten time, in New York?"""
+    if not ORPHAN_FORCE_CLOSE:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+        hh, mm = (int(x) for x in ORPHAN_FORCE_CLOSE.split(":"))
+        now = datetime.now(ZoneInfo("America/New_York"))
+        return (now.hour, now.minute) >= (hh, mm)
+    except Exception:
+        return False
 
 
 def _quotes_tradeable(q: dict, st: dict) -> bool:
@@ -360,9 +417,18 @@ def review(engine_symbols: "set | None" = None) -> list:
             quiet = (now - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0
             stop_pct = ORPHAN_CREDIT_STOP_PCT if st["credit"] else ORPHAN_STOP_PCT
 
+            max_ret = _max_return_pct(st)
+            ceiling = (ORPHAN_CEILING_FRACTION * max_ret
+                       if (max_ret and ORPHAN_CEILING_FRACTION > 0) else None)
+
             reason = None
             if ret_pct <= stop_pct:
                 reason = "STOP_LOSS"
+            elif _past_force_close():
+                # Time beats everything. These settle in shares, not cash.
+                reason = "FORCE_CLOSE"
+            elif ceiling is not None and ret_pct >= ceiling:
+                reason = "CEILING"
             elif (STALL_MINUTES > 0 and rec["peak"] > 0 and quiet >= STALL_MINUTES
                   and ret_pct <= rec["peak"] - STALL_GIVEBACK_PCT):
                 # The take-profit ARMS this rather than firing it, exactly as
@@ -374,7 +440,9 @@ def review(engine_symbols: "set | None" = None) -> list:
                           and _quotes_tradeable(
                               tradier_orders.quotes([st["long"], st["short"]]), st))
             verdict = reason or (
-                f"holding (target {ORPHAN_TAKE_PROFIT_PCT:+.0f}%, stop {stop_pct:+.0f}%)")
+                f"holding (ceiling {ceiling:+.0f}%, stop {stop_pct:+.0f}%, "
+                f"stall {STALL_GIVEBACK_PCT:.0f}pts)" if ceiling is not None
+                else f"holding (stop {stop_pct:+.0f}%)")
             logger.info(
                 "ORPHAN %s %s %.0f/%.0f x%d %s: entry %.2f value %.2f %+.1f%% "
                 "(peak %+.1f%%, %.0f min ago) — %s%s",

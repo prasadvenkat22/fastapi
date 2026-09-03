@@ -365,8 +365,23 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
     # invisible -- and the 1530 short it belonged with had nothing to pair
     # against. The leftover is what the account holds MINUS what the stated
     # structures actually use.
+    # COUNT ONLY PAIRS THAT SURVIVE THE HELD CHECK.
+    #
+    # A structure whose legs are no longer in the account is dropped below,
+    # but consumed was tallied from the WHOLE book including those. On
+    # 2026-09-03 a NVDA 222.5/230 had been opened and its 230 short later
+    # closed; the dead pair still claimed the 222.5 long, so five contracts
+    # that were free to pair with the 227.5 shorts were counted as used and
+    # never became leftovers. A 2,100-dollar spread sat outside the ladder
+    # with no SINGLE warning either, because nothing was left over to warn
+    # about.
+    def _still_held(syms):
+        return not held or all(abs(held.get(x, 0)) > 0 for x in syms)
+
     consumed = {}
     for syms, rec in book.items():
+        if not _still_held(syms):
+            continue
         for sym in syms:
             consumed[sym] = consumed.get(sym, 0) + rec["qty"]
     leftover = {}
@@ -554,10 +569,18 @@ def _decompose(st: dict, value: float) -> "tuple | None":
             intrinsic = max(0.0, min(hi - px, width))
         else:
             intrinsic = max(0.0, min(px - lo, width))
-        if st["credit"]:
-            # A credit structure's "value" is the cost to buy it back, so its
-            # intrinsic is what the short owes, not what a long holds.
-            intrinsic = width - intrinsic
+        # NO INVERSION FOR CREDIT. open_structures assigns the SHORT leg to the
+        # low strike on a call credit and the high strike on a put credit, so
+        # `lo`/`hi` above already resolve to the short strike and the formula
+        # already yields the cost to buy the structure back. Subtracting it
+        # from the width flipped max profit into max loss.
+        #
+        # Caught live 2026-09-03 on a QQQ 719/722 call credit, ten lots, QQQ at
+        # 718.74 -- below the short, so both legs expire worthless and the cost
+        # to close is ZERO. It reported 3.00, the maximum loss, which made the
+        # stall read roughly -711% and SUPPRESSED the stop, because intrinsic
+        # 3.00 exceeded the 0.37 entry and looked profitable at expiry. Both
+        # rules were pointed the wrong way on a 0DTE position.
         return round(intrinsic, 2), round(value - intrinsic, 2)
     except Exception:
         return None

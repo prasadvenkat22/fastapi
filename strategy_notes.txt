@@ -4525,3 +4525,41 @@ survived until a position was live enough to expose them.
 STILL OPEN: SNDK 1500/1560 is skipped -- "no fill price" -- after a roll and a
 close left no recoverable entry for one leg. It is unmanaged rather than
 mismanaged, which is the correct failure, but it is unmanaged.
+
+--------------------------------------------------------------------------------
+72. ROLLING THE SAME STRIKES TWICE HID A POSITION FROM THE LADDER  (2026-09-03)
+--------------------------------------------------------------------------------
+
+A SNDK 1500/1560 sat unmanaged for an hour behind two defects, both triggered
+by rolling to the same strikes twice in one session.
+
+THE CACHE WAS A MIRROR WHEN IT SHOULD HAVE BEEN A RECORD.
+
+    state["structures"] = { st["key"]: {...} for st in structures }
+
+Assigned, not merged -- so any entry the current pass could not rebuild was
+erased within a minute. That included hand-seeded ones, which is how the
+problem was first noticed: the seed vanished between cycles. Entries should be
+dropped when a structure CLOSES, at the close site, not because one pass failed
+to price it.
+
+Why the pass could not price it: the 1500 was bought the PREVIOUS session, and
+/orders is session-only (section 60), so today's fills net its quantity to zero
+and filled_legs reports nothing.
+
+AND A DEAD PAIR BLOCKED THE CACHED ONE. An opened-and-closed 1500/1560 leaves a
+qty 0 entry in the order-derived book. The cache merge skipped any key already
+present, so the corpse blocked the cached copy of the REOPENED structure at the
+same strikes -- then dropped out itself as qty 0, leaving both legs to fall
+through to inferred pairing, where they were skipped for want of a price.
+
+Neither defect is reachable without reusing strikes. Roll a position back to a
+level it previously occupied and the pairing sees a live pair, a dead pair and
+two loose legs describing the same two contracts.
+
+THE FAILURE MODE WAS CORRECT EVEN WHILE THE OUTCOME WAS WRONG. The position was
+UNMANAGED, not MISMANAGED: the code refused to compute a return without a true
+entry rather than guessing one. That is the behaviour to keep -- section 64's
+lesson was that a wrong number in a healthy-looking log costs more than a
+missing one -- but it means "no line in the log" has to be read as loudly as a
+bad line.

@@ -167,6 +167,30 @@ MANAGE_INFERRED = os.getenv("TRADING_ORPHAN_MANAGE_INFERRED", "false").lower() =
 STOP_RESPECTS_INTRINSIC = os.getenv(
     "TRADING_ORPHAN_STOP_RESPECTS_INTRINSIC", "true").lower() == "true"
 
+# AND THE SAME FOR THE STALL, WHICH IS THE MORE EXPENSIVE HALF.
+#
+# The stop guard above was built first and stopped there, which was my error:
+# the stall has the identical defect and a worse consequence. The stop only
+# fires on losers; the stall fires on WINNERS, which is exactly where giving
+# up intrinsic costs the most.
+#
+# It cost 1,250 dollars within the hour. 2026-09-03 17:20:
+#
+#   ORPHAN STALL_LATER: closing SNDK 1500/1540 x1 -> booked +345
+#
+# Entry 24.05, sold near 27.50, SNDK at 1558 -- above BOTH strikes, so the
+# spread held its full 40.00 of intrinsic and pays +1,595 at expiry. The stall
+# read a mark fading from time premium on the short 1540 and called it a
+# profit that had stopped climbing.
+#
+# WITH THIS ON, THE STALL STILL WORKS -- it is measured on INTRINSIC rather
+# than on the mark. A genuine reversal (SNDK actually falling back through
+# 1540) shrinks intrinsic and books the trade. Time premium bleeding out of a
+# short leg does not, because that is not the profit going away, it is the
+# profit arriving.
+STALL_RESPECTS_INTRINSIC = os.getenv(
+    "TRADING_ORPHAN_STALL_RESPECTS_INTRINSIC", "true").lower() == "true"
+
 # THE STALL FOR POSITIONS THAT EXPIRE LATER.
 #
 # The 0DTE stall is deliberately unarmed -- any positive peak starts it --
@@ -714,9 +738,23 @@ def review(engine_symbols: "set | None" = None) -> list:
                 continue
             value, ret_pct = mark
 
-            rec = peaks.get(key) or {"peak": ret_pct, "peak_at": now.isoformat()}
-            if ret_pct > rec["peak"]:
-                rec = {"peak": ret_pct, "peak_at": now.isoformat()}
+            # WHICH RETURN THE STALL WATCHES.
+            #
+            # On an in-the-money spread the mark is the wrong series: it fades
+            # as time premium bleeds out of the short leg, which is the profit
+            # ARRIVING, not leaving. Track the peak on intrinsic-vs-entry when
+            # that is available, so a stall fires on a real reversal and not on
+            # decay. Falls back to the mark when intrinsic cannot be computed.
+            parts_iv = _decompose(st, value)
+            entry_abs = abs(st["entry"])
+            stall_pct = ret_pct
+            if STALL_RESPECTS_INTRINSIC and parts_iv and entry_abs:
+                stall_pct = ((entry_abs - parts_iv[0]) if st["credit"]
+                             else (parts_iv[0] - entry_abs)) / entry_abs * 100.0
+
+            rec = peaks.get(key) or {"peak": stall_pct, "peak_at": now.isoformat()}
+            if stall_pct > rec["peak"]:
+                rec = {"peak": stall_pct, "peak_at": now.isoformat()}
             peaks[key] = rec
             quiet = (now - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0
             stop_pct = ORPHAN_CREDIT_STOP_PCT if st["credit"] else ORPHAN_STOP_PCT
@@ -741,7 +779,6 @@ def review(engine_symbols: "set | None" = None) -> list:
 
             # Intrinsic is computed once here: the stop guard reads it, and so
             # does the log line below.
-            parts_iv = _decompose(st, value)
             intrinsic_ok = False
             if parts_iv and STOP_RESPECTS_INTRINSIC:
                 # Strictly greater: at exactly the entry, holding to expiry
@@ -766,7 +803,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "CEILING"
             elif (zero_dte and STALL_MINUTES > 0 and rec["peak"] > 0
                   and quiet >= STALL_MINUTES
-                  and ret_pct <= rec["peak"] - STALL_GIVEBACK_PCT):
+                  and stall_pct <= rec["peak"] - STALL_GIVEBACK_PCT):
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
@@ -774,7 +811,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             elif ((not zero_dte) and ORPHAN_LATER_STALL_MINUTES > 0
                   and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
                   and quiet >= ORPHAN_LATER_STALL_MINUTES
-                  and ret_pct <= rec["peak"] - ORPHAN_LATER_STALL_GIVEBACK_PCT):
+                  and stall_pct <= rec["peak"] - ORPHAN_LATER_STALL_GIVEBACK_PCT):
                 # Armed by a real profit, booked on a small giveback. See the
                 # knobs above for why arming is what makes the tight giveback
                 # safe on a position that has days left.

@@ -3519,6 +3519,9 @@ the 650 was the delay, not the trade.
 
 --------------------------------------------------------------------------------
 58. WHAT IS DEPLOYED FOR 2026-09-03, AND WHICH PARTS ARE UNMEASURED  (2026-09-02)
+    SUPERSEDED IN PART BY SECTION 59: written before orphan management
+    existed, so it does not record that manual positions are now managed or
+    that manual results now reach the circuit breakers.
 --------------------------------------------------------------------------------
 
 Read from the running container, not from .env.production and not from memory.
@@ -3587,3 +3590,100 @@ DEPLOYMENT IS BY FILE COPY, NOT BY BRANCH. The droplet sits on main with
 modified files; the work lives on chain-priced-sweeps. RUNNING deploy.sh
 update WOULD PULL MAIN AND SILENTLY REVERT ALL OF IT. Copy the changed files
 and recreate the app container, then verify against the container as above.
+
+--------------------------------------------------------------------------------
+59. MANUAL POSITIONS ARE MANAGED TOO, AND WHAT TO CHECK ON 2026-09-03
+--------------------------------------------------------------------------------
+
+Section 58 was written before the orphan work and is now incomplete: it does
+not record that positions the engine did not open are managed, nor that manual
+results now reach the circuit breakers. This section supersedes it on both
+points and is the reference for the session.
+
+WHAT CHANGED AFTER 58 WAS WRITTEN
+
+orphans.py no longer only watches. Structures are rebuilt from the OPENING
+ORDERS -- not from the position list -- because only the orders carry the two
+things a rule needs:
+
+  the PAIRING the human actually put on, rather than a guess by strike. The
+  engine's own naked-leg check made that guess on 2026-09-02 and read a fully
+  covered book as naked.
+
+  the REAL ENTRY PRICE. Tradier averages cost_basis across contracts bought
+  and sold under one position id -- a 700 leg read 3540.00, then 4251.92, at
+  an unchanged quantity of 5. Every rule here is a RETURN and a return needs a
+  true entry. Verified: the 2026-09-03 QQQ 700/710 rebuilds to 7.49 from fills
+  of 9.69 and 2.20.
+
+MANUAL RESULTS NOW REACH THE CIRCUIT BREAKERS. A closed structure is written
+to TradeHistory as playbook=MANUAL. Before this, the 6% daily loss limit and
+the consecutive-loss breaker read only trades the ENGINE closed, so the
+-657.50 of 2026-09-02 counted toward neither and the engine's risk budget was
+untouched by a loss that actually happened.
+
+THE STOP IS STRUCTURE-AWARE. -25% on debit, -600% on credit. Marked at that
+afternoon's 15:40 quotes the two live books read +25.5% and -57.8%: one number
+for both would have closed the credit spread instantly.
+
+THE STALL HAS ITS OWN GIVEBACK, 12 points against the engine's 5. Five points
+of a deep-ITM 700/710 at 7.49 is 37 cents of value, and at a net delta near
+0.65 that is a 58-cent move in QQQ -- noise on an instrument whose daily range
+is four to seven dollars. Three different structures were wearing one number.
+
+A QUOTE THAT IS NOT A QUOTE IS NOT ACTED ON. Caught the night it deployed:
+after the close the 700 leg quoted bid 7.50 / ask 12.46, half its own value.
+The natural came to 5.17 against a 7.49 entry -- -31%, past the -25% stop --
+so the first cycle of the morning would have dumped a position worth 7.69 at
+sane mids, or +2.7%. When either leg is quoted wider than
+ORPHAN_MAX_LEG_SPREAD of its mid the structure is reported and not traded.
+
+THERE IS NO ORPHAN TAKE-PROFIT. ORPHAN_TAKE_PROFIT_PCT appears in the log line
+and fires nothing; the stall books winners. On the 700/710 it is moot -- max
+return on a $10 spread bought at 7.49 is +33.5%, so a 50% target is
+unreachable -- but the number in the log is decorative and should not be read
+as a rule.
+
+SCOPE. MANAGE_UNDERLYING=QQQ. NVDA and SNDK spreads are marked and logged
+every cycle and never touched.
+
+--------------------------------------------------------------------------------
+WHAT TO CHECK AFTER THE 2026-09-03 CLOSE
+
+Four things are live ahead of their evidence. Each has a log line; the point
+of listing them is that "it worked" and "it never fired" look identical in a
+P&L summary and completely different in the log.
+
+1. THE ZONE TIER, macro gate off. Its own trades measured negative on every
+   arm (-21, -13, -25 a trade) and the macro dimension is unmeasurable,
+   because the harness pins market_sentiment to GOOD.
+       grep "tier=ZONE"
+   Read: did it enter on a morning CLEAN refused? What did those trades do?
+
+2. THE CREDIT STALL FROM ENTRY. Closes the gap that let a 14.2%-of-max peak
+   roll into -657.50. Unmeasured -- 8 credit trades cannot settle it.
+       grep "Credit target armed"   grep "Stalled peak (credit)"
+   Read: is it booking within minutes of entry on single-digit peaks? If so
+   the credit side needs its own giveback, as orphans just got, rather than
+   the rule being reverted.
+
+3. ORPHAN MANAGEMENT. First session acting on positions a human opened.
+       grep "ORPHAN"
+   Read: does the reconstructed entry match the fills? Does the stall fire at
+   12 points and not before? Does "quote unusable" appear during REGULAR
+   hours -- if it does the threshold is wrong, not the quote.
+
+4. THE TWO DEFECT FIXES, which should be silent.
+       grep "ENTRY REJECTED"   grep "ENTRY BLOCKED"
+   ENTRY REJECTED means a rejected open left no phantom row. ENTRY BLOCKED
+   means an entry was refused because the account already held an opposing
+   leg. Either firing is the fix working. Neither firing is also fine.
+
+AND ONE THING THAT SHOULD NEVER APPEAR AGAIN:
+       grep "came back rejected" | wc -l
+   189 on 2026-09-02. Anything above single digits means a close is looping
+   against a position that does not exist.
+
+DEPLOYMENT REMAINS BY FILE COPY. The droplet is on main with modified files
+while the work lives on chain-priced-sweeps. deploy.sh update would pull main
+and silently revert all of it.

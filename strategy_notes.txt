@@ -4068,3 +4068,77 @@ the open: anthropic.OverloadedError propagated out of market_signals_agent,
 through run_trading_cycle, and stopped everything -- indicators, exits, orphan
 review. It recovered on its own. An observational agent must not be able to
 halt execution, and every other network call in this engine is wrapped.
+
+--------------------------------------------------------------------------------
+65. TWO SCHEDULERS, A GUARDED AGENT, AND A DEPLOY THAT DID NOT DEPLOY  (2026-09-03)
+--------------------------------------------------------------------------------
+
+A NEWS LOOKUP COULD HALT EXECUTION, AND NOW CANNOT.
+
+market_signals_agent made two unguarded Anthropic calls while every other
+network call in it -- crude, VIX, yields, breadth -- was wrapped. The first
+took down three whole cycles at the open (section 64). Both are now guarded.
+
+The headline read degrades to no headlines: it is observational, and the
+verdict then rests on breadth, VIX and yields, which is where this file's
+evidence says the signal lives anyway.
+
+The sentiment call degrades to BAD, and the asymmetry is the point. The gate
+reads `llm_verdict == "GOOD" or not MACRO_LLM_GATE`. With the gate OFF -- its
+deployed state -- the value is inert and the fallback costs nothing. With the
+gate ON, an unknown macro read must not PERMIT a bullish entry: refusing on an
+outage is recoverable, entering on one is not. BAD is safe in BOTH
+configurations, which is the property to want in a fallback nobody will
+re-examine for months. It is deliberately not written to the macro cache,
+since persisting a verdict the model never gave would suppress the retry for
+the cache's whole life.
+
+THERE ARE TWO THINGS THAT CAN RUN THE TRADING CYCLE.
+
+The cron entry, every minute, and an in-app scheduler behind
+POST /trading/scheduler/start. They do the SAME JOB. Run both and every cycle
+happens twice, concurrently, with no locking -- and two cycles that both see a
+position can both act on it.
+
+Measured today: exactly one cycle a minute, all from cron, zero from the app
+container. The in-app scheduler had been started manually and was killed by a
+container recreate. No harm done, and the hazard is real: the QQQ 714/716
+closing as two separate five-lot orders rather than one ten-lot (section 64,
+defect 5) has exactly the shape a race would produce. NOT PROVEN -- the
+timestamps were gone by the time it was noticed -- but it is the leading
+explanation and the reason cron should be the only runner.
+
+A DEPLOY THAT COPIED THE FILE AND CHANGED NOTHING.
+
+`docker compose up -d` recreates a container only when its CONFIG changes.
+Every earlier deploy today also edited .env.production, so each one recreated
+and reloaded. The endpoint deploy copied files only -- up -d reported
+"Started", the file on disk hash-matched the container, and the route still
+404'd because uvicorn never reloaded.
+
+FOR A CODE-ONLY DEPLOY, `restart` IS REQUIRED. `up -d` is not a no-op that
+happens to also restart; it restarts as a side effect of recreating, and a
+code-only change gives it no reason to recreate.
+
+GET /trading/positions ADDED. /trading/position reports the engine's own
+OpenPosition row and knows nothing about a position a human opened -- today it
+would have shown nothing while eight structures were live. The new endpoint
+reads the same reconstruction the cycle runs, and each row reports only the
+rules that GOVERN it: stop_pct is null on a later expiry rather than quoting a
+number that cannot fire, and the stall fields report whichever of the two
+stalls applies. Read-only: the exit rules run in the cycle, not in a request
+handler.
+
+THE COST BASIS WAS QUESTIONED AND WAS CORRECT. CRWV closed on the stall at
+15:48 and a new position opened at 16:24 on different strikes. The
+reconstruction reported 75/85 x1 at 7.63, which is exactly the fills of 8.43
+and 0.80; the old 75/80 at 3.68 had been cleared from the cache by its own
+close. Recorded because "the basis looks wrong" is the right instinct after
+the day this file has had -- and because checking took one query against the
+orders, which is the same procedure section 64 arrived at.
+
+DELL ADDED TO THE MANAGED LIST, bringing it to nine underlyings and eight live
+structures. DELL is a PUT spread (P 530/520) and marks at -1.3%. Before this
+morning's orientation fix it would have marked near -200% and been stopped out
+on the first cycle -- the second put spread to enter the book since that fix,
+and the first that would have been managed when it did.

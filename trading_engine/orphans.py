@@ -121,6 +121,27 @@ ORPHAN_CREDIT_STOP_PCT = float(os.getenv("TRADING_ORPHAN_CREDIT_STOP_PCT", "-600
 # enough to reject the case above at 0.50.
 ORPHAN_MAX_LEG_SPREAD = float(os.getenv("TRADING_ORPHAN_MAX_LEG_SPREAD", "0.25"))
 
+# THE STALL FOR POSITIONS THAT EXPIRE LATER.
+#
+# The 0DTE stall is deliberately unarmed -- any positive peak starts it --
+# because a same-day position has no tomorrow to recover into. A multi-day
+# position does, so an unarmed stall would book it at 09:35 on a +2% wiggle
+# and forfeit the rest of the week. That is why the stall was 0DTE-only.
+#
+# But refusing to watch at all gives up the other half: a spread that runs to
+# a good profit intraday and rolls over gets carried back down to nothing,
+# which is the case this was built for -- a NVDA 215/225 expected to reach 228
+# today and not beyond.
+#
+# So: ARM on a real profit, then protect it with a SMALL giveback. Arming is
+# what makes a tight giveback safe here; without it the two settings fight.
+# The quiet period is longer than the 0DTE one for the same reason -- a
+# multi-day position is allowed to pause without that meaning it is finished.
+ORPHAN_LATER_STALL_ARM_PCT = float(os.getenv("TRADING_ORPHAN_LATER_STALL_ARM", "10"))
+ORPHAN_LATER_STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_LATER_STALL_MINUTES", "15"))
+ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
+    os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK", "3.3"))
+
 # THE STALL, WITH ITS OWN GIVEBACK.
 #
 # TRADING_STALL_GIVEBACK_PCT is shared by the morning ride, the afternoon
@@ -522,6 +543,14 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
                 reason = "STALL"
+            elif ((not zero_dte) and ORPHAN_LATER_STALL_MINUTES > 0
+                  and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
+                  and quiet >= ORPHAN_LATER_STALL_MINUTES
+                  and ret_pct <= rec["peak"] - ORPHAN_LATER_STALL_GIVEBACK_PCT):
+                # Armed by a real profit, booked on a small giveback. See the
+                # knobs above for why arming is what makes the tight giveback
+                # safe on a position that has days left.
+                reason = "STALL_LATER"
             # The expiry check has moved INTO the reason logic above, so the
             # ceiling can act on a later expiry while the 0DTE rules cannot.
             manageable = (MANAGE_ORPHANS
@@ -529,7 +558,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                           and _quotes_tradeable(
                               tradier_orders.quotes([st["long"], st["short"]]), st))
             if not zero_dte and reason is None:
-                verdict_scope = "  [expires %s — ceiling only]" % st.get("expiry")
+                _armed = rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
+                verdict_scope = "  [expires %s — ceiling + stall %s]" % (
+                    st.get("expiry"),
+                    "ARMED" if _armed else "arms at +%.0f%%" % ORPHAN_LATER_STALL_ARM_PCT)
             else:
                 verdict_scope = ""
             verdict = reason or (

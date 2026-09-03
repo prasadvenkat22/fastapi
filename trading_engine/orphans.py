@@ -122,6 +122,18 @@ ORPHAN_CREDIT_STOP_PCT = float(os.getenv("TRADING_ORPHAN_CREDIT_STOP_PCT", "-600
 # enough to reject the case above at 0.50.
 ORPHAN_MAX_LEG_SPREAD = float(os.getenv("TRADING_ORPHAN_MAX_LEG_SPREAD", "0.25"))
 
+# ... OR THIS MANY CENTS WIDE, WHICHEVER IS KINDER.
+#
+# A percentage alone rejects every cheap option. A 0DTE short quoted 0.02/0.03
+# is a ONE CENT market -- as tight as an option can be -- and 40% of its own
+# mid. The percentage test called that unusable and blocked the close.
+#
+# The absolute width is what an exit actually pays. Five cents on a
+# nearly-worthless leg is a real market; five cents on a 40-dollar leg is
+# also fine, and there the percentage never binds anyway. So a quote passes
+# if EITHER test passes: tight in cents, or tight in proportion.
+ORPHAN_MAX_LEG_SPREAD_ABS = float(os.getenv("TRADING_ORPHAN_MAX_LEG_SPREAD_ABS", "0.05"))
+
 # ACT ON INFERRED PAIRS, or only report them.
 #
 # Order-based pairing recovers the structure the human actually put on. It
@@ -545,28 +557,58 @@ def _past_force_close() -> bool:
         return False
 
 
-def _quotes_tradeable(q: dict, st: dict) -> bool:
-    """Is either leg quoted too wide to price an exit from?
+def _quotes_tradeable(q: dict, st: dict, reason: str = "") -> bool:
+    """Is the short leg quoted well enough to act on, for THIS reason?
 
-    See ORPHAN_MAX_LEG_SPREAD. Returns False on a missing or nonsensical
-    quote too -- absence of a price is not a reason to act on one.
+    The guard exists so the manager does not close a position on a garbage
+    quote -- a leg quoted 1.00/2.50 is not a market, and acting on its mid
+    books an imaginary price. Two things were wrong with how it did that.
+
+    IT JUDGED BOTH LEGS. On any 0DTE position in its last hour the far leg is
+    bid 0.00 because it is worthless, which is the correct quote rather than a
+    broken one. Observed 2026-09-03 on a QQQ 719/722 credit: the 722 quoted
+    0.00/0.01, the guard refused, and the FORCE_CLOSE decided at 15:45 logged
+    "[observation only]" every cycle to the bell. So the test is on the SHORT
+    leg -- the one that must be bought back, and the one carrying assignment
+    risk. A long bid at zero is information, not an unusable quote, and the
+    mark already values it at zero, which is right.
+
+    IT JUDGED WIDTH ONLY IN PROPORTION. That same short quoted 0.02/0.03 is a
+    ONE CENT market, as tight as an option gets, and 40% of its own mid. A
+    percentage threshold rejects every cheap option, and by the close every
+    option in a 0DTE book is cheap. So a quote passes if it is tight in cents
+    OR tight in proportion, whichever is kinder.
+
+    AND THE STANDARD DEPENDS ON WHAT IS BEING DECIDED. A width test protects
+    a judgment about VALUE -- ceiling, stall, stop -- all of which read the
+    mark and would act on a false one. FORCE_CLOSE is not a judgment about
+    value: it is there because these spreads are physically settled and an
+    in-the-money short gets assigned. A poor fill is worse than a good fill
+    and far better than assignment, so the force close needs only a real
+    market to trade into, not a tight one.
     """
-    for sym in (st["long"], st["short"]):
-        row = q.get(sym) or {}
-        try:
-            bid, ask = float(row.get("bid") or 0.0), float(row.get("ask") or 0.0)
-        except (TypeError, ValueError):
-            return False
-        if bid <= 0 or ask <= 0 or ask < bid:
-            return False
-        mid = (bid + ask) / 2.0
-        if mid <= 0 or (ask - bid) / mid > ORPHAN_MAX_LEG_SPREAD:
-            logger.warning(
-                "ORPHAN quote unusable: %s bid %.2f ask %.2f is %.0f%% of mid — "
-                "reporting but not acting.",
-                sym, bid, ask, (ask - bid) / mid * 100.0,
-            )
-            return False
+    row = q.get(st["short"]) or {}
+    try:
+        bid, ask = float(row.get("bid") or 0.0), float(row.get("ask") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    # The ask, not the bid: closing this structure BUYS the short back. A zero
+    # bid on a nearly-worthless short is normal and does not stop anything; a
+    # zero ask means there is no offer to buy at, which does.
+    if ask <= 0 or ask < bid:
+        return False
+    if reason == "FORCE_CLOSE":
+        return True
+    mid = (bid + ask) / 2.0
+    if mid <= 0:
+        return False
+    if (ask - bid) > ORPHAN_MAX_LEG_SPREAD_ABS and (ask - bid) / mid > ORPHAN_MAX_LEG_SPREAD:
+        logger.warning(
+            "ORPHAN quote unusable: %s bid %.2f ask %.2f is %.0f%% of mid — "
+            "reporting but not acting.",
+            st["short"], bid, ask, (ask - bid) / mid * 100.0,
+        )
+        return False
     return True
 
 
@@ -909,7 +951,8 @@ def review(engine_symbols: "set | None" = None) -> list:
                           and (not st.get("inferred") or MANAGE_INFERRED)
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)
                           and _quotes_tradeable(
-                              tradier_orders.quotes([st["long"], st["short"]]), st))
+                              tradier_orders.quotes([st["long"], st["short"]]),
+                              st, reason))
             # SAY ONLY WHAT APPLIES TO THIS POSITION.
             #
             # The verdict used to print "stop -25%" on every line including

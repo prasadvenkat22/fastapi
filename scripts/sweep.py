@@ -221,6 +221,18 @@ INTRABAR_STOPS = os.getenv("SWEEP_INTRABAR_STOPS", "false").lower() == "true"
 # This was a silent divergence of the section-36 kind -- the harness modelled
 # a different engine from the deployed one and nothing in the output said so.
 # It is in the banner now.
+# A DIFFERENT QUIET TIMER FOR THE LAST STRETCH OF THE DAY.
+#
+# The claim under test: after roughly 15:15 the tape gets noisy as people
+# close, so a 5-minute quiet timer books positions on chop that would have
+# recovered by the bell. Raised by a live MU 930/950 stalled out at 15:17 for
+# -135 that finished 845 higher.
+#
+# One example is not evidence -- section 27 and section 51 both looked like
+# this and did not survive -- so the knob exists to MEASURE it. None means the
+# timer never changes, which is what is deployed.
+LATE_STALL_AFTER = None       # dtime, or None to leave the timer alone
+LATE_STALL_MINUTES = 0.0      # 0 disables the stall entirely after the cutoff
 STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
 STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
 
@@ -534,6 +546,16 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
         if not (start <= ts.time() <= end):
             continue
         _Clock.now = ts.to_pydatetime()
+
+        # Retime the stall for the late session. Assigned onto the nodes module
+        # because BOTH engine stall sites -- the ride at 1954 and the credit
+        # branch at 2079 -- read the global at call time, so this reaches the
+        # rules the engine actually runs rather than a copy of them.
+        eff_stall = STALL_MINUTES
+        if LATE_STALL_AFTER is not None and ts.time() >= LATE_STALL_AFTER:
+            eff_stall = LATE_STALL_MINUTES
+        N.STALL_MINUTES = eff_stall
+
         seen = _seen_at(ts)
         spot = float(seen["Close"].iloc[-1])
         N.fetch_qqq_spot = lambda s=spot: s
@@ -610,12 +632,12 @@ def replay_session(day_bars: pd.DataFrame, start: dtime, end: dtime) -> list:
         # the intrabar stop check below also needs to pre-empt the agent.
         _riding = (before is not None
                    and PB.rides_to_close(getattr(before, "playbook", "") or ""))
-        if STALL_MINUTES > 0 and _riding and entry is not None:
+        if eff_stall > 0 and _riding and entry is not None:
             r = before.return_pct
             if r > _stall["peak"]:
                 _stall["peak"], _stall["at"] = r, ts
             elif (_stall["at"] is not None
-                  and (ts - _stall["at"]).total_seconds() / 60.0 >= STALL_MINUTES
+                  and (ts - _stall["at"]).total_seconds() / 60.0 >= eff_stall
                   and r <= _stall["peak"] - STALL_GIVEBACK_PCT):
                 broker.sell_all(before.underlying)
                 closed = _close(entry, before, spot, ts, "STALL")
@@ -3038,6 +3060,68 @@ def sweep_zonetier(sessions: dict):
      N.ZONE_BOUNCE_MAX_PCT, N.ZONE_REQUIRE_MACRO) = base
 
 
+def sweep_latestall(sessions: dict):
+    """Does the 5-minute quiet timer book too early in the last 45 minutes?
+
+    THE CLAIM, from a live trade on 2026-09-03: a MU 930/950 debit was stalled
+    out at 15:17 for -135 and finished 845 higher. The proposed reading is that
+    after ~15:15 the tape chops as people close for the day, so a short quiet
+    timer reads ordinary noise as a stall and books positions that recover into
+    the bell.
+
+    THE COMPETING READING is that late chop is exactly when a peak is most
+    likely to be the real one -- there is no session left to recover in -- and
+    a wider timer just holds losers longer. Sections 27, 51 and 55 all record
+    a plausible late-day pattern that did not survive measurement, so this is
+    a test rather than a change.
+
+    Arms retime the stall only AFTER the cutoff; before it, the deployed
+    5-minute / 3.3-point rule is untouched in every arm. Runs to 16:00 rather
+    than the usual 15:45, since the whole question is about what happens after
+    that.
+
+    READ THE LATE-STALL LINE, not the total. Most trades in a session never
+    reach the cutoff, so a real effect on the handful that do is diluted to
+    invisibility in the per-trade average. If the late count is near zero the
+    arms are measuring nothing and the answer is 'no evidence', not 'no effect'.
+    """
+    global STALL_MINUTES, LATE_STALL_AFTER, LATE_STALL_MINUTES
+    print("")
+    print("LATE STALL -- a different quiet timer for the last stretch")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}")
+    print(f"  base timer {STALL_MINUTES:.0f} min / {STALL_GIVEBACK_PCT:.1f} pts, "
+          f"sessions run to 16:00")
+    print("")
+    base_after, base_late = LATE_STALL_AFTER, LATE_STALL_MINUTES
+
+    def _arm(label, after, minutes):
+        global LATE_STALL_AFTER, LATE_STALL_MINUTES
+        LATE_STALL_AFTER, LATE_STALL_MINUTES = after, minutes
+        trades, per_day = _run_arm(sessions, dtime(9, 45), end=dtime(16, 0))
+        # The trades the change can possibly touch: closed at or after the
+        # cutoff. Everything else is identical across arms by construction.
+        cut = after or dtime(15, 15)
+        late = [t for t in trades if t["exit_ts"].time() >= cut]
+        ls = [t for t in late if t["reason"] == "STALL"]
+        tot = sum(t["pnl"] for t in late)
+        extra = (f"  [late {len(late)} tr {tot:+.0f}, "
+                 f"of which STALL {len(ls)} {sum(t['pnl'] for t in ls):+.0f}]")
+        _report(label + extra, trades, len(sessions))
+
+    _arm("5 min all day  (deployed)", None, 0.0)
+    print("")
+    print("  WIDER TIMER AFTER 15:15")
+    for m in (10.0, 15.0, 20.0):
+        _arm(f"{m:.0f} min after 15:15", dtime(15, 15), m)
+    _arm("no stall after 15:15", dtime(15, 15), 0.0)
+    print("")
+    print("  IS THE CUTOFF ITSELF THE RIGHT PLACE? (15 min timer)")
+    for hh, mm in ((14, 45), (15, 0), (15, 30)):
+        _arm(f"15 min after {hh:02d}:{mm:02d}", dtime(hh, mm), 15.0)
+
+    LATE_STALL_AFTER, LATE_STALL_MINUTES = base_after, base_late
+
+
 def sweep_creditstall(sessions: dict):
     """Let the afternoon credit trade RIDE past its target, as the morning does.
 
@@ -3743,6 +3827,8 @@ def main():
         sweep_bookrenter(sessions)
     if which in ("zonetier", "all"):
         sweep_zonetier(sessions)
+    if which in ("latestall", "all"):
+        sweep_latestall(sessions)
     if which in ("creditstall", "all"):
         sweep_creditstall(sessions)
     if which in ("breakeven", "all"):

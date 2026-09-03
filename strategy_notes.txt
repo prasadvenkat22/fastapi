@@ -4563,3 +4563,91 @@ entry rather than guessing one. That is the behaviour to keep -- section 64's
 lesson was that a wrong number in a healthy-looking log costs more than a
 missing one -- but it means "no line in the log" has to be read as loudly as a
 bad line.
+
+--------------------------------------------------------------------------------
+73. THE QUOTE GUARD REFUSED TO ACT ON EXACTLY THE POSITIONS IT MATTERED FOR
+    (2026-09-03)
+--------------------------------------------------------------------------------
+
+_quotes_tradeable exists so the orphan manager does not close a position on a
+garbage quote -- a leg quoted 1.00/2.50 is not a market, and acting on its mid
+books an imaginary price. It rejected a leg whose bid-ask spread exceeded 25%
+of the mid, or whose bid was zero, and it required BOTH legs to pass.
+
+Three things were wrong with that, and they compound at the end of a 0DTE
+session.
+
+ONE. THE FAR LEG IS SUPPOSED TO GO TO ZERO.
+
+On a QQQ 719/722 call credit at 15:49, the 722 was quoted 0.00 / 0.01. That is
+not a broken quote, it is the correct quote: the option is worthless and
+nobody will bid for it. The guard read the zero bid as an unusable market, so
+the FORCE_CLOSE decided at 15:45 logged
+
+    QQQ 719/722  -- FORCE_CLOSE [observation only]
+
+every cycle from 15:49 to the bell and never fired.
+
+TWO. A PENNY-WIDE MARKET FAILS A PERCENTAGE TEST.
+
+Judging the short leg alone is not enough. That 719 was quoted 0.02 / 0.03 --
+one cent wide, as tight as an option can be quoted -- which is 40% of its own
+2.5-cent mid. A proportional threshold rejects every cheap option, and by the
+close everything in a 0DTE book is cheap. 25% of mid is a real test on a $6
+leg and noise on a $0.03 one.
+
+THREE. IT HELD ONE STANDARD FOR EVERY DECISION.
+
+A width test protects a judgment about VALUE. Ceiling, stall and stop all read
+the mark, and a false mark makes all three fire wrongly. FORCE_CLOSE is not a
+judgment about value: it exists because these spreads are physically settled
+and an in-the-money short gets ASSIGNED. Against assignment, a poor fill is a
+good outcome. Holding the force close to a standard designed to protect the
+accuracy of a profit calculation gets the trade-off backwards.
+
+WHAT IT NOW DOES:
+
+  - judges the SHORT leg only, the one that must be bought back and the one
+    carrying the risk. A long bid at zero is INFORMATION -- it is worthless --
+    not an unusable quote, and the mark already values it at zero, correctly.
+  - tests the ASK, not the bid. Closing BUYS the short back, so a zero bid on
+    a nearly-worthless short stops nothing; a zero ask means no offer to buy
+    at, and that does.
+  - passes a quote tight in CENTS or tight in PROPORTION, whichever is kinder:
+    TRADING_ORPHAN_MAX_LEG_SPREAD_ABS (0.05) alongside the existing 25%.
+  - drops the width test for FORCE_CLOSE, which now needs only a real market
+    to trade into rather than a tight one.
+
+Verified across the seven quote shapes that occur:
+
+    quote                                      value rules   FORCE_CLOSE
+    0DTE far leg 0.00/0.01, short 0.02/0.03    ACT           ACT
+    short 3.50/3.60, long quoted wide          ACT           ACT
+    short 1.00/2.50, no real market            refuse        ACT
+    short 0.00/0.05, no bid but offered        ACT           ACT
+    short not quoted at all                    refuse        refuse
+    short 0.00/0.00, no market either side     refuse        refuse
+    short crossed 2.00/1.00                    refuse        refuse
+
+THAT DAY IT WAS FREE, AND THAT IS THE POINT. QQQ closed 717.47, 1.53 below the
+short; both legs expired worthless and holding paid the full +370, more than
+closing would have. The bug cost nothing and would never have appeared in P&L.
+It surfaced only because the log line was read.
+
+THE RISK IT LEFT IS NOT SYMMETRIC. A blocked force close is harmless when the
+short finishes out of the money, and is an ASSIGNMENT when it does not -- and
+the short is only in the money on the days the force close exists for. The
+guard failed safe on the days it was not needed and would have failed open on
+the days it was. Three positions carry into 2026-09-04, each reaching its own
+final hour.
+
+THE GENERAL FORM, the same shape as section 70: a threshold calibrated in one
+regime, applied in another where its units stop meaning what they meant. 25%
+of mid is a real test at $6 and noise at $0.03, the way a sign convention
+correct for a debit is inverted for a credit. Neither announces itself. Both
+produce a plausible number in a log line that reads normally.
+
+AND A SECOND, NARROWER RULE: A GUARD SHOULD KNOW WHAT IT IS GUARDING. One
+tradeability test served four decisions with different stakes -- three about
+how much money to book, one about whether shares get delivered. Asking what
+the refusal COSTS in each case is what separated them.

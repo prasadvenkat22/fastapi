@@ -4429,3 +4429,57 @@ structure knows what it cost, not what was spent getting to it.
 THE GENERAL SHAPE, worth remembering: EXIT RULES SHOULD READ THE STRUCTURE,
 REPORTING SHOULD READ THE CAMPAIGN. Mixing them makes exits act on sunk costs
 or makes P&L flatter itself, and both were one small decision away here.
+
+--------------------------------------------------------------------------------
+70. THE CREDIT SIDE WAS NEVER EXERCISED, AND CARRIED TWO INVERSIONS  (2026-09-03)
+--------------------------------------------------------------------------------
+
+The intrinsic work in section 67 was written and tested against a book of
+DEBIT spreads. Both places it touched had the sign backwards for credit
+structures, and neither was reachable until a credit spread appeared.
+
+ONE. _decompose SUBTRACTED FROM THE WIDTH.
+
+    if st["credit"]: intrinsic = width - intrinsic
+
+open_structures assigns the SHORT leg to the low strike on a call credit and
+the high strike on a put credit, so `lo`/`hi` already resolve to the short
+strike and the base formula already yields the cost to buy the structure back.
+The subtraction turned maximum profit into maximum loss.
+
+Live, QQQ 719/722 call credit, ten lots, QQQ at 718.74 -- BELOW the short, so
+both legs expire worthless and the cost to close is ZERO. It reported 3.00.
+
+TWO. THE STOP GUARD USED ONE COMPARISON FOR BOTH.
+
+    intrinsic_ok = parts_iv[0] > abs(st["entry"])
+
+Right for a debit: intrinsic is the VALUE at expiry, above what was paid means
+profitable, so a stop reading a depressed mark should stand down. Backwards for
+a credit: intrinsic is the COST TO CLOSE, so above the credit collected means a
+LOSS -- and the guard suppressed the stop on exactly the credit spreads that
+most needed it.
+
+TOGETHER, on that live 0DTE position, the stall read roughly -711% instead of
++100% and the stop could not fire at all. Both rules pointed the wrong way at
+once, on ten contracts, and the log looked entirely ordinary.
+
+WHAT MADE THEM INVISIBLE FOR A DAY: every position in the book was a debit
+spread. The engine's own AFTERNOON_CREDIT window sells credit spreads, so this
+would have reached the engine's own trades as soon as one opened.
+
+FIXED AND VERIFIED ACROSS ALL FOUR STRUCTURE TYPES -- call and put, debit and
+credit -- at maximum profit, maximum loss, and between:
+
+    call debit  above/below/between   10.00 / 0.00 / 5.00
+    put  debit  below/above/between   10.00 / 0.00 / 5.00
+    call credit above/below/between   10.00 / 0.00 / 5.00   (cost to close)
+    put  credit below/above/between   10.00 / 0.00 / 5.00   (cost to close)
+
+THE LESSON IS ABOUT COVERAGE, NOT ARITHMETIC. Section 67's reasoning was sound
+and its implementation was tested against the only structures then open. A
+sign convention that is correct for one structure and inverted for another
+will not announce itself: it produces plausible numbers, in a log line that
+reads normally, until the untested case appears. Any rule touching value,
+intrinsic or return now needs checking against all four before it is trusted --
+which is why the twelve-case check above is recorded rather than described.

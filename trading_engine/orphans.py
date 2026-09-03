@@ -158,11 +158,21 @@ STATE_PATH = os.getenv("TRADING_ORPHAN_STATE", "orphan_peaks.json")
 
 
 def _load() -> dict:
+    """State file: {"peaks": {...}, "structures": {...}}.
+
+    A legacy flat file is read as peaks-only, so an upgrade does not lose the
+    ratchet on a position that is already open.
+    """
     try:
         with open(STATE_PATH) as fh:
-            return json.load(fh)
+            raw = json.load(fh)
     except Exception:
-        return {}
+        return {"peaks": {}, "structures": {}}
+    if not isinstance(raw, dict):
+        return {"peaks": {}, "structures": {}}
+    if "peaks" in raw or "structures" in raw:
+        return {"peaks": raw.get("peaks") or {}, "structures": raw.get("structures") or {}}
+    return {"peaks": raw, "structures": {}}
 
 
 def _save(state: dict) -> None:
@@ -198,8 +208,6 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
     """
     engine_symbols = engine_symbols or set()
     orders = tradier_orders.filled_spread_orders()
-    if not orders:
-        return []
     held = {}
     try:
         for p in tradier_orders.open_positions():
@@ -225,6 +233,24 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             rec["credit"] = o["credit"]
         elif o["closing"]:
             rec["qty"] -= o["qty"]
+
+    # OVERNIGHT HOLDS. Tradier's /orders returns the CURRENT SESSION only, so
+    # a position opened yesterday has no opening fill to rebuild from today and
+    # would silently manage nothing -- found on 2026-09-03 with three spreads
+    # held overnight and "structures: 0". The reconstruction is therefore
+    # cached the day it is made and reused for as long as the account still
+    # holds both legs. Today's orders always win, so a scale-in or a partial
+    # close corrects the cached copy rather than being ignored.
+    cached = _load().get("structures") or {}
+    for key, rec in cached.items():
+        syms = tuple(key.split("|"))
+        if len(syms) != 2 or syms in book:
+            continue
+        if any(s in engine_symbols for s in syms):
+            continue
+        book[syms] = {"symbols": syms, "qty": rec.get("qty", 0),
+                      "net": rec.get("net", 0.0), "credit": rec.get("credit", False),
+                      "opened": rec.get("opened")}
 
     out = []
     for syms, rec in book.items():
@@ -410,8 +436,16 @@ def review(engine_symbols: "set | None" = None) -> list:
     try:
         structures = open_structures(engine_symbols)
         state = _load()
+        peaks = state["peaks"]
         now = datetime.now(timezone.utc)
         seen, reported = set(), []
+        # Cache today's reconstruction so tomorrow can still price a position
+        # held overnight. See the note in open_structures.
+        state["structures"] = {
+            st["key"]: {"qty": st["qty"], "net": st["entry"],
+                        "credit": st["credit"], "opened": st["opened"]}
+            for st in structures
+        }
 
         for st in structures:
             key = st["key"]
@@ -421,10 +455,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                 continue
             value, ret_pct = mark
 
-            rec = state.get(key) or {"peak": ret_pct, "peak_at": now.isoformat()}
+            rec = peaks.get(key) or {"peak": ret_pct, "peak_at": now.isoformat()}
             if ret_pct > rec["peak"]:
                 rec = {"peak": ret_pct, "peak_at": now.isoformat()}
-            state[key] = rec
+            peaks[key] = rec
             quiet = (now - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0
             stop_pct = ORPHAN_CREDIT_STOP_PCT if st["credit"] else ORPHAN_STOP_PCT
 
@@ -464,14 +498,15 @@ def review(engine_symbols: "set | None" = None) -> list:
             )
             if reason and manageable and _close(st, reason, value):
                 _book(st, value, ret_pct, reason)
-                state.pop(key, None)
+                peaks.pop(key, None)
+                state["structures"].pop(key, None)
             reported.append(st)
 
         # A structure that has vanished since the last pass was closed by
         # someone -- the human, an assignment, an expiry. Book what we can and
         # stop tracking its peak.
-        for gone in [k for k in state if k not in seen]:
-            state.pop(gone, None)
+        for gone in [k for k in peaks if k not in seen]:
+            peaks.pop(gone, None)
         _save(state)
         return reported
     except Exception:

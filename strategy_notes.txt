@@ -4217,3 +4217,20 @@ points instead of the 15-minute one.
 That is the expiry scope from section 62 working as intended, and it is worth
 watching rather than assuming. AVGO P 365/355 sits at -16.2% and has had no
 stop applying to it all day; tomorrow -25% becomes live for it.
+
+AVGO, DECIDED DELIBERATELY AND RECORDED AS SUCH. By the close it had drifted
+to -23.9%: AVGO rallied from a day low of 342.33 to 356.51, and the spread was
+worth 6.00 against a -25% stop level of 5.91 -- nine cents. Three options were
+put to the operator: leave it, widen the stop for later expiries, or close it
+manually at a chosen price rather than at whatever the opening auction offers.
+
+LEAVE IT WAS CHOSEN. So the first event of 2026-09-04 is likely to be this
+position stopping out near the open at about -190, and that is an accepted
+outcome rather than a surprise. The case being kept: AVGO closing under 355 on
+Friday pays the full 10-dollar width, +26.9%, and it sits at 356.51 -- one
+dollar fifty on the wrong side with one session left.
+
+Note for the review: if it stops out in the first minutes, check the FILL
+against the mark. An opening auction is exactly the wide book the orphan quote
+guard rejects, and a stop that fires at 09:30 is the first live test of whether
+ORPHAN_MAX_LEG_SPREAD holds the line or blocks a stop that needed to happen.

@@ -50,6 +50,7 @@ narrows it further to the engine's own symbol.
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 from . import tradier_orders
@@ -419,8 +420,55 @@ def _mark(st: dict) -> "tuple | None":
         return None
 
 
-def _close(st: dict, reason: str, limit_price: float) -> bool:
-    """Send the closing order. Only reached when MANAGE_ORPHANS is set."""
+_DEAD = {"rejected", "canceled", "cancelled", "expired", "error"}
+
+
+def _fill_value(order_id) -> "float | None":
+    """What the close ACTUALLY filled at, per spread, or None if unknown.
+
+    submit_vertical answering {'status': 'ok'} means accepted, not filled --
+    the distinction that cost a false TradeHistory row on 2026-08-27 and, in
+    the other direction, understated the first live orphan close by 175
+    dollars on 2026-09-03: CRWV booked at its 4.20 mark having filled at 4.55.
+
+    The mark is the NATURAL, deliberately pessimistic because it is what an
+    exit pays in the worst case. The fill is what happened. Booking the mark
+    makes every orphan result wrong in the same direction, and that number
+    feeds the daily loss limit and the consecutive-loss breaker.
+    """
+    if not order_id:
+        return None
+    for _ in range(6):
+        try:
+            o = tradier_orders.order_status(order_id)
+            status = (o.get("status") or "").lower()
+            if status == "filled":
+                legs = o.get("leg")
+                if not isinstance(legs, list):
+                    return None
+                total = 0.0
+                for lg in legs:
+                    px = float(lg.get("avg_fill_price") or 0.0)
+                    total += -px if (lg.get("side") or "").lower().startswith("buy") else px
+                return abs(round(total, 4))
+            if status in _DEAD:
+                logger.error("ORPHAN close %s came back %s — not booking.", order_id, status)
+                return None
+        except Exception:
+            logger.exception("Could not read orphan close %s.", order_id)
+            return None
+        time.sleep(2)
+    logger.warning("ORPHAN close %s still working — booking deferred.", order_id)
+    return None
+
+
+def _close(st: dict, reason: str, limit_price: float) -> "float | None":
+    """Send the closing order; return the FILLED value per spread, or None.
+
+    None means it did not fill -- rejected, or still working. The caller must
+    not book a result for it: the position is either still open or never left,
+    and the next pass will see it again.
+    """
     try:
         res = tradier_orders.submit_vertical(
             st["root"],
@@ -433,10 +481,10 @@ def _close(st: dict, reason: str, limit_price: float) -> bool:
         logger.error("ORPHAN %s: closing %s %.0f/%.0f x%d — %s",
                      reason, st["root"], st["long_strike"], st["short_strike"],
                      st["qty"], res)
-        return True
+        return _fill_value((res or {}).get("id"))
     except Exception:
         logger.exception("ORPHAN close failed for %s — position left open.", st["key"])
-        return False
+        return None
 
 
 def _book(st: dict, value: float, ret_pct: float, reason: str) -> None:
@@ -594,10 +642,20 @@ def review(engine_symbols: "set | None" = None) -> list:
                 verdict + verdict_scope,
                 "" if manageable else "  [observation only]",
             )
-            if reason and manageable and _close(st, reason, value):
-                _book(st, value, ret_pct, reason)
-                peaks.pop(key, None)
-                state["structures"].pop(key, None)
+            if reason and manageable:
+                filled = _close(st, reason, value)
+                if filled is not None:
+                    # Book what it FILLED at, not the mark that triggered it.
+                    entry = abs(st["entry"])
+                    real_pct = ((((entry - filled) if st["credit"] else (filled - entry))
+                                 / entry * 100.0) if entry else ret_pct)
+                    if abs(filled - value) > 0.005:
+                        logger.info(
+                            "ORPHAN fill %.2f against a %.2f mark (%+.1f%% not %+.1f%%) "
+                            "— booking the fill.", filled, value, real_pct, ret_pct)
+                    _book(st, filled, real_pct, reason)
+                    peaks.pop(key, None)
+                    state["structures"].pop(key, None)
             reported.append(st)
 
         # A structure that has vanished since the last pass was closed by

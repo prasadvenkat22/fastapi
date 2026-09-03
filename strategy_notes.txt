@@ -3780,3 +3780,57 @@ WHAT THE STALL DOES NOT DO. It requires peak > 0. A position that never shows a
 profit has no peak to stall from, so a spread that goes straight down from
 entry is the STOP's job alone. The stall protects a gain that existed; it is
 not a second stop.
+
+--------------------------------------------------------------------------------
+61. ONE LADDER FOR EVERYTHING THAT EXPIRES TODAY  (2026-09-03)
+--------------------------------------------------------------------------------
+
+Engine positions and manual ones were running different rules. Deliberately at
+first -- orphans.py was written after the engine and got its own knobs -- but
+the difference had no justification once both are 0DTE spreads in the same
+account on the same day. Aligned:
+
+                    ENGINE          ORPHAN
+    stall           5 min / 3.3     5 min / 3.3     <- engine moved from 5.0
+    ceiling         90% of max      90% of max
+    stop            -25 / -600      -25 / -600
+    force close     15:45           15:45
+
+TWO THINGS ARE STILL DIFFERENT, AND BOTH SHOULD BE.
+
+The 13:25 HANDOFF is engine-only. It exists so AFTERNOON_CREDIT can have the
+single position slot -- scheduling, not risk. Applying it to a manual position
+would close it early for a reason that has nothing to do with that position.
+
+The QUOTE GUARD is orphan-only, and this is a decision not to act rather than
+a judgement that it is unnecessary. See below.
+
+THE ENGINE'S EXPOSURE TO A WIDE BOOK WAS OVERSTATED IN THIS SESSION, BY ME.
+The claim was that the engine "will act on a natural however wide the book is".
+It does not: it marks from the MID. On the 2026-09-02 after-hours book that
+sank a 700/710 --
+
+    700 call  bid 7.50  ask 12.46      natural 5.17 (-31%)   mid 7.69 (+2.7%)
+
+-- the engine would have read +2.7% and held. The orphan path used the natural
+because a natural is what an exit actually pays, which is the right choice for
+a rule that is about to place an order, and the wrong one for a mark.
+
+So the engine gets a WARNING and not a block: "Wide book marking ... is N% of
+mid". Blocking an exit is a change to the exit path of a live system, and
+there is no observed instance of a wide book DURING a session -- the only case
+on record is after the close, when the engine does not run at all. If that
+line appears during regular hours the evidence exists and the guard follows
+from it. Until then, adding one would be guessing.
+
+THE STALL GIVEBACK NOW CARRIES A FRESH NUMBER ON BOTH SIDES. The engine ran at
+5 points and moved to 3.3 for the alignment. Section 55 established that every
+sweep of the stall was measuring the harness's own copy rather than the
+engine's, so 5 was never as well evidenced as its deployment implied -- but
+3.3 has no forward history at all. Expect the morning ride to book winners
+EARLIER and more often, and read grep "Stalled peak" against how those trades
+were actually going before treating the change as settled.
+
+WHAT TO CHECK TONIGHT, added to the section 59 list:
+    grep "Wide book marking"     during regular hours means the guard is owed
+    grep "Stalled peak"          is 3.3 booking winners that were still running?

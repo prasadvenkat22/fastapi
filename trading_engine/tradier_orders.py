@@ -296,7 +296,17 @@ def filled_spread_orders() -> list:
         r = httpx.get(url, headers=_headers(), timeout=15.0)
         if r.status_code >= 400:
             return []
-        rows = ((r.json() or {}).get("orders") or {}).get("order")
+        # Tradier answers {"orders": "null"} -- the STRING -- when the account
+        # has no orders in the window, which is the ordinary state pre-market
+        # on a new day. open_positions has guarded this since it was written;
+        # this did not, so it threw AttributeError, returned [], and every
+        # orphan silently went unmanaged with only a log line to show for it.
+        # An empty list here means "nothing to manage", so the failure was
+        # indistinguishable from the normal case.
+        orders = (r.json() or {}).get("orders")
+        if orders in ("null", None, "", {}):
+            return []
+        rows = orders.get("order") if isinstance(orders, dict) else None
         if isinstance(rows, dict):
             rows = [rows]
         out = []

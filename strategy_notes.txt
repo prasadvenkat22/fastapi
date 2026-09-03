@@ -3667,11 +3667,30 @@ P&L summary and completely different in the log.
    the credit side needs its own giveback, as orphans just got, rather than
    the rule being reverted.
 
-3. ORPHAN MANAGEMENT. First session acting on positions a human opened.
-       grep "ORPHAN"
-   Read: does the reconstructed entry match the fills? Does the stall fire at
-   12 points and not before? Does "quote unusable" appear during REGULAR
-   hours -- if it does the threshold is wrong, not the quote.
+3. ORPHAN MANAGEMENT. First session acting on positions a human opened, and
+   FOUR of its five exits have never fired in production.
+       grep "ORPHAN"                  every mark, every cycle
+       grep "ORPHAN STOP_LOSS"        debit -25% / credit -600%
+       grep "ORPHAN CEILING"          90% of the structure's maximum
+       grep "ORPHAN FORCE_CLOSE"      15:45, beats everything but the stop
+       grep "ORPHAN STALL"            5 min quiet and 6 points off the peak
+       grep "quote unusable"          refused to act on a wide book
+   Read, in order of what would hurt most if wrong:
+     - Does the reconstructed entry match the fills? The live QQQ 700/710
+       should rebuild to 7.49 from fills of 9.69 and 2.20. Everything else
+       here is a return, and a return is only as good as that number.
+     - Does CEILING fire near 9.75 on that spread, and not earlier? It exists
+       because a spread near full width stops MOVING and therefore cannot give
+       back enough to trip a stall -- the protection was weakening exactly as
+       the upside ran out.
+     - Does the stall hold to 6 points (45 cents of value) and not act on
+       drift? 12 was too wide, 5 -- the shared engine value -- was a 58-cent
+       move in QQQ, which is noise.
+     - Does FORCE_CLOSE actually flatten at 15:45? Orphans had no time exit at
+       all until tonight and would have ridden into a share settlement.
+     - Does "quote unusable" appear during REGULAR hours? After the close it
+       is correct and expected. During the session it means the threshold is
+       wrong, not the quote.
 
 4. THE TWO DEFECT FIXES, which should be silent.
        grep "ENTRY REJECTED"   grep "ENTRY BLOCKED"

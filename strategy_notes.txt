@@ -4483,3 +4483,45 @@ will not announce itself: it produces plausible numbers, in a log line that
 reads normally, until the untested case appears. Any rule touching value,
 intrinsic or return now needs checking against all four before it is trusted --
 which is why the twelve-case check above is recorded rather than described.
+
+--------------------------------------------------------------------------------
+71. THE STALL DECIDED ON INTRINSIC AND SOLD AT THE MARK  (2026-09-03)
+--------------------------------------------------------------------------------
+
+Section 67 moved the stall from the mark to intrinsic, which was right and
+incomplete. It fixed WHEN the rule fires. It did not fix WHAT PRICE the rule
+sells at, and those are different problems.
+
+The stall decides on intrinsic and executes at the MARK. On a deep in-the-money
+spread the mark sits below the entry, so a small intrinsic decline -- genuine,
+correctly detected, exactly what the rule is for -- triggers a sale at a price
+that books a LOSS on a position that was profitable at expiry.
+
+Three closes, about 263 dollars, each firing legitimately by its own logic:
+
+    AVGO 365/355  -113   intrinsic  9.40 vs 7.88 entry   (+193 at expiry)
+    NVDA 220/230   -15   intrinsic  9.54 vs 8.15 entry   (+139 at expiry)
+    MU   930/950  -135   intrinsic 20.00 vs 12.90 entry  (+710 at expiry)
+
+And one that worked: SNDK 1500/1560 +824, where the mark was above entry and
+the sale realised a real gain.
+
+THE RULE NOW REQUIRES THAT THE EXIT ACTUALLY BOOK A GAIN. If the mark is below
+entry there is no profit to protect and the case belongs to the STOP, which is
+already intrinsic-aware. The two then divide cleanly: THE STALL PROTECTS GAINS,
+THE STOP LIMITS LOSSES, and neither does the other's job badly.
+
+PANW was next. At -115 on the mark and +415 at expiry, it would have been the
+fourth. It is blocked now.
+
+THE PATTERN ACROSS 67, 70 AND 71 IS ONE MISTAKE MADE THREE WAYS. Every exit
+rule in this engine was written as "a return", and a return needs three things
+named that were never named: WHICH VALUE (mark, intrinsic, value-at-expiry),
+WHICH DIRECTION (a debit's intrinsic rises with profit, a credit's falls), and
+WHICH PRICE THE EXIT ACTUALLY GETS. Getting one right and the others wrong
+produces plausible numbers and normal-looking logs, which is why all three
+survived until a position was live enough to expose them.
+
+STILL OPEN: SNDK 1500/1560 is skipped -- "no fill price" -- after a roll and a
+close left no recoverable entry for one leg. It is unmanaged rather than
+mismanaged, which is the correct failure, but it is unmanaged.

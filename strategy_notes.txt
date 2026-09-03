@@ -4142,3 +4142,78 @@ structures. DELL is a PUT spread (P 530/520) and marks at -1.3%. Before this
 morning's orientation fix it would have marked near -200% and been stopped out
 on the first cycle -- the second put spread to enter the book since that fix,
 and the first that would have been managed when it did.
+
+--------------------------------------------------------------------------------
+66. WHAT RUNS WHEN, AND WHY 10:15 IS NOT WHEN WATCHING STARTS  (2026-09-03)
+--------------------------------------------------------------------------------
+
+This section exists because the distinction below was not written down
+anywhere, and its absence produced a reasonable worry that positions were
+going unwatched for forty-five minutes every morning. They were not. But
+nothing in this file said so, and "the morning window is 10:15-12:30" appears
+in a dozen places without ever saying what the window governs.
+
+    09:30-16:00, EVERY MINUTE   the CYCLE runs. Indicators, exits, the
+                                stop, the stall, the ceiling, the force
+                                close, and orphan review for every position
+                                the account holds.
+
+    10:15-12:30                 the ENGINE'S ENTRY WINDOW. The only thing it
+                                governs is whether the engine may OPEN a new
+                                position of its own.
+
+    14:00-15:00                 the credit entry window. Same: entries only.
+
+_reconcile runs at the END of every cycle and its only gate is
+MARKET_OPEN = (9, 30) in run_cycle.py. It has never been inside an entry
+window and could not be: an exit rule that only applies during the hours the
+engine is allowed to open trades would be worse than no exit rule.
+
+Verified on the tape rather than from the code. 2026-09-03, first ORPHAN line
+at 13:32:21 UTC -- 09:32 ET, two minutes after the open, and late only because
+the first two cycles died on the Anthropic 529 recorded in section 64:
+
+    13:30:38  ERROR cycle failed
+    13:31:06  ERROR cycle failed
+    13:32:21  ORPHAN QQQ 700/710 x1 entry 7.49 value 8.53 +13.9%
+
+With that crash fixed, the first mark tomorrow is at 09:30.
+
+AND THE ENTRY WINDOW IS A SEPARATE, SETTLED QUESTION. Moving it earlier has
+been measured three times -- sections 27, 45 and 54 -- and lost every time. At
+the corrected harness it is -45.44 a day against -15.36 at 10:15, the lowest
+win rate of any arm, and negative in BOTH sample halves. 2026-09-03 showed the
+mechanism live: the only CLEAN setup between 09:45 and 10:15 was a BEAR at
+09:53, at the session low of 705.10, immediately before the run to 709.80.
+
+--------------------------------------------------------------------------------
+THE IN-APP SCHEDULER IS DISABLED
+
+trading_engine/scheduler.py now refuses to start unless
+TRADING_ALLOW_APP_SCHEDULER=true, and POST /trading/scheduler/start answers
+409. Section 65 has the reasoning: it does the same job as the cron entry, and
+running both means two concurrent cycles with no lock between them.
+
+It RAISES rather than returning False, and that is deliberate. A silent no-op
+would leave the caller believing the scheduler was running while cron did the
+work -- the same confusion that produced the problem. 409 rather than 500
+because the request is well formed and the server is healthy; it is the state
+that forbids it.
+
+NOTHING NEEDS STARTING IN THE MORNING. Verified 2026-09-03: cron enabled and
+active, three entries, app and postgres both restart=always, no kill switch
+present. The cycle self-gates on market hours and the kill switch, so it skips
+outside 09:30-16:00 and at weekends on its own.
+
+--------------------------------------------------------------------------------
+WHAT CHANGES AT TOMORROW'S OPEN WITHOUT ANY SETTING BEING TOUCHED
+
+Eight structures across nine managed underlyings currently read
+"[expires 260904]" and carry ceiling and armed stall only. Tomorrow they
+EXPIRE, so _expires_today returns true and the full 0DTE ladder switches on:
+the -25% stop, the 15:45 force close, and the tighter 5-minute stall at 3.3
+points instead of the 15-minute one.
+
+That is the expiry scope from section 62 working as intended, and it is worth
+watching rather than assuming. AVGO P 365/355 sits at -16.2% and has had no
+stop applying to it all day; tomorrow -25% becomes live for it.

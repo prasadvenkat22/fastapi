@@ -5058,3 +5058,68 @@ order owns the position, which is right -- a human put it there deliberately
 -- but it also means a limit resting too far from the market can hold the
 flatten off until the bell. The watcher pattern is still the answer for that,
 and it now protects against a missed exit rather than a double one.
+
+--------------------------------------------------------------------------------
+80. THE GIVEBACK RULE SOLD INTO WOBBLES, AND COST 2,412 IN ONE AFTERNOON
+    (2026-09-04)
+--------------------------------------------------------------------------------
+
+Section 78 added TRADING_ORPHAN_INTRINSIC_GIVEBACK_PCT to cover the band where
+the stall and the stop are both correctly silent. It was written OFF and the
+notes said it needed a sweep before anyone turned it on.
+
+It was turned on the same afternoon, at 15% of width, on a live book. Within
+fifteen minutes it closed three positions:
+
+                    booked    holding would have been    cost
+    SNDK 1700/1720    -750                       -513    -237
+    MU   990/1000     -390                     +1,660  -2,050
+    QQQ  715/719      -375                       -250    -125
+                                                  NET  -2,412
+
+WHY IT FAILED, and it is not bad luck. MU 990/1000's intrinsic through the
+twenty minutes before it fired:
+
+    17:26  10.00   17:33  10.00   17:39  10.00
+    17:29   9.22   17:34   9.65   17:40  10.00
+    17:30   9.10   17:35   9.96   17:41   9.54
+    17:31   9.62   17:36  10.00   17:42   8.55
+    17:32   9.70   17:37  10.00   17:43   7.89  <- fired
+
+THE POSITION BREATHED 8.68 TO 10.00 ALL AFTERNOON. Routine swings of 1.32
+against a threshold of 1.50. The rule was sitting a fifth of a point above the
+noise floor, so the first slightly larger wobble tripped it. The dip lasted
+THREE MINUTES and MU was back at full intrinsic within the hour.
+
+TWO THINGS WERE WRONG, and only one of them is the threshold.
+
+The threshold was too tight, but no threshold fixes this on its own: the size
+of a wobble is a property of the UNDERLYING, not of the structure, and a
+number chosen per-structure cannot know it. Widening it enough to clear MU's
+noise would have made it useless on a quiet name.
+
+TIME distinguishes them. A reversal is still there five minutes later; a
+wobble is not. TRADING_ORPHAN_GIVEBACK_CONFIRM_MIN (default 5) requires the
+giveback to be CONTINUOUSLY true for that long, and any new intrinsic high
+clears the clock, so a dip-recover-dip pattern starts over rather than
+accumulating.
+
+Replayed against MU's real sequence: the old rule fires at 17:43, the new one
+never fires -- the dip held for one minute of the five required.
+
+This is the same conclusion section 43 reached for the morning ride, by the
+same route, and the stall has had a quiet timer ever since. The giveback rule
+was written without one because it was conceived as a STOP -- and a stop does
+fire immediately. But this is not a stop. A stop reads a level; this reads a
+CHANGE, and a change needs a duration to be real.
+
+THE PROCESS FAILURE IS THE POINT. The rule was measured against one scenario
+-- MU draining at 13:00 -- and shipped on it. That scenario was real and the
+rule addressed it. What was never asked is what the rule does on every OTHER
+shape the same book produces, and the answer was available: the engine had
+been logging intrinsic every minute for all of them. Nobody looked until it
+had cost 2,412 dollars.
+
+STILL UNSWEPT. The confirmation timer makes it defensible, not measured. Both
+knobs go through the harness before this is trusted, and the default of 5
+minutes is borrowed from the stall rather than derived.

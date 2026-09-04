@@ -383,6 +383,35 @@ ORPHAN_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_HOLD_UNTIL", "").strip()
 ORPHAN_INTRINSIC_GIVEBACK_PCT = float(
     os.getenv("TRADING_ORPHAN_INTRINSIC_GIVEBACK_PCT", "0") or 0)
 
+# AND IT MUST STILL BE TRUE THIS MANY MINUTES LATER.
+#
+# Without this the rule fires on the first cycle the threshold is crossed,
+# which means it fires on noise. Measured on MU 990/1000 the afternoon it was
+# first enabled -- intrinsic through the twenty minutes before it fired:
+#
+#     17:26  10.00   17:33  10.00   17:39  10.00
+#     17:29   9.22   17:34   9.65   17:40  10.00
+#     17:30   9.10   17:35   9.96   17:41   9.54
+#     17:31   9.62   17:36  10.00   17:42   8.55
+#     17:32   9.70   17:37  10.00   17:43   7.89  <- fired
+#
+# The position breathed 8.68 to 10.00 all afternoon -- routine swings of 1.32
+# against a threshold of 1.50. The dip that triggered it lasted THREE MINUTES
+# and MU was back at full intrinsic within the hour. It sold at 5.90 into a
+# position now worth 10.00, for -390 against +1,660 held: a 2,050 dollar
+# mistake made by a rule that could not tell a wobble from a reversal.
+#
+# A threshold alone cannot tell them apart, because the size of a wobble is a
+# property of the underlying, not of the structure. TIME can: a reversal is
+# still there five minutes later and a wobble is not. So the giveback must be
+# continuously true for this long before it acts, and any new intrinsic high
+# clears the clock.
+#
+# This is the same shape as STALL_MINUTES, and for the same reason -- section
+# 43 arrived at a quiet timer on the morning ride by exactly this route.
+ORPHAN_GIVEBACK_CONFIRM_MIN = float(
+    os.getenv("TRADING_ORPHAN_GIVEBACK_CONFIRM_MIN", "5") or 0)
+
 STATE_PATH = os.getenv("TRADING_ORPHAN_STATE", "orphan_peaks.json")
 
 
@@ -1076,6 +1105,42 @@ def review(engine_symbols: "set | None" = None) -> list:
             # rules are waiting rather than just omitting them.
             past_hold = _past_hold_until()
 
+            # THE GIVEBACK, AND ITS CONFIRMATION CLOCK.
+            #
+            # gb_since is stamped when the threshold is first crossed and
+            # CLEARED the moment it is not, so the clock measures a continuous
+            # stretch rather than a total. A position that dips, recovers and
+            # dips again starts over -- which is the whole point, since that
+            # pattern is a wobble and not a reversal.
+            gb_width = abs(st["short_strike"] - st["long_strike"])
+            gb_need = gb_width * ORPHAN_INTRINSIC_GIVEBACK_PCT / 100.0
+            gb_now = False
+            if (ORPHAN_INTRINSIC_GIVEBACK_PCT > 0 and peak_iv is not None
+                    and iv_now is not None
+                    and (peak_iv > entry_abs if not st["credit"] else peak_iv < entry_abs)):
+                given = ((peak_iv - iv_now) if not st["credit"]
+                         else (iv_now - peak_iv))
+                gb_now = given >= gb_need
+            if gb_now:
+                rec.setdefault("gb_since", now.isoformat())
+            else:
+                rec.pop("gb_since", None)
+            gb_held_min = 0.0
+            if rec.get("gb_since"):
+                gb_held_min = (now - datetime.fromisoformat(
+                    rec["gb_since"])).total_seconds() / 60.0
+            giveback_held = gb_now and gb_held_min >= ORPHAN_GIVEBACK_CONFIRM_MIN
+            if gb_now and not giveback_held:
+                logger.info(
+                    "ORPHAN %s %.0f/%.0f has given back %.2f of intrinsic (needs %.2f) "
+                    "but only for %.1f min of the %.0f required — waiting to see if it "
+                    "is a reversal or a wobble.",
+                    st["root"], st["long_strike"], st["short_strike"],
+                    ((peak_iv - iv_now) if not st["credit"] else (iv_now - peak_iv))
+                    if (peak_iv is not None and iv_now is not None) else 0.0,
+                    gb_need, gb_held_min, ORPHAN_GIVEBACK_CONFIRM_MIN,
+                )
+
             reason = None
             if zero_dte and ret_pct <= stop_pct and not past_hold:
                 # AHEAD OF THE INTRINSIC GUARD, because this holds for a
@@ -1104,13 +1169,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "FORCE_CLOSE"
             elif ceiling is not None and ret_pct >= ceiling:
                 reason = "CEILING"
-            elif (zero_dte and past_hold and ORPHAN_INTRINSIC_GIVEBACK_PCT > 0
-                  and peak_iv is not None and iv_now is not None
-                  and (peak_iv > entry_abs if not st["credit"] else peak_iv < entry_abs)
-                  and ((peak_iv - iv_now) if not st["credit"]
-                       else (iv_now - peak_iv))
-                      >= abs(st["short_strike"] - st["long_strike"])
-                         * ORPHAN_INTRINSIC_GIVEBACK_PCT / 100.0):
+            elif zero_dte and past_hold and giveback_held:
                 # See ORPHAN_INTRINSIC_GIVEBACK. No books_a_gain test here on
                 # purpose -- this rule exists precisely for the case where the
                 # mark is under water and the expiry value is walking away.

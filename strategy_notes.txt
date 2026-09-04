@@ -5123,3 +5123,76 @@ had cost 2,412 dollars.
 STILL UNSWEPT. The confirmation timer makes it defensible, not measured. Both
 knobs go through the harness before this is trusted, and the default of 5
 minutes is borrowed from the stall rather than derived.
+
+--------------------------------------------------------------------------------
+81. THE GIVEBACK RULE MEASURED, AND TURNED OFF  (2026-09-04)
+--------------------------------------------------------------------------------
+
+Swept against the engine's own logged series -- 39 structure-days, 2,561
+one-minute observations of real positions marked by the real chain. The
+existing harness could not answer this: scripts/sweep.py replays the ENGINE's
+QQQ trades and has never replayed orphans.py at all (section 75).
+
+THE FIRST VERSION OF THE SWEEP WAS CIRCULAR, and said the opposite.
+
+It took each structure's LAST LOGGED VALUE as the hold counterfactual. But
+firing the rule closes the position, which ends the log -- so "holding" became
+the exit price itself. MU 990/1000 recorded holding as -390, the very exit
+under test. Every setting looked profitable:
+
+    give 10%, confirm 0    rule +1505   hold +1199   +306
+    give 20%, confirm 0    rule +2590   hold +1199  +1391
+
+Valuing the hold at TRUE EXPIRY instead -- intrinsic against the underlying's
+actual close that day -- reverses it completely:
+
+    give%  confirm   fires  helps    rule      hold    difference
+    10     0 min        16      4   18326     26235        -7909
+    10     5 min        11      4   23224     26235        -3011
+    10    10 min         6      3   27318     26235        +1082
+    15     0 min        14      4   20056     26235        -6179
+    15     5 min         9      3   24958     26235        -1278   <- deployed
+    15    15 min         4      2   27515     26235        +1280
+    20     0 min        13      3   22281     26235        -3954
+    30     0 min         9      1   24116     26235        -2119
+
+EVERY zero-confirmation setting loses, which is exactly the configuration that
+ran live for an hour and cost 2,412. That was not bad luck.
+
+THE DEPLOYED SETTING LOSES 1,385, structure by structure:
+
+    DELL 530/520 P    -143 vs   +372   -515
+    MU 1010/1000 C    -200 vs    +54   -254
+    MU 995/1005 C     -975 vs   +620  -1595
+    QQQ 715/719 C     -150 vs   -225    +75
+    QQQ 716/719 C     -600 vs   -380   -220
+    SNDK 1675/1650 C  -230 vs  -1600  +1370
+    SNDK 1690/1720 C  -235 vs   +167   -402
+    SNDK 1730/1690 P  -475 vs   -947   +472
+    WDC 470/460 P     -268 vs    +48   -316
+
+It hurt six times and helped three, and the SHAPE is the finding. Its one real
+win was a CREDIT spread already travelling to maximum loss -- cutting that
+early was correct. Every loss was an IN-THE-MONEY DEBIT SPREAD at full
+intrinsic that wobbled and came back. The rule cannot tell those apart, and
+the second kind is most of this book.
+
+TURNED OFF. TRADING_ORPHAN_INTRINSIC_GIVEBACK_PCT=0.
+
+The best row (15% / 15 min, +1,280) is four fires of which two helped, on one
+day. That is not a result, it is two trades. Nothing here clears the bar this
+file has always applied.
+
+WHAT THE MEASUREMENT ACTUALLY SUGGESTS, and it is not the rule that was built:
+the only case the giveback handled well is a short structure running to
+maximum loss, which is what a STOP is for. A rule aimed at that case
+specifically -- on credit structures, where intrinsic rising past the credit
+collected means the trade has failed -- would be a narrower and more
+defensible thing than a general giveback across every structure type.
+
+THE PROCESS LESSON, which is the expensive one. The rule was enabled live
+before any measurement, on the strength of one convincing scenario. The data
+needed to measure it already existed -- the engine had been logging intrinsic
+every minute for every position for weeks. Building the sweep took under an
+hour and could have been done first. It was done after, and it cost 2,412
+dollars to learn what the log already knew.

@@ -5196,3 +5196,88 @@ needed to measure it already existed -- the engine had been logging intrinsic
 every minute for every position for weeks. Building the sweep took under an
 hour and could have been done first. It was done after, and it cost 2,412
 dollars to learn what the log already knew.
+
+--------------------------------------------------------------------------------
+82. EVERY EXIT RULE MEASURED AGAINST HOLDING, AND WHY 100 DOLLARS IS NOT A
+    STOP SETTING  (2026-09-04)
+--------------------------------------------------------------------------------
+
+Asked to cap the loss on any same-day position at 100 dollars and take profit
+at 75%. The second is a setting. The first is not achievable by any exit rule,
+and the sweeps say something harder than that.
+
+Same data and method as section 81: 39 structure-days of the engine's own
+one-minute logs, hold valued at TRUE EXPIRY against the underlying's close.
+
+THE STOP.
+
+    stop     intrinsic    fires  helps      rule      hold    diff     worst
+    -5%      respected       10      3     26729     29610   -2881     -1932
+    -25%     respected        8      3     26954     29610   -2656     -1932
+    -40%     respected        4      2     29986     29610    +376     -1932
+    -60%     respected        2      1     30127     29610    +517     -1932
+    -5%      IGNORED         26      4     13781     29610  -15829      -425
+    -10%     IGNORED         23      4     14586     29610  -15024      -760
+
+READ THE WORST COLUMN. With the intrinsic guard respected, tightening from
+-60% to -5% does not reduce the worst single loss AT ALL -- it is -1,932 at
+every setting. A tighter stop does not cap the bad position. It closes the
+good ones earlier.
+
+The only configuration that reduces worst-case is switching the intrinsic
+guard OFF and stopping tight, which caps the worst loss at -425 and costs
+15,829 across 39 positions. Paying 15,829 to avoid 1,500 of drawdown.
+
+AND THE DEPLOYED -25% IS ITSELF NEGATIVE. -40% and -60% both measure positive.
+On this data the stop wants LOOSENING, which is the opposite of the instinct
+that prompted the question, and the opposite of what was asked for.
+
+THE CEILING.
+
+    ceiling   fires  helps      rule      hold    diff
+    0.50          3      0     27665     29185   -1520
+    0.70          2      0     28295     29185    -890
+    0.75          2      0     28425     29185    -760
+    0.90          1      0     29155     29185     -30
+    1.00          0      0     29185     29185      +0
+
+ZERO HELPS AT EVERY SETTING. The ceiling has never once beaten holding on this
+data. Lowering it from 0.90 to 0.70 earlier the same afternoon, on request,
+cost about 860. Set to 0.75 as asked, which is better than the 0.70 it
+replaced and still worse than leaving it alone.
+
+WHY 100 DOLLARS CANNOT BE A STOP. On a defined-risk spread the maximum loss is
+the debit, fixed at entry:
+
+    MU 995/1005 x5 at 6.72   ->  3,360 at risk the moment it was bought
+    one contract at 6.72     ->  672 minimum
+    100 dollars requires a spread costing 1.00 or less
+
+MU x5 at 6.72 is 3,360 of risk. No exit rule reduces that to 100, because
+100 dollars is 0.20 per spread -- 3% of entry -- and these positions' marks
+sit 20 to 50% below entry while at FULL intrinsic, on extrinsic drag alone. A
+3% stop fires the instant the position is opened, every time.
+
+RISK PER POSITION IS A SIZING DECISION, NOT AN EXIT DECISION. That is the
+whole answer, and it is not a rule that can be added.
+
+THE UNCOMFORTABLE PATTERN ACROSS ALL THREE SWEEPS: every exit rule tested --
+giveback at every setting, stop tighter than -40%, ceiling at every fraction
+-- underperforms simply holding to expiry on this data. The exits are not
+protecting the book, they are taxing it.
+
+TWO REASONS THAT MIGHT BE WRONG, both real:
+
+  ONE DAY, MOSTLY. Nearly every fire is 2026-09-04, a session where the names
+  traded were unusually deep in the money and mostly recovered. A day of
+  sustained trend against the book would invert every row.
+
+  HOLDING TO EXPIRY IS NOT FREE. This values the hold at intrinsic and ignores
+  ASSIGNMENT. A short leg finishing in the money is physically settled, and
+  that is precisely what the 15:45 flatten exists to prevent. The flatten is
+  the one exit these sweeps do not challenge and should not.
+
+So the conclusion is narrow: on the sessions observed, the discretionary exits
+cost money and the structural one (flatten) did not. It is not evidence that
+exits are unnecessary in general, and one more week of logs will say more than
+any argument here.

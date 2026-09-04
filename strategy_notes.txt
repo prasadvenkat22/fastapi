@@ -5016,3 +5016,45 @@ will face, compute it in both, and see whether it is still the same test.
 STILL OFF, AND STILL UNSWEPT. Nothing in this addendum is a reason to enable
 it -- fixing the units makes the eventual measurement meaningful, it does not
 substitute for one.
+
+--------------------------------------------------------------------------------
+79. THE EXIT LADDER NEVER ASKED WHETHER AN ORDER WAS ALREADY WORKING
+    (2026-09-04)
+--------------------------------------------------------------------------------
+
+orphans.review() submitted a close whenever a rule fired, with no check for an
+order already resting on the same legs. A manual limit left working and the
+15:45 flatten could BOTH fill -- selling the structure twice and leaving a
+short leg naked into expiry, on the one day of its life when that is
+unrecoverable.
+
+FOUND BY CAUSING IT. A limit was placed by hand at 35.00 on a managed SNDK
+1730/1690, and only then did the question get asked. It was worked around that
+afternoon with an external watcher that cancelled the resting order five
+minutes before the flatten. That worked -- the order filled at 21.84 before it
+mattered -- but "remember to run a watcher whenever you place a manual limit"
+is not a mechanism, it is a thing waiting to be forgotten.
+
+THE BROKER IS THE AUTHORITY, not local state. working_leg_symbols() asks
+Tradier which option symbols sit under a non-terminal order. Orders placed
+from a phone, by hand, or by a previous run of this process all count, and
+none of them would appear in anything the engine tracked itself. One call per
+review pass, not one per structure.
+
+When a rule fires on a structure with a working order, the engine logs what it
+wanted and stands down:
+
+    ORPHAN SNDK 1730/1690 wants FORCE_CLOSE but an order is already working
+    on its legs — standing down rather than selling it twice.
+
+FAILS OPEN, DELIBERATELY. If the orders endpoint errors the guard returns an
+empty set and the ladder behaves exactly as it did before. An unreadable
+orders list should not silently disable every exit rule -- that trade is the
+wrong way round, and section 73 is the record of what a guard that fails
+closed costs.
+
+WHAT IT DOES NOT DO: cancel the resting order. Standing down means the manual
+order owns the position, which is right -- a human put it there deliberately
+-- but it also means a limit resting too far from the market can hold the
+flatten off until the bell. The watcher pattern is still the answer for that,
+and it now protects against a missed exit rather than a double one.

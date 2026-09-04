@@ -945,6 +945,17 @@ def review(engine_symbols: "set | None" = None) -> list:
                 "credit": st["credit"], "opened": st["opened"],
             }
 
+        # ONE broker call for the whole pass, not one per structure. See the
+        # in_flight check below.
+        try:
+            working = tradier_orders.working_leg_symbols()
+        except Exception:
+            logger.exception("Could not read working orders — proceeding without the guard.")
+            working = set()
+        if working:
+            logger.info("ORPHAN %d leg(s) have orders working: %s",
+                        len(working), ", ".join(sorted(working)))
+
         for st in structures:
             key = st["key"]
             seen.add(key)
@@ -1121,7 +1132,29 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "STALL_LATER"
             # The expiry check has moved INTO the reason logic above, so the
             # ceiling can act on a later expiry while the 0DTE rules cannot.
+            # NOT WHILE AN ORDER IS ALREADY WORKING ON THESE LEGS.
+            #
+            # Nothing used to check. A resting manual limit and the 15:45
+            # flatten could both fill, selling the structure twice and leaving
+            # a short leg naked into expiry. Hit live on 2026-09-04 with a
+            # SNDK limit resting at 35.00 against a managed position; that day
+            # it was worked around by an external watcher that cancelled the
+            # limit five minutes before the flatten, which is not a mechanism
+            # anyone should have to remember.
+            #
+            # The broker is the authority on what is working, so this asks it
+            # rather than tracking submissions locally -- orders placed by
+            # hand, from a phone, or by a previous run of this process all
+            # count, and none of them would appear in local state.
+            in_flight = bool(working & {st["long"], st["short"]})
+            if in_flight and reason:
+                logger.info(
+                    "ORPHAN %s %.0f/%.0f wants %s but an order is already working "
+                    "on its legs — standing down rather than selling it twice.",
+                    st["root"], st["long_strike"], st["short_strike"], reason,
+                )
             manageable = (MANAGE_ORPHANS
+                          and not in_flight
                           and (not st.get("inferred") or MANAGE_INFERRED)
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)
                           and _quotes_tradeable(

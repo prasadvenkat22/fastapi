@@ -268,6 +268,55 @@ def open_positions() -> list:
     return rows or []
 
 
+def working_leg_symbols() -> set:
+    """Option symbols with an order still WORKING at the broker.
+
+    The orphan manager submits a close whenever a rule fires, with no regard
+    for whether an order on the same structure is already resting. That is a
+    double-sell waiting to happen: a manual limit left working while the
+    15:45 flatten submits its own order can BOTH fill, leaving a short leg
+    open on expiry day. Observed as a live hazard 2026-09-04 -- a resting
+    SNDK limit at 35.00 against a managed position -- and worked around that
+    day with an external watcher that cancelled the limit before the flatten.
+
+    Returns the set of option symbols under any non-terminal order. An empty
+    set means "nothing working" AND "cannot tell" -- the same conflation the
+    rest of this module makes deliberately, because the caller's fallback is
+    the behaviour that existed before this function.
+    """
+    if not LIVE_ORDERS:
+        return set()
+    live = set()
+    try:
+        url = f"{_base()}/accounts/{_account()}/orders"
+        r = httpx.get(url, headers=_headers(), timeout=15.0)
+        if r.status_code >= 400:
+            return set()
+        orders = (r.json() or {}).get("orders")
+        if orders in ("null", None, "", {}):
+            return set()
+        rows = orders.get("order") if isinstance(orders, dict) else None
+        if isinstance(rows, dict):
+            rows = [rows]
+        for o in (rows or []):
+            st = (o.get("status") or "").lower()
+            if st in ("filled", "canceled", "cancelled", "rejected", "expired", "error"):
+                continue
+            legs = o.get("leg")
+            if isinstance(legs, dict):
+                legs = [legs]
+            if isinstance(legs, list) and legs:
+                for lg in legs:
+                    if lg.get("option_symbol"):
+                        live.add(lg["option_symbol"])
+            elif o.get("option_symbol"):
+                live.add(o["option_symbol"])
+    except Exception:
+        logger.exception("Could not read working orders.")
+        return set()
+    return live
+
+
 def filled_spread_orders() -> list:
     """Every FILLED two-leg spread order, newest last, normalised.
 

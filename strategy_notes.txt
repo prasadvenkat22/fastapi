@@ -4976,3 +4976,43 @@ AND THE WATCHER HAD THE SAME BUG. It was written to catch the first defect and
 reported the second one wrongly for four minutes -- flagging SNDK as giving
 back 20.9 points while it sat untouched at maximum. Writing the check does not
 exempt the check.
+
+ADDENDUM, SAME DAY: THE THRESHOLD'S UNITS WERE WRONG TOO.
+
+TRADING_ORPHAN_INTRINSIC_GIVEBACK was first written as an absolute dollar
+figure. Asked what to set it to, the answer turned out to be that no single
+dollar figure works. Measured against the live book:
+
+    SNDK 1690/1720   30 wide    0.50 is  1.7% of width   fires on noise
+    MU   990/1000    10 wide    0.50 is  5.0%
+    QQQ  716/719      3 wide    0.50 is 16.7% of width   barely ever fires
+
+SNDK moves more than 0.50 of intrinsic between two one-minute cycles. The same
+number is a hair trigger on one structure and inert on another.
+
+WIDTH IS THE NATURAL SCALE. It is the entire range the intrinsic can travel,
+so a percent of it means the same thing everywhere. Now
+TRADING_ORPHAN_INTRINSIC_GIVEBACK_PCT:
+
+    structure           width       5%      10%      20%
+    QQQ 716/719           3.0     0.15     0.30     0.60
+    QQQ 715/719           4.0     0.20     0.40     0.80
+    NVDA 237.5/232.5      5.0     0.25     0.50     1.00
+    MU 990/1000          10.0     0.50     1.00     2.00
+    PANW 310/328         17.5     0.88     1.75     3.50
+    SNDK 1700/1720       20.0     1.00     2.00     4.00
+    SNDK 1690/1720       30.0     1.50     3.00     6.00
+
+THIRD TIME IN ONE DAY, and worth naming as a class rather than three
+incidents. Section 73: 25%-of-mid is a real test on a 6-dollar leg and noise
+on a 3-cent one. Section 78: a return percent whose denominator moved when
+contracts were added. This: dollars of intrinsic across structures 3 to 30
+wide. Every one of them is a threshold whose UNITS stop meaning what they
+meant when the context changes, and every one produces a plausible number.
+
+The check to run on any new threshold: name the two most different contexts it
+will face, compute it in both, and see whether it is still the same test.
+
+STILL OFF, AND STILL UNSWEPT. Nothing in this addendum is a reason to enable
+it -- fixing the units makes the eventual measurement meaningful, it does not
+substitute for one.

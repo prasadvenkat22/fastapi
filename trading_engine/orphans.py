@@ -358,10 +358,30 @@ ORPHAN_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_HOLD_UNTIL", "").strip()
 # mark is underwater and holding is getting worse, so it accepts a small loss
 # now against a larger one later.
 #
+# AS A PERCENT OF THE STRUCTURE'S WIDTH, NOT AS DOLLARS.
+#
+# This was first written as an absolute dollar figure and that cannot work
+# across a book. Measured on the live positions of 2026-09-04, a 0.50 dollar
+# threshold means:
+#
+#     SNDK 1690/1720   30 wide    1.7% of width   fires on noise
+#     MU   990/1000    10 wide    5.0%
+#     QQQ  716/719      3 wide   16.7% of width   barely ever fires
+#
+# SNDK moves more than 0.50 of intrinsic between two cycles, so the same
+# number is a hair trigger on one position and inert on another. The same
+# mistake as section 78's percent-with-a-moving-baseline and section 73's
+# 25%-of-mid on a 3-cent option: a threshold whose units stop meaning what
+# they meant when the context changes.
+#
+# Width is the natural scale -- it is the full range the intrinsic can travel,
+# so a percent of it means the same thing on every structure. 10% gives 3.00
+# on the 30-wide SNDK and 0.30 on the 3-wide QQQ, which is the intent.
+#
 # OFF BY DEFAULT (0). It is a real exit rule, not a correctness fix, and it
 # has not been through the harness. Turning it on is a trading decision.
-ORPHAN_INTRINSIC_GIVEBACK = float(
-    os.getenv("TRADING_ORPHAN_INTRINSIC_GIVEBACK", "0") or 0)
+ORPHAN_INTRINSIC_GIVEBACK_PCT = float(
+    os.getenv("TRADING_ORPHAN_INTRINSIC_GIVEBACK_PCT", "0") or 0)
 
 STATE_PATH = os.getenv("TRADING_ORPHAN_STATE", "orphan_peaks.json")
 
@@ -1073,11 +1093,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "FORCE_CLOSE"
             elif ceiling is not None and ret_pct >= ceiling:
                 reason = "CEILING"
-            elif (zero_dte and past_hold and ORPHAN_INTRINSIC_GIVEBACK > 0
+            elif (zero_dte and past_hold and ORPHAN_INTRINSIC_GIVEBACK_PCT > 0
                   and peak_iv is not None and iv_now is not None
                   and (peak_iv > entry_abs if not st["credit"] else peak_iv < entry_abs)
                   and ((peak_iv - iv_now) if not st["credit"]
-                       else (iv_now - peak_iv)) >= ORPHAN_INTRINSIC_GIVEBACK):
+                       else (iv_now - peak_iv))
+                      >= abs(st["short_strike"] - st["long_strike"])
+                         * ORPHAN_INTRINSIC_GIVEBACK_PCT / 100.0):
                 # See ORPHAN_INTRINSIC_GIVEBACK. No books_a_gain test here on
                 # purpose -- this rule exists precisely for the case where the
                 # mark is under water and the expiry value is walking away.

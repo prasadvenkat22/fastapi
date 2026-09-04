@@ -1096,19 +1096,36 @@ def review(engine_symbols: "set | None" = None) -> list:
             rec = peaks.get(key) or {}
             prev_iv = rec.get("peak_iv")
             if prev_iv is None and rec.get("peak") is not None and entry_abs:
-                # Migrating a record written before this change: recover the
-                # dollar peak from the stored percent using today's entry. It
-                # is only as good as the entry that produced it, which is the
-                # bug -- so a structure whose entry has since moved gets
-                # reseeded from where it is now rather than trusted.
-                prev_iv = None
+                # MIGRATING A RECORD WRITTEN BEFORE peak_iv EXISTED.
+                #
+                # The first version of this discarded the old peak outright.
+                # Deploying it mid-session on 2026-09-04 reseeded every open
+                # structure from its then-current intrinsic and wiped +20.0%
+                # to -9.2% across the whole book at once -- a session's
+                # high-water marks destroyed by a deploy, with the stall left
+                # blind for the rest of the day.
+                #
+                # The stored percent IS recoverable when the entry that
+                # produced it has not moved, which is the ordinary case. So
+                # the entry is now recorded alongside, and the peak is
+                # reconstructed only when it still matches. A structure that
+                # has been scaled since -- the case that motivated storing
+                # dollars in the first place -- still reseeds, because there
+                # its percent genuinely means nothing.
+                if abs(float(rec.get("peak_entry") or 0.0) - entry_abs) < 0.005:
+                    pct = float(rec["peak"])
+                    prev_iv = (entry_abs * (1.0 - pct / 100.0) if st["credit"]
+                               else entry_abs * (1.0 + pct / 100.0))
             better = (iv_now is not None
                       and (prev_iv is None
                            or (iv_now < prev_iv if st["credit"] else iv_now > prev_iv)))
             if better:
-                rec = {"peak_iv": iv_now, "peak_at": now.isoformat()}
+                rec = {"peak_iv": iv_now, "peak_at": now.isoformat(),
+                       "peak_entry": entry_abs}
             elif not rec:
-                rec = {"peak_iv": iv_now, "peak_at": now.isoformat()}
+                rec = {"peak_iv": iv_now, "peak_at": now.isoformat(),
+                       "peak_entry": entry_abs}
+            rec.setdefault("peak_entry", entry_abs)
             rec.setdefault("peak_at", now.isoformat())
             peak_iv = rec.get("peak_iv")
             # Derived, never stored: the percent this peak represents against

@@ -5411,3 +5411,62 @@ already blocked on this position so it changed no outcome here, but it
 destroyed the evidence on every other position at once, and a reseed that
 silently discards a session's high is not something to do while the market is
 open. Migrating records needs to preserve what it can or wait for the close.
+
+--------------------------------------------------------------------------------
+85. THE WHOLE LADDER REPLAYED, AND EVERY RULE COSTS MONEY  (2026-09-04)
+--------------------------------------------------------------------------------
+
+The full exit ladder -- stop with its intrinsic guard, ceiling, stall with its
+quiet timer and book-a-gain test, flatten -- run over the engine's own
+one-minute logs, with anything still open valued at expiry against the
+underlying's real close.
+
+    config                            P&L    vs hold  exits  mix
+    TODAY as deployed              +20541      -6675     18  STOP 8, STALL 6, FLATTEN 4
+    NEW (stop -40, ceil .75)       +22511      -4705     14  STOP 3, STALL 6, CEIL 1, FLATTEN 4
+    NEW, no ceiling                +23191      -4025     13  STOP 3, STALL 6, FLATTEN 4
+    flatten only                   +24105      -3111      5  FLATTEN 5
+    hold everything to expiry      +27216          0      0
+
+THE RANKING IS MONOTONIC IN THE NUMBER OF RULES. Every rule removed improves
+the result. The configuration that ran today gave up 6,675 against holding;
+stripping everything except the 15:45 flatten gives up 3,111.
+
+WHERE TODAY'S LOSS WAS AVOIDABLE, in tiers:
+
+    stop -25 -> -40                +1,970   (MU 995/1005 alone is +2,615)
+    and drop the ceiling           +2,650
+    and drop the stall too         +3,564
+
+A UNIT BUG IN THIS REPLAY, CAUGHT ONLY BY AN IMPLAUSIBLE RESULT. The log is
+UTC and every rule is expressed in New York. The first run compared a 15:45
+flatten against UTC timestamps, so it fired at 11:45 ET on everything and
+reported FLATTEN 34 times of 39, with every configuration collapsing to about
++3,000 against a +27,216 hold. That looked like a finding. It was a four-hour
+offset. Fourth unit error in three days -- sections 73, 78, 82 -- and the only
+reason it did not become a recommendation is that 34 flattens is obviously
+wrong. A subtler offset would have shipped.
+
+WHAT THIS DOES AND DOES NOT SUPPORT.
+
+It supports the stop change already made, twice measured now (section 82's
+sweep and this replay agree within noise).
+
+It does NOT support stripping the ladder, however clean the monotonic ranking
+looks, for two reasons already recorded in section 82 and worth repeating
+because the temptation is strong:
+
+  ONE SESSION. Nearly every exit here is 2026-09-04, a day whose names were
+  deep in the money and mostly recovered. The rules lose on a day of recovery
+  by construction. A day of sustained adverse trend inverts the table, and
+  there is no such day in this sample.
+
+  THE HOLD BASELINE IGNORES ASSIGNMENT. It values every position at intrinsic
+  and quietly assumes physical settlement handled itself. The flatten is the
+  one exit these numbers never challenge, and it is the one that exists for
+  the risk the numbers cannot see.
+
+So: the stop is loosened on evidence, and the ceiling and stall stay pending a
+sample that contains a losing trend day. The instinct to strip the ladder
+because it underperforms on recoveries is the same instinct that enabled an
+unswept giveback rule yesterday afternoon.

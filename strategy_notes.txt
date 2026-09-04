@@ -4894,3 +4894,85 @@ FAILS OPEN ON A BAD VALUE. An unparseable time leaves both rules working
 normally rather than silently disabling two exits for a whole session -- the
 opposite of the quote guard in section 73, which failed closed and blocked an
 exit nobody noticed for eleven minutes.
+
+--------------------------------------------------------------------------------
+78. TWO GUARDS, EACH CORRECT, SILENT TOGETHER -- AND A PEAK WHOSE BASELINE MOVED
+    (2026-09-04)
+--------------------------------------------------------------------------------
+
+Both found on a live book during the session, one by a watcher built to look
+for the first and one by that watcher getting the second wrong.
+
+ONE. THE BAND WHERE NOTHING FIRES.
+
+    the stall  stands down while the mark is under entry
+               (STALL_MUST_BOOK_A_GAIN -- section 71, the rule that saved 845
+               dollars on MU the day before)
+    the stop   stands down while intrinsic exceeds entry
+               (STOP_RESPECTS_INTRINSIC -- section 67, it will not sell
+               something that pays at expiry)
+
+AN IN-THE-MONEY SPREAD SATISFIES BOTH AT ONCE. Its mark sits BELOW entry
+because the short leg still carries time premium; its intrinsic sits ABOVE
+entry because it is deep in the money. Every deep ITM debit spread in this
+book lived in that band for most of the session.
+
+MEASURED, MU 995/1005 x5:
+
+    13:00  MU 1005.10   intrinsic 10.00   +1,640 at expiry   mark 6.70
+    13:01  MU 1004.17   intrinsic  9.17
+    13:03  MU 1003.50   intrinsic  8.50
+    13:05  MU 1002.39   intrinsic  7.39     +385 at expiry   mark 5.70
+
+1,255 dollars of EXPIRY value in five minutes, and the engine logged
+"holding (ceiling +44%, stop -25%, stall 3.3pts/5min, flatten 15:45)" on every
+cycle. Nothing was broken. Both guards did exactly what they were written to
+do, and the position drained between them.
+
+WHAT IS NOT TRUE, and it matters for not over-reacting: that 1,255 was never
+realisable. At 13:00 the mark was 6.70 against a 6.72 entry, so selling at the
+top of the intrinsic would have booked -10 dollars, not +1,640. The REALISABLE
+loss over those five minutes was about 500 dollars. The 1,255 is the
+deterioration in the expected outcome, which is the thing worth acting on but
+is not money that was in hand.
+
+TRADING_ORPHAN_INTRINSIC_GIVEBACK is a stop measured on the value AT EXPIRY
+rather than on the mark: it fires when intrinsic falls N dollars from its own
+peak on a structure whose peak was above entry. It deliberately does NOT
+require booking a gain -- the whole case for it is that the mark is under
+water and holding is getting worse.
+
+OFF BY DEFAULT (0), and left off. It is a real exit rule, not a correctness
+fix, it has not been through the harness, and turning it on mid-session on a
+live book is the kind of decision this file exists to argue against. Verified
+firing correctly on all four structure types, at the right sign for credit.
+
+TWO. THE PEAK'S BASELINE MOVED UNDER IT.
+
+The stall stored its peak as a RETURN PERCENT, measured against the entry. The
+entry changes when contracts are added to a structure that is already open.
+
+    SNDK 1700/1720 scaled up, average entry 11.60 -> 13.20
+    the same untouched 20.00 of intrinsic re-read as 72.4% then 51.5%
+    against a stored peak of 72.4, that is a 20.9-point giveback
+
+The stall's threshold is 3.3 points. It would have booked a position that had
+not moved at all -- and this book had 4 SNDK contracts and 15 more contracts
+across MU and QQQ scaled the same way.
+
+The peak is now stored in DOLLARS OF INTRINSIC, which has no baseline to
+shift, and the percent is derived from it against the CURRENT entry so both
+sides of every comparison share a basis. Records written before this are
+reseeded rather than migrated: a stored percent is only as good as the entry
+that produced it, and that entry is exactly what is in doubt.
+
+THE PATTERN, THIRD TIME THIS WEEK. Section 70 was a sign convention correct
+for one structure and inverted for another. Section 76 was an arm that moved
+two parameters while naming one. This is a ratio whose denominator moved. All
+three produce a plausible number in a log line that reads normally, and none
+announces itself.
+
+AND THE WATCHER HAD THE SAME BUG. It was written to catch the first defect and
+reported the second one wrongly for four minutes -- flagging SNDK as giving
+back 20.9 points while it sat untouched at maximum. Writing the check does not
+exempt the check.

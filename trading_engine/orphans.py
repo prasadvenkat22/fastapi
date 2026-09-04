@@ -325,6 +325,44 @@ ORPHAN_FORCE_CLOSE = os.getenv("TRADING_ORPHAN_FORCE_CLOSE", "15:45").strip()
 # move frequently does not come back, and nothing here pretends otherwise.
 ORPHAN_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_HOLD_UNTIL", "").strip()
 
+# THE BAND WHERE NOTHING FIRES, IN DOLLARS OF INTRINSIC GIVEN BACK.
+#
+# Two guards can be correct individually and silent together:
+#
+#   the stall  stands down while the mark is under the entry
+#              (STALL_MUST_BOOK_A_GAIN -- it will not sell at a loss, which is
+#              the rule that saved 845 dollars on MU the previous day)
+#   the stop   stands down while intrinsic still exceeds the entry
+#              (STOP_RESPECTS_INTRINSIC -- it will not sell something that
+#              pays at expiry)
+#
+# An in-the-money spread lives in BOTH conditions at once: its mark sits below
+# entry because the short leg still holds time premium, while its intrinsic
+# sits above entry because it is deep in the money. Between those two lines a
+# position can shed its entire edge with nothing acting.
+#
+# MEASURED LIVE, 2026-09-04. MU 995/1005 x5 held maximum intrinsic at 13:00
+# and drained for five straight minutes:
+#
+#     13:00  MU 1005.10  intrinsic 10.00   worth +1,640 at expiry
+#     13:05  MU 1002.39  intrinsic  7.39   worth   +385 at expiry
+#
+# The engine logged "holding" on every one of those cycles, correctly by its
+# own rules. 1,255 dollars of EXPIRY value went, and the only reason it was
+# seen at all is that a watcher was printing the band.
+#
+# WHAT THIS RULE IS. A stop measured on the value at EXPIRY rather than on the
+# mark. It fires when intrinsic falls this many dollars from its own peak on a
+# structure whose peak was genuinely above entry -- a winner that is turning.
+# It deliberately does NOT require booking a gain: the whole point is that the
+# mark is underwater and holding is getting worse, so it accepts a small loss
+# now against a larger one later.
+#
+# OFF BY DEFAULT (0). It is a real exit rule, not a correctness fix, and it
+# has not been through the harness. Turning it on is a trading decision.
+ORPHAN_INTRINSIC_GIVEBACK = float(
+    os.getenv("TRADING_ORPHAN_INTRINSIC_GIVEBACK", "0") or 0)
+
 STATE_PATH = os.getenv("TRADING_ORPHAN_STATE", "orphan_peaks.json")
 
 
@@ -909,9 +947,49 @@ def review(engine_symbols: "set | None" = None) -> list:
                 stall_pct = ((entry_abs - parts_iv[0]) if st["credit"]
                              else (parts_iv[0] - entry_abs)) / entry_abs * 100.0
 
-            rec = peaks.get(key) or {"peak": stall_pct, "peak_at": now.isoformat()}
-            if stall_pct > rec["peak"]:
-                rec = {"peak": stall_pct, "peak_at": now.isoformat()}
+            # THE PEAK IS STORED IN DOLLARS OF INTRINSIC, NOT AS A RETURN
+            # PERCENT, BECAUSE THE PERCENT'S BASELINE MOVES.
+            #
+            # stall_pct is measured against the ENTRY, and the entry changes
+            # whenever contracts are added to a structure that is already
+            # open. Observed live 2026-09-04: SNDK 1700/1720 was scaled up and
+            # its average entry went 11.60 -> 13.20, so the SAME untouched
+            # 20.00 of intrinsic re-read as 72.4% and then 51.5%. Against a
+            # stored peak of 72.4 that is a 20.9-point giveback, and the stall
+            # would have booked a position that had not moved at all.
+            #
+            # Intrinsic in dollars has no baseline to shift. It changes when
+            # the underlying changes, which is the only thing the stall is
+            # trying to detect. The percent is still derived for the log line
+            # and for the giveback thresholds, but it is derived FROM the
+            # dollar peak against the CURRENT entry, so both sides of the
+            # comparison always use the same basis.
+            iv_now = parts_iv[0] if parts_iv else None
+            rec = peaks.get(key) or {}
+            prev_iv = rec.get("peak_iv")
+            if prev_iv is None and rec.get("peak") is not None and entry_abs:
+                # Migrating a record written before this change: recover the
+                # dollar peak from the stored percent using today's entry. It
+                # is only as good as the entry that produced it, which is the
+                # bug -- so a structure whose entry has since moved gets
+                # reseeded from where it is now rather than trusted.
+                prev_iv = None
+            better = (iv_now is not None
+                      and (prev_iv is None
+                           or (iv_now < prev_iv if st["credit"] else iv_now > prev_iv)))
+            if better:
+                rec = {"peak_iv": iv_now, "peak_at": now.isoformat()}
+            elif not rec:
+                rec = {"peak_iv": iv_now, "peak_at": now.isoformat()}
+            rec.setdefault("peak_at", now.isoformat())
+            peak_iv = rec.get("peak_iv")
+            # Derived, never stored: the percent this peak represents against
+            # the entry as it stands right now.
+            if peak_iv is not None and entry_abs:
+                rec["peak"] = (((entry_abs - peak_iv) if st["credit"]
+                                else (peak_iv - entry_abs)) / entry_abs * 100.0)
+            else:
+                rec["peak"] = rec.get("peak", stall_pct)
             peaks[key] = rec
             quiet = (now - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0
             stop_pct = ORPHAN_CREDIT_STOP_PCT if st["credit"] else ORPHAN_STOP_PCT
@@ -995,6 +1073,15 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "FORCE_CLOSE"
             elif ceiling is not None and ret_pct >= ceiling:
                 reason = "CEILING"
+            elif (zero_dte and past_hold and ORPHAN_INTRINSIC_GIVEBACK > 0
+                  and peak_iv is not None and iv_now is not None
+                  and (peak_iv > entry_abs if not st["credit"] else peak_iv < entry_abs)
+                  and ((peak_iv - iv_now) if not st["credit"]
+                       else (iv_now - peak_iv)) >= ORPHAN_INTRINSIC_GIVEBACK):
+                # See ORPHAN_INTRINSIC_GIVEBACK. No books_a_gain test here on
+                # purpose -- this rule exists precisely for the case where the
+                # mark is under water and the expiry value is walking away.
+                reason = "GIVEBACK"
             elif (zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0
                   and quiet >= STALL_MINUTES and books_a_gain
                   and stall_pct <= rec["peak"] - STALL_GIVEBACK_PCT):

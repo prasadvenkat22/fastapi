@@ -5354,3 +5354,60 @@ The concentration it was reaching for is untouched by its removal: 12,215 of
 13,449 in equity in two next-Friday SNDK spreads, deliberately unmanaged.
 That remains an entry decision, as section 82 concluded about position size
 and section 83 about the floor itself.
+
+--------------------------------------------------------------------------------
+84. WHERE THE 4,304 WENT, AND THE POSITION NO PROFIT RULE COULD SEE
+    (2026-09-04)
+--------------------------------------------------------------------------------
+
+The engine booked NINETEEN closes and -4,304 across them. Manual exits added
+back about 1,840, for -2,464 on the session. Asked what setting would have
+saved it, the per-position answer is unusually concentrated:
+
+    structure          qty     -25%     -40%     -60%  no stop   best gain
+    MU 995/1005C         5     -975    +1640    +1640    +1640     +2,615
+    QQQ 716/719C         5     -640     +250     +250     +250       +890
+    DELL 530/520P        1     -198     -298      -71      -71       +127
+    TOTAL (all 39)            26,383   28,911   28,254   27,428     +2,528
+
+ONLY THREE POSITIONS OF THIRTY-NINE were touched by the stop setting at all,
+and two of them account for the day. MU 995/1005 stopped at -975 and would
+have finished at +1,640 -- a position at full intrinsic, stopped on its mark,
+that recovered. The stop is now -40%. Section 82 measured that independently
+at +376 against holding, where -25% measured -2,656.
+
+QQQ 716/719 IS THE MORE INTERESTING FAILURE, because no stop setting explains
+it on its own. Entry 2.50 on a 3.00-wide spread:
+
+    17:00  mark 2.35  ret  -6.0%  peak +20.0%  intrinsic 3.00  <- MAXIMUM
+    17:04  mark 2.12  ret -15.2%  peak +20.0%  intrinsic 2.52
+    17:09  mark 2.02  ret -19.2%  peak +20.0%  intrinsic 2.29
+    17:12  mark 1.91  ret -23.6%  peak  -9.2%  intrinsic 2.08
+
+    the mark exceeded the 2.50 entry in 0 of 23 observations
+
+IT SAT AT MAXIMUM PAYOFF AND NO PROFIT RULE COULD ACT ON IT. The stall is
+gated by STALL_MUST_BOOK_A_GAIN, and there was never a gain to book on the
+mark. The ceiling needs a mark it could not reach. Meanwhile the STOP is also
+mark-based and had no such difficulty.
+
+THAT IS THE ASYMMETRY WORTH NAMING: on a position at full intrinsic whose mark
+sits under entry, every rule that could take a profit is blind and the only
+rule that can act books a loss. The guards are individually right -- section
+71 exists because selling under entry cost 845 dollars -- and together they
+leave a position that can only be exited downward.
+
+THE ENTRY IS WHAT MADE IT SO. 2.50 for a 3.00-wide spread is 83% of width:
+0.50 of upside against 2.50 of risk, five to one against, with a short leg
+near the money carrying enough time premium to keep the mark under the entry
+all session. No exit rule recovers from that geometry. It is the third time in
+two days a question about exits has resolved to an entry decision -- section
+82 on position size, section 83 on concentration, this on width paid.
+
+AND THE PEAK RESET AT 17:10 WAS MINE. Deploying the peak-in-dollars change
+(section 78) reseeded every open structure's peak from its then-current
+intrinsic, wiping +20.0% to -9.2% across the book mid-session. The stall was
+already blocked on this position so it changed no outcome here, but it
+destroyed the evidence on every other position at once, and a reseed that
+silently discards a session's high is not something to do while the market is
+open. Migrating records needs to preserve what it can or wait for the close.

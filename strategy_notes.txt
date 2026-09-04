@@ -5281,3 +5281,57 @@ So the conclusion is narrow: on the sessions observed, the discretionary exits
 cost money and the structural one (flatten) did not. It is not evidence that
 exits are unnecessary in general, and one more week of logs will say more than
 any argument here.
+
+--------------------------------------------------------------------------------
+83. AN ACCOUNT FLOOR, AND WHY THE NUMBER ASKED FOR WAS ALREADY BEHIND
+    (2026-09-04)
+--------------------------------------------------------------------------------
+
+Asked for a rule that closes everything if the account falls from 17,000 to
+16,500. Two problems with the number, and one with where the risk actually
+was.
+
+EQUITY WAS ALREADY 13,449 WHEN THE RULE WAS ASKED FOR. The 17,284 figure was
+that morning; the session had taken it to 13,374 by 15:12. A 16,500 floor
+would have fired on the deploying cycle and liquidated the book. Any floor has
+to be set from where the account IS, not from where it was.
+
+THE LADDER HAD NO ACCOUNT-LEVEL QUESTION AT ALL. Every rule in this file asks
+"is THIS structure working". None asks "is the ACCOUNT still solvent". The
+difference showed that day: equity fell 3,900 while every individual position
+behaved inside its own rules.
+
+TRADING_ACCOUNT_FLOOR closes everything when equity reaches it. It is the only
+rule here that overrides ORPHAN_ACT_EXPIRY_DAY_ONLY, and that is deliberate:
+positions with a week to run are normally left alone because they have time to
+recover, which assumes there is an account left to recover into. When the
+floor is hit the weeklies are usually where the exposure is -- that afternoon,
+12,215 of 13,449 in equity sat in two next-Friday SNDK spreads.
+
+IT IS A CIRCUIT BREAKER, NOT A STOP. A stop asks whether a trade has failed.
+This asks whether the account can survive being wrong again. It will sometimes
+flatten a book that would have recovered; section 82 is the measurement of
+what per-position stops cost doing exactly that, and this accepts that cost
+knowingly in exchange for a floor.
+
+FAILS OPEN ON AN UNREADABLE EQUITY. A zero or missing total_equity is not
+treated as a breach. Failing open matters more here than anywhere else in the
+file: every other guard failing wrong costs one position, this one failing
+wrong liquidates the book on a broker hiccup.
+
+WHY 12,000 AND NOT 3% BELOW SPOT EQUITY. The instinct was a 500 dollar band on
+17,000, about 3%. On this book 3% is inside the noise: two SNDK 100-wide
+spreads move roughly 300 dollars of equity per point of SNDK, so a 400 dollar
+band is a 1.5 point move in one stock. The floor has to clear the
+concentration or it fires on an ordinary wobble -- the same lesson as section
+80, where a threshold set just above the noise floor tripped on the first
+larger wiggle.
+
+12,000 is about 1,450 below, roughly a 5 point adverse move in SNDK.
+
+THE REAL FINDING IS NOT THE RULE. 91% of the account sat in one underlying, on
+positions explicitly excluded from management an hour earlier. No exit rule
+addresses that, and the floor only bounds the damage after it happens.
+Concentration is an ENTRY decision, the same way section 82 concluded that
+maximum loss per position is a sizing decision. Both questions were asked as
+though an exit rule could answer them.

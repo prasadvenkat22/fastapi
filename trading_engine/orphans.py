@@ -94,6 +94,54 @@ MANAGE_UNDERLYING = {
 # correct for every position rather than a list that has to be maintained.
 ORPHAN_TODAY_ONLY = os.getenv("TRADING_ORPHAN_TODAY_ONLY", "true").lower() == "true"
 
+# ACT ON NOTHING THAT IS NOT EXPIRING TODAY.
+#
+# ORPHAN_TODAY_ONLY above already scopes the STOP, the STALL and the FLATTEN
+# to expiry day. Two rules deliberately stayed outside that scope: the CEILING,
+# on the argument that 90% of maximum has the same tiny upside left whenever it
+# expires, and the LATER-STALL, which exists specifically for multi-day
+# positions.
+#
+# That argument is sound and it is still not what is wanted here. A position
+# with a week to run is a DIFFERENT TRADE: it has time to recover from a move
+# that would be terminal on expiry day, its mark is dominated by time premium
+# that has not begun to decay, and the later-stall cannot even arm until the
+# mark shows a gain -- which on a deep ITM weekly will not happen for days.
+# Acting on it early converts a thesis with a week left into a same-day
+# decision.
+#
+# Observed 2026-09-04: a SNDK 1600/1700 expiring the following Friday sat at
+# full intrinsic (+3,825 at expiry) marking -0.7%, with a ceiling at 43% that
+# could fire on a mark the position had no reason to reach yet.
+#
+# With this on, anything not expiring today is REPORTED and never acted on.
+ORPHAN_ACT_EXPIRY_DAY_ONLY = os.getenv(
+    "TRADING_ORPHAN_ACT_EXPIRY_DAY_ONLY", "false").lower() == "true"
+
+# ACCOUNT FLOOR: FLATTEN EVERYTHING WHEN EQUITY FALLS THIS LOW.
+#
+# The exit ladder is per-position. Every rule above asks "is THIS structure
+# working", and none of them asks "is the ACCOUNT still solvent". Those are
+# different questions, and on 2026-09-04 the difference was visible: equity
+# went 17,284 to 13,374 in a session while every individual position was
+# behaving within its own rules.
+#
+# This is the only rule in the file that overrides everything else --
+# ORPHAN_ACT_EXPIRY_DAY_ONLY included. A position with a week to run is
+# normally left alone precisely because it has time to recover, but that
+# argument assumes there is an account left to recover into. When the floor is
+# hit, the weeklies are usually where the exposure actually is: that afternoon
+# 12,215 of 13,449 in equity sat in two next-Friday SNDK spreads.
+#
+# IT IS A CIRCUIT BREAKER, NOT A STOP, and the distinction matters. A stop
+# asks whether a trade has failed. This asks whether the account can survive
+# being wrong again. It will sometimes flatten a book that would have
+# recovered -- that is the price of the guarantee, and section 82 measured
+# what per-position stops cost when they do the same thing.
+#
+# 0 disables it, which is the default.
+ACCOUNT_FLOOR = float(os.getenv("TRADING_ACCOUNT_FLOOR", "0") or 0)
+
 ORPHAN_TAKE_PROFIT_PCT = float(os.getenv("TRADING_ORPHAN_TAKE_PROFIT", "50"))
 ORPHAN_STOP_PCT = float(os.getenv("TRADING_ORPHAN_STOP_PCT", "-25"))
 # Credit gets its own, for the reason in the docstring: -25% of a collected
@@ -974,6 +1022,26 @@ def review(engine_symbols: "set | None" = None) -> list:
                 "credit": st["credit"], "opened": st["opened"],
             }
 
+        # THE ACCOUNT-LEVEL CHECK, ONCE PER PASS AND BEFORE ANY POSITION IS
+        # LOOKED AT. See ACCOUNT_FLOOR.
+        floor_breached = False
+        if ACCOUNT_FLOOR > 0:
+            try:
+                snap = tradier_orders.account_snapshot() or {}
+                equity = float(snap.get("total_equity") or 0.0)
+                # A zero or unreadable equity is NOT a breach. Failing open
+                # here matters more than anywhere else in this file: a broker
+                # hiccup must not liquidate the book.
+                if equity > 0 and equity <= ACCOUNT_FLOOR:
+                    floor_breached = True
+                    logger.error(
+                        "ACCOUNT FLOOR BREACHED: equity %.2f is at or below %.2f — "
+                        "flattening every position regardless of expiry.",
+                        equity, ACCOUNT_FLOOR,
+                    )
+            except Exception:
+                logger.exception("Could not read equity — floor check skipped this pass.")
+
         # ONE broker call for the whole pass, not one per structure. See the
         # in_flight check below.
         try:
@@ -1070,7 +1138,8 @@ def review(engine_symbols: "set | None" = None) -> list:
             # same tiny upside left whenever it expires -- and holding the full
             # width of risk for the last few cents is WORSE over two days than
             # over two hours, not better. So the ceiling applies at any expiry.
-            zero_dte = (not ORPHAN_TODAY_ONLY) or _expires_today(st)
+            expires_today = _expires_today(st)
+            zero_dte = (not ORPHAN_TODAY_ONLY) or expires_today
 
             # Intrinsic is computed once here: the stop guard reads it, and so
             # does the log line below.
@@ -1142,7 +1211,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                 )
 
             reason = None
-            if zero_dte and ret_pct <= stop_pct and not past_hold:
+            if floor_breached:
+                # Ahead of every other rule, and deliberately blind to expiry,
+                # the hold window and the intrinsic guards. Those all decide
+                # whether a POSITION is working; this one has already decided
+                # the account is not.
+                reason = "ACCOUNT_FLOOR"
+            elif zero_dte and ret_pct <= stop_pct and not past_hold:
                 # AHEAD OF THE INTRINSIC GUARD, because this holds for a
                 # different reason. That guard declines to stop a position
                 # that still pays at expiry; this one declines to trust a
@@ -1214,6 +1289,8 @@ def review(engine_symbols: "set | None" = None) -> list:
                 )
             manageable = (MANAGE_ORPHANS
                           and not in_flight
+                          and (floor_breached or expires_today
+                               or not ORPHAN_ACT_EXPIRY_DAY_ONLY)
                           and (not st.get("inferred") or MANAGE_INFERRED)
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)
                           and _quotes_tradeable(

@@ -373,6 +373,44 @@ ORPHAN_FORCE_CLOSE = os.getenv("TRADING_ORPHAN_FORCE_CLOSE", "15:45").strip()
 # move frequently does not come back, and nothing here pretends otherwise.
 ORPHAN_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_HOLD_UNTIL", "").strip()
 
+# THE SLOW STOP: A LEVEL THAT HAS TO HOLD, NOT A LEVEL THAT IS TOUCHED.
+#
+# ORPHAN_STOP_PCT is a FAST stop -- it fires on the first cycle through its
+# level, which is what a gap needs. It is set loose (-40%) because anything
+# tighter fires on the extrinsic swing an in-the-money spread carries all day
+# (section 86). That leaves a hole: a position that erodes steadily without
+# ever reaching -40% is never caught at all.
+#
+# This is the other half. A shallower level that must hold CONTINUOUSLY, with
+# the clock reset the instant the mark recovers above it. Sustained weakness
+# is a different signal from a touch: a spread that sits 20% underwater for
+# half an hour has had every chance to come back and has not.
+#
+# MEASURED over 39 structure-days, hold-to-expiry = +27,195:
+#
+#     fast    slow            fires helps      P&L    vs hold
+#     -40%    none                4     3   +28735     +1540
+#     none    -20% / 30min        3     3   +28636     +1441
+#     -40%    -20% / 30min        5     4   +29133     +1938   <- deployed
+#     -10%    instantaneous      23     6   +14636    -12559
+#
+# The last row is the same idea WITHOUT the duration test, and it is the worst
+# rule measured in this file. The duration filter is the whole difference:
+# -10% touched costs 12,559, -10% held for an hour gains 996.
+#
+# IT DELIBERATELY DOES NOT RESPECT THE INTRINSIC GUARD, and that is the one
+# uncomfortable part. With STOP_RESPECTS_INTRINSIC applied it never fires at
+# all -- every measured configuration collapses back to the fast stop alone.
+# Its entire value comes from closing a position that still pays at expiry on
+# paper but has been grinding for half an hour, which is exactly the case the
+# guard was written to protect. Both cannot be right, and on this evidence the
+# grind is real: STX 850/840 exited at -180 against -578 held.
+#
+# THAT EVIDENCE IS ONE TRADE. Five fires, four helped, one of them SLOW.
+ORPHAN_SLOW_STOP_PCT = float(os.getenv("TRADING_ORPHAN_SLOW_STOP_PCT", "0") or 0)
+ORPHAN_SLOW_STOP_MINUTES = float(
+    os.getenv("TRADING_ORPHAN_SLOW_STOP_MINUTES", "30") or 30)
+
 # THE BAND WHERE NOTHING FIRES, IN DOLLARS OF INTRINSIC GIVEN BACK.
 #
 # Two guards can be correct individually and silent together:
@@ -1227,6 +1265,30 @@ def review(engine_symbols: "set | None" = None) -> list:
                     gb_need, gb_held_min, ORPHAN_GIVEBACK_CONFIRM_MIN,
                 )
 
+            # THE SLOW STOP'S CLOCK. Stamped when the mark first sits at or
+            # below the level, cleared the moment it recovers, so the timer
+            # measures one CONTINUOUS stretch rather than a total across the
+            # session. A position that dips, recovers and dips again starts
+            # over -- which is the point, since that pattern is chop.
+            slow_held = False
+            if ORPHAN_SLOW_STOP_PCT < 0 and zero_dte and past_hold:
+                if ret_pct <= ORPHAN_SLOW_STOP_PCT:
+                    rec.setdefault("slow_since", now.isoformat())
+                    held = (now - datetime.fromisoformat(
+                        rec["slow_since"])).total_seconds() / 60.0
+                    slow_held = held >= ORPHAN_SLOW_STOP_MINUTES
+                    if not slow_held:
+                        logger.info(
+                            "ORPHAN %s %.0f/%.0f has been %+.1f%% for %.0f of the %.0f "
+                            "minutes the slow stop needs — watching.",
+                            st["root"], st["long_strike"], st["short_strike"],
+                            ret_pct, held, ORPHAN_SLOW_STOP_MINUTES,
+                        )
+                else:
+                    rec.pop("slow_since", None)
+            else:
+                rec.pop("slow_since", None)
+
             reason = None
             if floor_breached:
                 # Ahead of every other rule, and deliberately blind to expiry,
@@ -1256,6 +1318,11 @@ def review(engine_symbols: "set | None" = None) -> list:
                 )
             elif zero_dte and ret_pct <= stop_pct:
                 reason = "STOP_LOSS"
+            elif slow_held:
+                # Below the fast stop's level in the ladder: a grind is less
+                # urgent than a gap, and if the fast stop also applies it
+                # should be the one that names the exit.
+                reason = "SLOW_STOP"
             elif zero_dte and _past_force_close():
                 # Time beats everything. These settle in shares, not cash.
                 reason = "FORCE_CLOSE"

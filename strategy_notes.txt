@@ -5541,3 +5541,65 @@ premium in the short leg, so a percentage stop measured on that mark fires on
 positions that are not in trouble. -25% of entry was inside the range that
 extrinsic alone can move these marks. -40% is outside it. That is the whole
 mechanism, and it is why the fix is a number and not a new rule.
+
+--------------------------------------------------------------------------------
+87. A LEVEL THAT HAS TO HOLD: THE FIRST NEW RULE THAT MEASURES POSITIVE
+    (2026-09-04)
+--------------------------------------------------------------------------------
+
+Every peak-based exit tried today lost money -- giveback at 15% of width
+(-1,385 live), trailing 20% of peak profit (-17,903), trailing 5% (-21,142).
+All four failed the same way: they fire on a position's ordinary breathing.
+
+The proposal that worked came with a duration counter attached: a level that
+must hold CONTINUOUSLY, with the clock reset the moment the mark recovers.
+
+    DOWNSIDE, 39 structure-days, hold-to-expiry = +27,195
+
+    level    sustained  fires  helps        P&L     vs hold
+    -10%     0 min         23      6     +14636     -12559
+    -10%     30 min         6      3     +27340       +145
+    -10%     60 min         3      2     +28191       +996
+    -20%     30 min         3      3     +28636      +1441
+    -40%     0 min          4      3     +28735      +1540   (deployed already)
+
+THE DURATION TEST IS THE WHOLE DIFFERENCE. The same -10% level costs 12,559
+when it fires on a touch and gains 996 when it must hold for an hour -- a
+13,555 swing from one condition. It is the same lesson as section 80's
+confirmation timer, arrived at from the other direction and with a much
+longer clock.
+
+FAST AND SLOW ANSWER DIFFERENT QUESTIONS, so both earn their place:
+
+    fast    slow            fires helps      P&L    vs hold  mix
+    -40%    none                4     3   +28735     +1540   FAST 4
+    none    -20% / 30min        3     3   +28636     +1441   SLOW 3
+    -40%    -20% / 30min        5     4   +29133     +1938   FAST 4, SLOW 1
+
+The fast level catches a gap. The slow one catches erosion that never reaches
+it -- STX 850/840, which ground down all morning and exited at -180 against
+-578 held. That is the same position the loosened fast stop had cost 358 on
+in section 86, recovered.
+
+THE UPSIDE HALF DOES NOT WORK, at any setting:
+
+    of max   stalled    fires  helps        P&L     vs hold
+    75%      0 min          2      0     +26515       -680
+    75%      30 min         0      0     +27195         +0
+    90%      0 min          1      0     +27175        -20
+    95%      30 min         0      0     +27195         +0
+
+Zero helps everywhere, and the configurations that break even are the ones
+that never fire. On an in-the-money spread the MARK does not reach 75% of
+maximum profit until expiry is close, because the short leg's time premium
+holds it down -- the same wall the ceiling keeps hitting (section 85).
+
+THE UNCOMFORTABLE PART, recorded because it should not be buried. The slow
+stop deliberately does NOT respect STOP_RESPECTS_INTRINSIC. With the guard
+applied it never fires at all -- every configuration collapses back to the
+fast stop alone at +1,545. Its entire value comes from closing a position
+that still pays at expiry on paper but has been grinding for half an hour,
+which is precisely the case the guard exists to protect. Both cannot be
+right. On this evidence the grind is real, and the evidence is ONE TRADE.
+
+Deployed at -20% held for 30 minutes, alongside the -40% fast stop.

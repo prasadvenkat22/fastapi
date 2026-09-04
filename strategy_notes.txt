@@ -5335,3 +5335,22 @@ addresses that, and the floor only bounds the damage after it happens.
 Concentration is an ENTRY decision, the same way section 82 concluded that
 maximum loss per position is a sizing decision. Both questions were asked as
 though an exit rule could answer them.
+
+ADDENDUM TO 83, SAME EVENING: WITHDRAWN BEFORE IT EVER RAN.
+
+TRADING_ACCOUNT_FLOOR was set to 12,000 and removed within the hour, at
+request, without having fired. The code remains and defaults to 0, so nothing
+can trigger it.
+
+Recording it because the reasoning survives the withdrawal. The gap is real --
+no rule in this ladder asks whether the account is solvent, and equity fell
+3,900 in a session while every position behaved inside its own rules. What was
+wrong was the timing rather than the idea: a circuit breaker that liquidates
+an entire book is the largest single action anything here can take, and it was
+built, sized and deployed inside twenty minutes on the evening of a losing
+day. The right order is to decide the number when not looking at a drawdown.
+
+The concentration it was reaching for is untouched by its removal: 12,215 of
+13,449 in equity in two next-Friday SNDK spreads, deliberately unmanaged.
+That remains an entry decision, as section 82 concluded about position size
+and section 83 about the floor itself.

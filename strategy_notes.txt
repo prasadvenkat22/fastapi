@@ -5470,3 +5470,74 @@ So: the stop is loosened on evidence, and the ceiling and stall stay pending a
 sample that contains a losing trend day. The instinct to strip the ladder
 because it underperforms on recoveries is the same instinct that enabled an
 unswept giveback rule yesterday afternoon.
+
+--------------------------------------------------------------------------------
+86. WHY MU WAS STOPPED, AND THE ANSWER THAT WAS NOT A NEW RULE  (2026-09-04)
+--------------------------------------------------------------------------------
+
+The question: MU and SNDK were always going to come back, so why close early
+and take the loss -- what rule avoids it?
+
+WHAT ACTUALLY HAPPENED TO MU 995/1005 x5, entry 6.72:
+
+    17:08:08  mark 5.15  ret -23.4%  intrinsic 6.22   <- intrinsic drops under
+                                                         entry, stop un-suppresses
+    17:09:09  mark 4.77  ret -29.0%  intrinsic 4.99   <- STOP at -25%
+
+That is 13:09 ET. TWO HOURS AND THIRTY-SIX MINUTES before the flatten, on a
+position needing MU to move 1.73 points -- 0.17% of spot -- to be back above
+water. It moved, and was at full intrinsic by 15:00.
+
+THE OBVIOUS FIX WAS TESTED AND IS WRONG. If a stop firing at 13:09 is too
+early, delay it:
+
+    -40, stop only after 13:00     +20710      -6506    STOP 0
+    -40, stop only after 14:00     +20710      -6506    STOP 0
+    -40, stop only after 15:00     +20710      -6506    STOP 0
+    no stop at all                 +20710      -6506    STOP 0
+    -40, any time                  +22511      -4705    STOP 3
+
+Every delay collapses to the same number as having no stop, and all of them
+are 1,800 WORSE than simply letting the stop work at -40%. The three stops
+that fire at -40% all fire in the MORNING and all three are good. A
+time-scaled stop removes exactly the stops that were earning their keep.
+
+THE ANSWER IS THE THRESHOLD, NOT THE CLOCK. MU's mark bottomed at -29.0%. At
+-40% the stop never fires on it at all, and the position rides to expiry:
+
+    structure           qty       OLD  why        NEW  why    difference
+    MU 995/1005C          5      -975 STOP      +1640 expiry      +2615
+    QQQ 716/719C          5      -640 STOP       +230 expiry       +870
+    DELL 530/520P         1      -183 STOP        -21 expiry       +162
+    MU 1010/1000C         1      -120 STOP       -160 STOP          -40
+    WDC 470/460P          1      -268 STOP       -392 STOP         -124
+    STX 850/840P          1      -220 STOP       -578 expiry       -358
+    MU 1010/1000P         1      -213 STOP       -688 expiry       -475
+    SNDK 1500/1560C       1     +2816 expiry    +2136 CEILING      -680
+    TOTAL (39)                 +20541          +22511            +1970
+
+IT IS NOT FREE, and the losses are the honest part. STX and MU 1010/1000 P
+keep falling once the stop stops catching them, for -358 and -475. A looser
+stop buys the recoveries and pays for the genuine failures. On this data the
+trade is +1,970.
+
+AND THE CEILING CHANGE WAS A MISTAKE. 0.75, set at request that afternoon,
+fires on SNDK 1500/1560 and books +2,136 against the +2,816 it reached at
+expiry. At 0.90 it never fires on this data at all:
+
+    -40 with ceiling 0.90          +23191      -4025
+    -40 with ceiling 0.85          +23191      -4025
+    -40, no ceiling                +23191      -4025
+    -40 with ceiling 0.75          +22511      -4705    <- what was deployed
+    -50 with ceiling 0.90          +23086      -4130
+
+Reverted to 0.90. Between 0.85 and no ceiling at all the result is identical,
+which says the ceiling is inert at any sensible level rather than useful --
+one more thing to measure when the sample contains a losing trend day.
+
+WHAT THE HIGH-IV INTUITION WAS ACTUALLY POINTING AT. Not implied volatility as
+such: the mark of an in-the-money spread is held BELOW its entry by the time
+premium in the short leg, so a percentage stop measured on that mark fires on
+positions that are not in trouble. -25% of entry was inside the range that
+extrinsic alone can move these marks. -40% is outside it. That is the whole
+mechanism, and it is why the fix is a number and not a new rule.

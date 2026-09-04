@@ -27,7 +27,7 @@ from sweep_giveback import load, pnl, expiry_value
 
 
 def run_ladder(rows, stop_pct, ceiling_frac, stall_pts, stall_min,
-               must_book_gain, flatten_at, hold_until):
+               must_book_gain, flatten_at, hold_until, stop_from=None):
     entry = rows[0]["entry"]
     credit = rows[0]["credit"]
     width = rows[0]["width"]
@@ -42,8 +42,14 @@ def run_ladder(rows, stop_pct, ceiling_frac, stall_pts, stall_min,
         ret = ((entry - r["value"]) if credit else (r["value"] - entry)) / entry * 100.0
         if peak_iv is None or (i < peak_iv if credit else i > peak_iv):
             peak_iv, peak_at = i, r["ts"]
-        # stop, respecting intrinsic
-        if past_hold and ret <= stop_pct:
+        # stop, respecting intrinsic AND the time it is allowed to act.
+        #
+        # stop_from is the whole point of this variant: a 0DTE stop that fires
+        # at 13:09 is answering a question it cannot yet know. MU 995/1005
+        # stopped there needing 1.73 points -- 0.17% of spot -- to recover,
+        # with 2h36m left, and recovered.
+        stop_live = past_hold and (stop_from is None or t >= stop_from)
+        if stop_live and ret <= stop_pct:
             pays = (i < entry) if credit else (i > entry)
             if not pays:
                 return r["value"], idx, "STOP"
@@ -67,19 +73,18 @@ def run_ladder(rows, stop_pct, ceiling_frac, stall_pts, stall_min,
 
 def main():
     series = {k: v for k, v in load(sys.argv[1]).items() if len(v) >= 10}
+    base = dict(ceiling_frac=0.75, stall_pts=3.3, stall_min=5,
+                must_book_gain=True, flatten_at=dtime(15, 45),
+                hold_until=dtime(10, 0))
     configs = [
-        ("TODAY as deployed", dict(stop_pct=-25, ceiling_frac=0.90, stall_pts=3.3,
-                                   stall_min=5, must_book_gain=True,
-                                   flatten_at=dtime(15, 45), hold_until=dtime(10, 0))),
-        ("NEW (stop -40, ceil .75)", dict(stop_pct=-40, ceiling_frac=0.75, stall_pts=3.3,
-                                          stall_min=5, must_book_gain=True,
-                                          flatten_at=dtime(15, 45), hold_until=dtime(10, 0))),
-        ("NEW, no ceiling", dict(stop_pct=-40, ceiling_frac=0.0, stall_pts=3.3,
-                                 stall_min=5, must_book_gain=True,
-                                 flatten_at=dtime(15, 45), hold_until=dtime(10, 0))),
-        ("flatten only", dict(stop_pct=-999, ceiling_frac=0.0, stall_pts=0,
-                              stall_min=0, must_book_gain=True,
-                              flatten_at=dtime(15, 45), hold_until=dtime(10, 0))),
+        ("TODAY (-25, ceil .90, any time)",
+         dict(base, stop_pct=-25, ceiling_frac=0.90)),
+        ("DEPLOYED (-40, any time)", dict(base, stop_pct=-40)),
+        ("-40 with ceiling 0.90", dict(base, stop_pct=-40, ceiling_frac=0.90)),
+        ("-40 with ceiling 0.85", dict(base, stop_pct=-40, ceiling_frac=0.85)),
+        ("-40, no ceiling", dict(base, stop_pct=-40, ceiling_frac=0.0)),
+        ("-50 with ceiling 0.90", dict(base, stop_pct=-50, ceiling_frac=0.90)),
+        ("no stop at all", dict(base, stop_pct=-999)),
     ]
     print("  %-26s %10s %10s %8s %s" % ("config", "P&L", "vs hold", "exits", "mix"))
     hold_total = 0.0

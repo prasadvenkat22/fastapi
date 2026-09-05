@@ -237,3 +237,72 @@ Problem: 401 "Incorrect email or password" for an account you know exists
        password set, on purpose: distinguishing them would let anyone test
        which emails are registered. Also check the email case -- it is
        matched exactly and stored lowercase.
+
+
+================================================================================
+LIVE EXIT CONFIGURATION -- as deployed 2026-09-05
+================================================================================
+
+Three separate rule sets run against three different books. They do not share
+settings, and the reason is measured in each case.
+
+ENGINE-OPENED QQQ 0DTE  (trading_engine/nodes.py + playbook.py)
+
+  MORNING_DRIFT     10:15-12:30  ITM  10-wide  CLEAN tier only
+                    stop -25%, rides to close otherwise
+                    book at +55% of premium, then a 30-minute break
+                    one fill (slicing measured WORSE on a debit book)
+  AFTERNOON_CREDIT  14:00-15:00  4-wide
+                    3 tranches 15 minutes apart (measured -9.00 -> -3.22/tr)
+
+  Placement is measured: ITM -517, ATM -1358, OTM -1129 over 240 trades each.
+  Bear put spreads are refused: -15.52/tr at 25% win, so the window is
+  long-only and DIRECTION_NOT_ALLOWED in the log is that rule, not a fault.
+
+ADOPTED / MANUAL 0DTE  (trading_engine/orphans.py)
+
+  fast stop   entry x 0.60, confirmed over 2 minutes,
+              suppressed while intrinsic still exceeds entry
+  slow stop   entry x 0.80, held 30 minutes CONTINUOUSLY, clock resets the
+              moment the mark recovers. Does NOT respect the intrinsic guard.
+  stall       3.3 points of intrinsic return given back, 5 minutes quiet,
+              and it must book a gain
+  ceiling     entry + 0.80 x (width - entry)
+  flatten     15:45, exempt from the quote-width guard
+  hold-until  10:00 -- no loss-taking before it
+
+  Every threshold is a percentage of ENTRY, not of width. The same rule
+  therefore behaves very differently by how much of the width was paid: at
+  35% of width a position risks 3.50 to make 6.50, at 83% it risks 2.50 to
+  make 0.50 and its mark cannot exceed entry until expiry.
+
+LATER EXPIRIES / WEEKLIES  (same file, expiry-day-only)
+
+  ONE rule: sell when the mark reaches 90% of WIDTH.
+  No stop, no stall, no ceiling, no flatten. Downside deliberately unguarded.
+
+WHAT TO CHECK IF SOMETHING LOOKS WRONG
+
+  "[observation only]" on an ORPHAN line   the short leg is quoted too wide;
+                                           the flatten can still act
+  action=HALTED_DAILY_LOSS                 the 6% budget is spent. NOTE: it
+                                           counts MANUAL losses too, so an
+                                           active manual day can halt the
+                                           engine's own trading
+  action=DIRECTION_NOT_ALLOWED             a bearish setup fired and the
+                                           window is long-only, by measurement
+  macro=BAD                                gates bullish tiers only; bear and
+                                           credit tiers are not blocked by it
+
+CONFIDENCE, HONESTLY
+
+  Measured over 60 sessions: placement, window selection, entry slicing per
+  book, the take-profit band (50-75%).
+  Measured over ONE session: every orphan stop setting. 09-03 produced zero
+  fires so the both-halves test was unavailable, not passed.
+  Measured on one TRADE: the slow stop.
+  Not measured at all: the weekly 90% target, the 30-minute win cooldown.
+
+  And the engine's harness baseline (-19.94/day over 60 sessions) disagrees
+  with its live record (+600 over 14 trades). That gap is unexplained and is
+  the largest open question in the system.

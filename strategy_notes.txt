@@ -5899,3 +5899,88 @@ CONCURRENT positions. The engine holds one position at a time by construction
 are three fills of ONE position, not three independent trades. Opening several
 at once is a different change to the position model, and nothing here measures
 whether it would help.
+
+--------------------------------------------------------------------------------
+93. THE ENGINE DID NOT KNOW ABOUT MARKET HOLIDAYS  (2026-09-05)
+--------------------------------------------------------------------------------
+
+_within_market_hours read the weekday and the clock and nothing else:
+
+    if now.weekday() >= 5: return False
+    return MARKET_OPEN <= (now.hour, now.minute) < MARKET_CLOSE
+
+Right four days in five, wrong on the ten or so sessions a year the exchange
+is shut or closes early. On those the engine would run all 390 cycles against
+the PREVIOUS session's stale quotes, compute every indicator from them, and be
+free to open a position on the strength of it.
+
+FOUND TWO DAYS BEFORE LABOR DAY, and not by the system -- it was raised in
+conversation. Nothing in the codebase mentioned a holiday anywhere: no
+calendar, no list, no check.
+
+trading_engine/market_calendar.py lists the 2026 closures and the 13:00 early
+closes. DATES, not rules. "Third Monday in February" is shorter and hides the
+observed-date shifts -- Independence Day 2026 falls on a Saturday and the
+market shuts on Friday the 3rd -- and a list can be checked against the
+exchange calendar by eye where a rule cannot.
+
+Verified: Fri 09-04 open, Mon 09-07 skipped, Tue 09-08 open, Black Friday open
+at 12:00 and skipped at 14:00.
+
+THE EARLY CLOSE IS THE SHARPER EDGE, and it is only half fixed. On a 13:00
+close the cycle now stops at 13:00 -- but ORPHAN_FORCE_CLOSE is the fixed
+string "15:45", so on those three days a year the flatten NEVER RUNS and every
+0DTE position goes to expiry unmanaged, which is the exact scenario the
+flatten exists to prevent. close_time_for() is in place for a caller to use;
+the flatten should become an offset from the session close rather than a wall
+clock time. Not done here, and the next early close is 2026-11-27.
+
+--------------------------------------------------------------------------------
+94. THE HARNESS AND THE LIVE ENGINE DISAGREE ABOUT WHEN TO TRADE  (2026-09-05)
+--------------------------------------------------------------------------------
+
+The harness says -19.94/day over 60 sessions. The live engine booked +600.15
+over 14 trades. Both claim to describe the same strategy.
+
+Replayed day by day against the sessions the engine actually traded:
+
+    session      harness   tr       live   difference
+    2026-08-19     +0.00    0    +67.33      -67.33
+    2026-08-20     +0.00    0    +62.43      -62.43
+    2026-08-21     +0.00    0    +71.39      -71.39
+    2026-08-25     +0.00    0    -23.00      +23.00
+    2026-08-27    -17.60    2   -139.00     +121.40
+    2026-08-28   +200.40    2   -106.00     +306.40
+    2026-09-02     +0.00    0   +189.00     -189.00
+    2026-09-03     +0.00    0   +478.00     -478.00
+    TOTAL        +182.80        +600.15
+
+ON SEVEN OF NINE DAYS THE HARNESS TAKES NO TRADE AT ALL where the live engine
+traded. It is not a P&L disagreement, it is a DECISION disagreement.
+
+IT IS NOT THE TIER RESTRICTION. Every live MORNING_DRIFT trade is CLEAN and
+CLEAN is what the window accepts today. Nor is it the trade RATE: the harness
+runs 0.95 a day and live ran 1.27. Similar frequency, different days.
+
+SO THE HARNESS DOES NOT REPRODUCE THE INDICATOR STATE THE ENGINE SAW. Both
+build from 5-minute bars with a 390-bar warmup, but the harness fetches them
+now, in bulk, from a feed that revises, while the engine read them live. On
+09-03 the engine found a CLEAN setup worth +478 and the replay of that session
+finds nothing at all.
+
+WHAT THIS COSTS: every entry parameter in this file was tuned on the harness.
+If it cannot reproduce which sessions produce a setup, then window times, tier
+definitions, placement and width were all measured on a population of trades
+the live engine would not have taken. Exit parameters are less exposed --
+they act on a position once it exists -- but entry work is suspect until this
+is understood.
+
+FIRST VERSION OF THIS COMPARISON WAS VOID and said the harness took zero
+trades in all 60 sessions. _run_arm was called without _patch_engine(), so the
+mock broker and chain pricing were never installed. +0.00 across 60 sessions
+looked like a finding for about a minute.
+
+NOT FIXED. Characterised only. The next step is to log the engine's own
+indicator state per cycle and diff it against _session_state for the same
+bar -- the engine already logs macd/sma/adx/bb/rsi on every cycle line, so
+the comparison needs no new instrumentation, only the replay printed beside it.

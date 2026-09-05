@@ -32,6 +32,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run_cycle")
 
+from trading_engine import market_calendar
+
 NY = ZoneInfo("America/New_York")
 MARKET_OPEN = (9, 30)
 MARKET_CLOSE = (16, 0)
@@ -60,9 +62,18 @@ _POLL_BUDGET_SECONDS = 55.0
 
 
 def _within_market_hours(now: datetime) -> bool:
-    if now.weekday() >= 5:  # Saturday/Sunday
+    """Is the exchange actually open right now?
+
+    This used to read the weekday and the clock alone, which is right four
+    days in five and wrong on the ten or so sessions a year the market is
+    shut or closes early. On those the engine ran every cycle against the
+    PREVIOUS session's stale quotes, computed indicators from them, and was
+    free to open a position. Found 2026-09-05, two days before Labor Day.
+    """
+    if not market_calendar.is_trading_day(now.date()):
         return False
-    return MARKET_OPEN <= (now.hour, now.minute) < MARKET_CLOSE
+    close = market_calendar.close_time_for(now.date())
+    return MARKET_OPEN <= (now.hour, now.minute) < (close.hour, close.minute)
 
 
 async def _poll_exits(db) -> None:
@@ -115,7 +126,13 @@ async def _run() -> int:
         logger.info("skipped — kill switch active")
         return 0
     if not _within_market_hours(now):
-        logger.info("skipped — outside market hours (%s ET)", now.strftime("%a %H:%M"))
+        if now.weekday() >= 5:
+            why = "weekend"
+        elif not market_calendar.is_trading_day(now.date()):
+            why = "market holiday"
+        else:
+            why = "outside market hours"
+        logger.info("skipped — %s (%s ET)", why, now.strftime("%a %H:%M"))
         return 0
 
     db = SessionLocal()

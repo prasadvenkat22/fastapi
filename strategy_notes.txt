@@ -5634,3 +5634,60 @@ touched is +1,943 and confirmed over two minutes is +2,101. The giveback rule,
 the trailing profit stops at 5/10/20%, the ceiling -- all instantaneous, all
 negative. Duration is not a refinement on these rules. It is the thing that
 makes them work.
+
+--------------------------------------------------------------------------------
+88. NO PROFIT TARGET BEATS HOLDING, IN ANY UNITS  (2026-09-04)
+--------------------------------------------------------------------------------
+
+Eight parameterisations of "take the profit before it goes away", measured the
+same way -- the engine's own one-minute logs, hold valued at true expiry
+against the underlying's close, 45 structure-days, hold = +32,392.
+
+    rule                                  fires  helps     vs hold
+    fraction of MAX PROFIT, on the mark       0      0          +0   (never fires)
+    fraction of MAX PROFIT, on intrinsic     42      8     -30,132
+    fraction of WIDTH, 90%                    4      0      -1,160
+    fraction of WIDTH, 70%                   31      4     -15,464
+    return on cost, +10%                     17      2     -10,842
+    return on cost, +50%                      2      0      -1,340
+    trailing 5% of peak profit               31      5     -21,142
+    trailing 20% of peak profit              28      5     -17,903
+    hybrid by moneyness                    0..9    0..1    0..-3,780
+
+NOT ONE BEAT HOLDING. helps never exceeds 9 of 45 and is usually 0 to 2. The
+configurations that break even are, without exception, the ones that never
+fire.
+
+THREE UNITS WERE TRIED BECAUSE THE FIRST TWO WERE CHALLENGED, correctly, as
+the wrong measure -- and the labels differ by real money:
+
+    MU 995/1005, entry 6.72, width 10.00
+      90% of max PROFIT  = 6.72 + 0.90 x 3.28 = 9.67
+      90% of WIDTH       =        0.90 x 10.00 = 9.00
+      +10% on cost                             = 7.39
+
+Sixty-seven cents between the first two, and it changed nothing: MU's mark
+peaked at 7.00 all day. Even 9.00 was unreachable. To fire on MU at all the
+target has to drop to 70% of width, which measures -15,464.
+
+THE REASON IS STRUCTURAL AND NOT A TUNING FAILURE. On a 0DTE spread the mark
+converges to intrinsic only at expiry. MU held intrinsic 10.00 from 12:33 with
+a mark of 6.45 -- the gap was 3.55 of time premium in the short leg, which a
+buyer will not hand over while the option is alive. Every early exit sells
+into that premium. The units of the trigger do not matter because the tax is
+on the exit, not on the trigger.
+
+AND THE INTRINSIC VERSION IS THE WORST RULE IN THIS FILE. Measuring the target
+on intrinsic makes it fire -- 42 of 45 -- because every deep ITM spread is at
+90% of maximum all day. It then sells at the mark, booking a loss on a
+position at maximum payoff. -30,132.
+
+SO THE PROFIT-TAKING RULE FOR A DEEP ITM 0DTE SPREAD IS THE 15:45 FLATTEN.
+That is not a fallback. It is the only moment the profit is collectable, and
+it is the one exit that measured neutral-to-positive all day.
+
+WHAT REMAINS OPEN, and is worth measuring rather than assuming: this is all
+0DTE. A weekly has days of decay ahead, so its mark CAN converge well before
+expiry, and a 90% target could realistically fill on a Tuesday. Nothing here
+tests that -- the weeklies are excluded from every rule -- and next week's
+logs will answer it.

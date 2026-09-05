@@ -323,6 +323,35 @@ RUNNING A SWEEP
   trade by trade. Run it whenever the harness or the entry logic changes --
   three bugs hid for months because sweeps were only checked against sweeps.
 
+BEFORE PUTTING A MANUAL 0DTE SPREAD ON
+
+  Two numbers decide more than the whole exit ladder does. Both are known at
+  entry and neither can be fixed afterwards.
+
+  1. entry / width          -- this IS the reward:risk ratio
+       20%  4.00:1     40%  1.50:1     65%  0.54:1
+       30%  2.33:1     50%  1.00:1     80%  0.25:1
+     Half the width is BREAK-EVEN, not a target. The engine's own ride buys
+     near 29%. Every manual position in the book was 52-83%.
+
+  2. short strike distance, in that name's own average daily moves
+       under 1 move  -- a coin flip whatever it cost
+       over  2 moves -- survives a shock
+     SNDK 1500/1560 had 2.4 moves of cushion. SNDK 1690/1720, same name and
+     day, had 0.3. Only the first is the deep-ITM trade it looks like.
+
+  Width should start near 2x the name's average daily range, or the spread is
+  binary: the underlying crosses both strikes routinely and the position is
+  decided before it is opened. scripts/analyse_width_vs_move.py prints the
+  comparison; analyse_name_vol.py prints the ranges.
+
+  WHICH STRUCTURE: scripts/rv_vs_iv.py, period-matched. RV/IV below 1.00 means
+  implied exceeds realised and selling premium has an edge; above 1.00 no
+  strike, width or stop fixes it. QQQ 0.44 is the only row with enough pairs
+  to trust. Read `pairs` and `sessions` before the ratio, and discount any
+  window containing an earnings or sector-news day -- SNDK's 1.41 is one
+  Friday, not a regime.
+
 CONFIDENCE, HONESTLY
 
   60 sessions:  placement, window selection, entry slicing, take-profit band

@@ -6347,3 +6347,34 @@ an inconsistency. A 0DTE mark cannot converge to intrinsic before the last
 minutes, so return-on-cost is the only measure with any chance of firing. A
 weekly's mark converges over DAYS, which makes a fraction of width both
 reachable and the more natural statement of "this trade is done".
+
+--------------------------------------------------------------------------------
+101. THREE SYMBOL LISTS HAD DRIFTED APART  (2026-09-05)
+--------------------------------------------------------------------------------
+
+    CHAIN_CAPTURE_SYMBOLS      13 names -- the IV/RV data
+    TRADING_MANAGE_UNDERLYING  11 names -- what the exit ladder acts on
+    TRADING_WEEKLY_SYMBOLS     15 names -- the shadow book
+
+PANW and AVGO were in the managed list and the weekly universe but NOT in the
+capture list, so both were traded, managed, and invisible to rv_vs_iv.py --
+which is why PANW was simply absent from the RV/IV table rather than showing a
+poor number. Meanwhile IV was being collected on four names that are not
+traded at all.
+
+The capture list was not wrong so much as built for a different question. Its
+own comment says why it holds the names it does: MU, STX, WDC, DELL and META
+quote on $5 strike spacing, which forces a $5 wing and mechanically halves a
+condor's credit-to-risk ratio. It was assembled to study condor geometry, not
+to cover the traded book, and nothing ever reconciled the two.
+
+CHAIN_CAPTURE_SYMBOLS now covers all fifteen. AMZN, GOOGL, META and MSFT stay
+though they are not managed: 28 snapshots of history already exist for each,
+dropping them throws that away for nothing, and large-cap tech leads on bad
+macro news -- which makes them the natural place to look for a PUT spread when
+the tape turns, a use the current lists do not serve.
+
+WHAT TO CHECK WHEN A LIST CHANGES: managed-but-not-captured should always be
+empty. Anything in it is a position being traded with no volatility data
+behind it, which is the state PANW and AVGO were in for as long as the capture
+list has existed.

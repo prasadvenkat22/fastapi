@@ -459,8 +459,44 @@ def _patch_engine():
 
 
 def _session_vwap(bars_slice: pd.DataFrame) -> float:
-    typical = (bars_slice["High"] + bars_slice["Low"] + bars_slice["Close"]) / 3.0
-    return float(typical.mean())
+    """Volume-weighted average price for THE CURRENT SESSION ONLY.
+
+    Two bugs lived here, and together they broke the harness's entry decisions
+    for every sweep ever run against a CLEAN tier.
+
+    ONE: bars_slice is _seen_at(ts) -- the last 390 bars, which is FIVE
+    SESSIONS. A "session VWAP" averaged over a week is not one, and on a
+    trending week it sits far from the day's own mean, which flips vwap_side
+    for hours at a time.
+
+    TWO: it was an unweighted mean of the typical price. Volume was not used
+    at all. data_feed.py already records what that costs live -- on
+    2026-08-25 the unweighted fallback fired 52 times in one morning and VWAP,
+    one of the four terms in clean_bull, ran on it all session.
+
+    MEASURED CONSEQUENCE, QQQ 2026-09-03 at 10:50 ET: live read ABOVE_VWAP and
+    opened a CLEAN trade that made +478. The harness read BELOW_VWAP for the
+    same bar and took nothing. The other three terms of clean_bull matched
+    exactly. Across the nine sessions the engine traded live, the harness
+    reproduced two.
+
+    RESIDUAL, AND NOT FIXABLE HERE: yfinance's intraday volume for QQQ is
+    unreliable -- data_feed.py measured 200.9M against Tradier's 19.4M for the
+    same session, varying between calls. So this is the right SHAPE of number
+    computed from a suspect weight, which is much closer than a five-day
+    unweighted mean and still not what the engine saw.
+    """
+    if bars_slice.empty:
+        return float("nan")
+    day = bars_slice.index[-1].date()
+    session = bars_slice[bars_slice.index.map(lambda t: t.date() == day)]
+    if session.empty:
+        session = bars_slice
+    typical = (session["High"] + session["Low"] + session["Close"]) / 3.0
+    vol = session["Volume"] if "Volume" in session else None
+    if vol is None or float(vol.sum()) <= 0:
+        return float(typical.mean())
+    return float((typical * vol).sum() / vol.sum())
 
 
 def _session_state(bars_slice: pd.DataFrame) -> dict:

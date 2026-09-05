@@ -5984,3 +5984,63 @@ NOT FIXED. Characterised only. The next step is to log the engine's own
 indicator state per cycle and diff it against _session_state for the same
 bar -- the engine already logs macd/sma/adx/bb/rsi on every cycle line, so
 the comparison needs no new instrumentation, only the replay printed beside it.
+
+--------------------------------------------------------------------------------
+95. THE HARNESS COMPUTED A FIVE-DAY UNWEIGHTED VWAP AND CALLED IT THE SESSION'S
+    (2026-09-05)
+--------------------------------------------------------------------------------
+
+Section 94 found the harness taking no trade on seven of the nine days the
+engine traded live, and called it a reconstruction failure without saying
+where. It is one line.
+
+FIRST, WHAT WAS NOT WRONG. The bars and the indicators are faithful. Replayed
+against the engine's own logged readings for 2026-09-03 they match to the
+decimal, offset by exactly one 5-minute bar -- which is BAR_CLOSE_ONLY, live
+dropping the in-progress bar, so live at 10:00 sees the 09:55 close:
+
+    LIVE   10:00  BULLISH ABOVE_SMA 33.46 NORMAL OVERBOUGHT
+    HARNESS 09:55 BULLISH ABOVE_SMA 33.46 NORMAL OVERBOUGHT
+
+THE DIVERGENCE IS VWAP, one of the four terms in clean_bull:
+
+    clean_bull = sma == ABOVE_SMA and ema_cross == EMA9_ABOVE_SMA20
+                 and vwap_side == ABOVE_VWAP and rsi_band == BULL_BAND
+                 and sentiment == GOOD
+
+At 10:50 ET on 09-03 the first, second and fourth matched exactly. Live read
+ABOVE_VWAP and opened the trade that made +478. The harness read BELOW_VWAP
+and took nothing.
+
+TWO BUGS IN ONE FUNCTION.
+
+    typical = (bars["High"] + bars["Low"] + bars["Close"]) / 3.0
+    return float(typical.mean())
+
+  ONE. The bars handed in are _seen_at(ts) -- the last 390, which is FIVE
+  SESSIONS. A session VWAP averaged over a week is not one, and in a trending
+  week it sits far enough from the day's own mean to hold vwap_side on the
+  wrong side for hours.
+
+  TWO. Unweighted. Volume never entered the calculation. data_feed.py already
+  records what that costs live: on 2026-08-25 the unweighted fallback fired 52
+  times in one morning and VWAP ran on it all session.
+
+Now filtered to the current session and volume-weighted. The harness
+reproduces the 10:45 and 10:50 CLEAN reads that live acted on.
+
+WHAT THIS INVALIDATES. Every entry parameter measured on this harness against
+a CLEAN tier -- window times, tier definitions, placement, width, the
+placement table in playbook.py (ITM -517, ATM -1358, OTM -1129) -- was
+measured with one of the four entry terms systematically wrong. Not randomly
+wrong: a five-day mean lags a trending session, so vwap_side was biased, and
+in one direction. Those numbers need re-running before they are trusted again.
+
+Exit parameters are far less exposed. They act on a position that already
+exists and never read vwap_side.
+
+RESIDUAL, STATED SO IT IS NOT FORGOTTEN: yfinance's intraday volume for QQQ is
+unreliable -- data_feed.py measured 200.9M against Tradier's 19.4M for the
+same session, changing between calls. The harness now computes the right
+SHAPE from a suspect weight. Much closer than a five-day unweighted mean, and
+still not the number the engine saw.

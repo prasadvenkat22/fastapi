@@ -6094,3 +6094,40 @@ parameter the live engine acts on.
 TWO BUGS, ONE DIRECTION. Both made the harness pessimistic: the VWAP suppressed
 entries, the intrabar stop killed the survivors early. That is why its verdict
 (-19.94/day) and the live record (+600 over 14 trades) pointed opposite ways.
+
+--------------------------------------------------------------------------------
+97. THE THIRD HARNESS BUG: A CONFIG SNAPSHOT THAT WENT STALE  (2026-09-05)
+--------------------------------------------------------------------------------
+
+The sweep runner loads TRADING_* from a file pulled off the droplet, because
+.env.production is not in the repo. That file was fetched once, early, and
+reused all weekend.
+
+It still carried:
+
+    TRADING_RIDE_TAKE_PROFIT=0          deployed at 55 hours earlier
+    (no TRADING_WIN_COOLDOWN_MINUTES)   deployed at 30
+    (no TRADING_ORPHAN_STOP_PCT)        deployed at -40
+    (no TRADING_ORPHAN_CEILING)         deployed at 0.80
+
+So every sweep run after those deployments measured the PREVIOUS
+configuration while printing a banner that looked entirely correct. The
+banner reads the same stale variables, so it cannot catch this -- it agrees
+with the snapshot, not with the droplet.
+
+THIS IS THE THIRD HARNESS DEFECT FOUND TODAY and they share a shape: each one
+made the harness quietly describe something other than the deployed engine.
+
+    95  session VWAP was a five-day unweighted mean   suppressed entries
+    96  intrabar stops modelled an order not placed   killed the survivors
+    97  the config snapshot was hours out of date     measured the old engine
+
+None announced itself. Two of the three were found only by comparing the
+harness against the LIVE RECORD trade by trade, which nothing in this repo did
+until today -- every sweep before this was checked against other sweeps.
+
+THE RULE THAT FOLLOWS: refresh the snapshot before every run, and treat a
+sweep whose config was not refreshed the same way as a sweep whose harness was
+not validated. The runner now says so at the top of the file. A better fix is
+for the runner to fetch it itself rather than trusting a file on disk; that is
+worth doing and is not done here.

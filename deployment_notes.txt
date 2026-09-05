@@ -270,7 +270,10 @@ ADOPTED / MANUAL 0DTE  (orphans.py)
     target      +50% RETURN ON COST -- deployed against the measurement, see
                 section 100. Fires only on spreads bought cheap relative to
                 width; on one bought at 80% of width it cannot fire at all.
-    ceiling     entry + 0.80 x (width - entry). Has never fired: 0 of 44.
+    ceiling     OFF. It needed a mark averaging 94% of width and the median
+                position's best moment reached 73%; 0 of 44 fires. Removed
+                because two profit rules where one is dead invites confusion,
+                not because it cost anything -- it measured exactly +0.
     flatten     15:45 -- in practice THIS is the profit-taking rule
     stall       OFF, and giveback OFF. Both measured losing money.
   timing

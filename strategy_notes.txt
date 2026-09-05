@@ -6297,3 +6297,29 @@ THE FLATTEN IS ALREADY AT THE RIGHT TIME.
 15:30 and 15:45 differ by two dollars; everything earlier collapses. The
 book's value appears in the last half hour as the mark converges to intrinsic,
 which is the same wall in clock form. Left at 15:45 at the owner's request.
+
+ADDENDUM TO 100: THE CEILING IS OFF.
+
+TRADING_ORPHAN_CEILING=0. It was never wrong, it was never used:
+
+    B needs a mark averaging   94% of width
+    best mark reached, median  73% of width
+    closest any structure came  0 points short (SNDK 1500/1560, 91% vs 90%)
+    fires                       0 of 44
+
+The two profit rules split at 61.5% of width -- below it the +50%-of-cost
+target binds, above 66.7% the target is arithmetically impossible because
+entry x 1.5 exceeds the width, and the ceiling was the only rule that could
+act there. That is a sound division on paper. In practice the ceiling could
+not act either: a spread bought deep enough to need it cannot reach 94% of
+width on the mark before the 15:45 flatten closes it.
+
+Removed for legibility rather than for money -- the ablation measured it at
+exactly +0. Two profit rules where one has never fired is a standing
+invitation to reason about the wrong one, and this session already spent an
+exchange untangling which of them bound where.
+
+WHAT WOULD BRING IT BACK: entries much cheaper than this book has seen. At 20%
+of width the ceiling's threshold falls to 84% of width, which is within reach
+of marks that have been observed. Nothing here tested that, and the cheapest
+debit entry in the sample was 52%.

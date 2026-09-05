@@ -6182,3 +6182,62 @@ ever done that -- sweeps were only ever checked against other sweeps, which
 cannot expose a bias they all share. scripts/harness_vs_live.py and
 scripts/harness_indicator_diff.py exist so it can be repeated, and should be
 run whenever the harness or the entry logic is touched.
+
+--------------------------------------------------------------------------------
+99. ABLATION ON A HARNESS THAT NOW REPRODUCES LIVE: THE STALL IS THE PROBLEM
+    (2026-09-05)
+--------------------------------------------------------------------------------
+
+First measurement taken after sections 95-97, so the first one where the
+harness reproduces the engine's own decisions. Each rule switched off in turn
+against the same 45 structures over two sessions:
+
+    configuration                            total     vs full
+    FULL LADDER (deployed)                  +28667           -
+    no fast stop                            +28007        -660
+    fast stop at -25%, no confirm           +26142       -2525
+    no confirmation (fires on a touch)      +28765         +98
+    no slow stop                            +28144        -523
+    no stall                                +31381       +2714
+    no ceiling                              +28667          +0
+    flatten only                            +29280        +613
+    stops + flatten, NO stall/ceiling       +31381       +2714
+
+CONFIRMED GOOD:
+  fast stop -40%   worth +660 over no stop, +2,525 over the old -25%
+  slow stop -20%   worth +523; widening to 45 min gives back 523 of it
+
+INERT: the ceiling, exactly 0 either way.
+
+NOISE: the 2-minute confirmation, -98. It measured +158 yesterday under the
+stale config and intrabar stops. Kept anyway -- it costs nothing detectable
+and protects against a single bad print, which section 73 shows is real on
+this chain.
+
+COSTING 2,714: THE STALL. Six fires, one good:
+
+    NVDA 225/235C   STALL  +97  vs  -189 held    saved  286
+    AVGO 365/355P   STALL  +14  vs   +14         neutral
+    CRWV 75/85C     STALL  +35  vs   +71          cost   36
+    QQQ 715/719C    STALL  +50  vs  +385          cost  335
+    SNDK 1690/1720C STALL  +25  vs +1055          cost 1030
+    SNDK 1500/1560C STALL +744  vs +2343          cost 1599
+
+It books a small certain gain on a position that was still climbing.
+STALL_MUST_BOOK_A_GAIN guarantees it never sells at a loss, and that is
+precisely what disguises it: a guaranteed +25 in place of +1,055 reads as
+prudence.
+
+This is the ninth profit-taking rule measured on this book and the ninth to
+lose -- the eight parameterisations of section 88, and now the stall itself,
+which was the one that had never been ablated because it predated the others.
+
+DISABLED FOR THE ORPHAN BOOK ONLY. TRADING_ORPHAN_STALL_MINUTES=0. The
+engine's own ride keeps its stall at 5 min / 3.3 pts: that is a different
+population -- entries near 29% of width rather than 60-80% -- and it has never
+been separately measured. Turning off a rule for a book it was not measured on
+is the mistake this file keeps recording.
+
+STILL TWO SESSIONS. Every number above rests on 09-03 and 09-04, and 09-03
+contributes few fires. What changed is that the harness now reproduces live
+decisions, so it is at least measuring the right thing.

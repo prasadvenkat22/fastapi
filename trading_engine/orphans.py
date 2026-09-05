@@ -411,6 +411,32 @@ ORPHAN_SLOW_STOP_PCT = float(os.getenv("TRADING_ORPHAN_SLOW_STOP_PCT", "0") or 0
 ORPHAN_SLOW_STOP_MINUTES = float(
     os.getenv("TRADING_ORPHAN_SLOW_STOP_MINUTES", "30") or 30)
 
+# AND THE FAST STOP GETS A SHORT ONE TOO.
+#
+# It fired on the FIRST cycle through its level, so a single bad print or one
+# wide quote was enough to close a position. That is a real failure mode on
+# this chain -- section 73 is a whole section about quotes that are not
+# markets -- and the quote guard only catches the extreme cases.
+#
+# Two minutes, which on a one-minute cron is two consecutive confirmations:
+#
+#     fast          slow           fires helps      P&L    vs hold  mix
+#     -40% /  0min  -20% / 30min       5     4   +34335    +1943   FAST 4, SLOW 1
+#     -40% /  2min  -20% / 30min       4     4   +34493    +2101   FAST 2, SLOW 2
+#     -40% /  5min  -20% / 30min       3     3   +34013    +1621   FAST 1, SLOW 2
+#     -40% / 10min  -20% / 30min       3     3   +33833    +1441   SLOW 3
+#
+# Two minutes filters one bad fire and takes the hit rate to 4 of 4. Longer
+# degrades fast: by ten minutes the fast stop never fires at all and the slow
+# stop is doing all the work, which is a different rule wearing this one's
+# name.
+#
+# The clock resets when the mark recovers AND when the intrinsic guard stands
+# the stop down, so a position that dips through the level and comes back
+# starts over rather than accumulating.
+ORPHAN_STOP_CONFIRM_MINUTES = float(
+    os.getenv("TRADING_ORPHAN_STOP_CONFIRM_MINUTES", "0") or 0)
+
 # THE BAND WHERE NOTHING FIRES, IN DOLLARS OF INTRINSIC GIVEN BACK.
 #
 # Two guards can be correct individually and silent together:
@@ -1270,6 +1296,28 @@ def review(engine_symbols: "set | None" = None) -> list:
             # measures one CONTINUOUS stretch rather than a total across the
             # session. A position that dips, recovers and dips again starts
             # over -- which is the point, since that pattern is chop.
+            # The fast stop's own confirmation clock. Reset both when the mark
+            # recovers above the level and when the intrinsic guard suppresses
+            # the stop, so neither state accumulates time toward a close.
+            stop_confirmed = True
+            if ORPHAN_STOP_CONFIRM_MINUTES > 0 and zero_dte:
+                if ret_pct <= stop_pct and not intrinsic_ok:
+                    rec.setdefault("stop_since", now.isoformat())
+                    held = (now - datetime.fromisoformat(
+                        rec["stop_since"])).total_seconds() / 60.0
+                    stop_confirmed = held >= ORPHAN_STOP_CONFIRM_MINUTES
+                    if not stop_confirmed:
+                        logger.info(
+                            "ORPHAN %s %.0f/%.0f is %+.1f%%, past the %+.0f%% stop, "
+                            "but only for %.1f of the %.0f minutes needed to confirm.",
+                            st["root"], st["long_strike"], st["short_strike"],
+                            ret_pct, stop_pct, held, ORPHAN_STOP_CONFIRM_MINUTES,
+                        )
+                else:
+                    rec.pop("stop_since", None)
+            else:
+                rec.pop("stop_since", None)
+
             slow_held = False
             if ORPHAN_SLOW_STOP_PCT < 0 and zero_dte and past_hold:
                 if ret_pct <= ORPHAN_SLOW_STOP_PCT:
@@ -1316,7 +1364,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                     st["root"], st["long_strike"], st["short_strike"], ret_pct,
                     parts_iv[0], abs(st["entry"]),
                 )
-            elif zero_dte and ret_pct <= stop_pct:
+            elif zero_dte and ret_pct <= stop_pct and stop_confirmed:
                 reason = "STOP_LOSS"
             elif slow_held:
                 # Below the fast stop's level in the ladder: a grind is less

@@ -5603,3 +5603,34 @@ which is precisely the case the guard exists to protect. Both cannot be
 right. On this evidence the grind is real, and the evidence is ONE TRADE.
 
 Deployed at -20% held for 30 minutes, alongside the -40% fast stop.
+
+ADDENDUM TO 87: THE FAST STOP GOT A TIMER TOO.
+
+Challenged on the fast stop firing with no confirmation at all -- one bad
+print or one wide quote closes a position, on a chain where section 73 is an
+entire section about quotes that are not markets.
+
+Measured, both stops running together:
+
+    fast          slow           fires helps      P&L    vs hold  mix
+    -40% /  0min  -20% / 30min       5     4   +34335    +1943   FAST 4, SLOW 1
+    -40% /  2min  -20% / 30min       4     4   +34493    +2101   FAST 2, SLOW 2
+    -40% /  5min  -20% / 30min       3     3   +34013    +1621   FAST 1, SLOW 2
+    -40% / 10min  -20% / 30min       3     3   +33833    +1441   SLOW 3
+
+TWO MINUTES -- two consecutive confirmations on a one-minute cron -- filters
+one bad fire and takes the hit rate to 4 of 4. Beyond that it degrades
+sharply: by ten minutes the fast stop never fires at all and the slow stop is
+doing all the work, which is a different rule wearing this one's name.
+
+Both clocks reset on recovery, and the fast one also resets when the intrinsic
+guard stands the stop down, so neither state accumulates time toward a close
+while the position is protected.
+
+THE SHAPE OF THE WHOLE DAY, in one line: every rule that fires on a TOUCH
+measured negative, and every one of those same rules measured positive once it
+had to HOLD. -10% touched costs 12,559 and held for an hour gains 996. -40%
+touched is +1,943 and confirmed over two minutes is +2,101. The giveback rule,
+the trailing profit stops at 5/10/20%, the ceiling -- all instantaneous, all
+negative. Duration is not a refinement on these rules. It is the thing that
+makes them work.

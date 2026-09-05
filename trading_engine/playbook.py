@@ -122,6 +122,27 @@ class PlaybookWindow:
     # TRADING_MORNING_LONG_DEPTH is there to test the other shape without a
     # code change, not because the evidence asks for it.
     long_depth: "float | None" = None
+
+    # HOW MANY TRANCHES THIS WINDOW OPENS IN, and how far apart.
+    #
+    # None falls back to the global TRADING_ENTRY_SLICES, which is the
+    # previous behaviour. These exist because the global is the wrong shape
+    # when both books run: slicing was measured over 60 sessions and the two
+    # books want OPPOSITE settings.
+    #
+    #     afternoon CREDIT    all at once  -9.00/tr
+    #                         0/+15/+30    -3.22/tr   and better in EVERY
+    #                                                 short-delta bucket
+    #     morning DEBIT       one fill     -6.94/tr
+    #                         any schedule -13.39 to -20.35/tr
+    #
+    # A debit spread is a momentum trade where the trigger is the edge and
+    # delay costs the move. A credit spread sells time value, so spreading
+    # the fills averages the premium. Setting one number for both helps one
+    # book and halves the other -- and the morning is not always one contract
+    # (it has traded 2 and 3), so a global setting would reach it.
+    entry_slices: "int | None" = None
+    entry_slice_minutes: "float | None" = None
     # None means "use the engine-wide value", which is what the environment
     # sets. Hardcoding a number here silently overrode every env override --
     # TRADING_STOP_LOSS_PCT was tuned three times in one session and reached
@@ -675,6 +696,14 @@ WINDOWS = (
              "positive-theta structure that also pays when price sits still.",
     ),
     PlaybookWindow(
+        # THREE TRANCHES, FIFTEEN MINUTES APART. Measured over 60 sessions
+        # chain-priced at the same total size and the same exits: all at once
+        # -9.00/tr, 0/+10/+20 -6.15, 0/+15/+30 -3.22 -- and better in EVERY
+        # short-delta bucket, which is what separates it from one lucky cell.
+        # Set here rather than globally because the morning debit book
+        # measured the opposite and would be halved by the same number.
+        entry_slices=3,
+        entry_slice_minutes=15.0,
         name="AFTERNOON_CREDIT",
         # $4 wide, up from $3. On a credit vertical the width is the LONG
         # leg's distance -- the short strike is placed by volatility and does
@@ -968,6 +997,19 @@ def rides_to_close(playbook_name: str) -> bool:
         if w.name == base:
             return w.ride_to_close
     return False
+
+
+def window_by_playbook(playbook_name: str) -> "PlaybookWindow | None":
+    """The window that OPENED this position, matched like thresholds_for.
+
+    Needed wherever a rule has to read the opening window's own setting after
+    the clock has moved on -- the entry-slice spacing is the first such case.
+    """
+    base = (playbook_name or "").split(":", 1)[0]
+    for w in WINDOWS:
+        if w.name == base:
+            return w
+    return None
 
 
 def close_deadline(playbook_name: str) -> "time | None":

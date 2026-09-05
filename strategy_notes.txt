@@ -5836,3 +5836,49 @@ BOTH ARE FORWARD TESTS. 55% sits between two measured points rather than on
 one, and the win cooldown has never been measured at all -- every result in
 sections 27-51 was taken with it at 0. Monday is the first evidence either
 will have.
+
+--------------------------------------------------------------------------------
+92. SLICING IS PER BOOK, AND THE TWO BOOKS WANT OPPOSITE THINGS  (2026-09-05)
+--------------------------------------------------------------------------------
+
+Asked to open three morning positions at twenty-minute intervals rather than
+one, on the reasoning that a single trade does not scale on a good day.
+
+The machinery already existed and the question had already been measured, over
+60 sessions, chain-priced, same total size and same exits in every arm:
+
+    AFTERNOON CREDIT     all at once   58% win   -9.00/tr
+                         0/+10/+20     51% win   -6.15/tr
+                         0/+15/+30     52% win   -3.22/tr
+                         and better in EVERY short-delta bucket:
+                         -12.37 -> -10.25 at 0.10 delta, -11.05 -> -6.73 at
+                         0.20, -9.14 -> -1.55 at 0.30, -6.28 -> +3.53 at 0.40
+
+    MORNING DEBIT        one fill      -6.94/tr
+                         any schedule  -13.39 to -20.35/tr
+
+SLICING THE MORNING MEASURED TWO TO THREE TIMES WORSE. The reason is in the
+structures: a debit spread is a momentum trade where the trigger IS the edge,
+so delay costs the move. A credit spread sells time value, so spreading the
+fills averages the premium. The instinct to scale is right and it belongs to
+the other book.
+
+ENTRY_SLICES WAS GLOBAL, and its own comment said "set this per book, not
+globally, when both are running" -- which nothing enforced. That mattered more
+than it looks: MORNING_DRIFT is not always one contract. Its live history is
+qty 1, 1, 2, 2, 3, 2, so a global setting of 3 would have reached the qty-3
+morning trade and halved it.
+
+PlaybookWindow now carries entry_slices and entry_slice_minutes, falling back
+to the global when unset. AFTERNOON_CREDIT is set to 3 tranches 15 minutes
+apart -- its measured best. MORNING_DRIFT keeps one fill, also its measured
+best. The follow-on tranche timer reads the OPENING window's spacing through
+a new playbook.window_by_playbook, so a position keeps its own schedule after
+the clock moves into another window.
+
+WHAT THIS DOES NOT DO, and it is the actual request: it does not open three
+CONCURRENT positions. The engine holds one position at a time by construction
+-- entry is gated on broker.get_open_position() is None -- so three tranches
+are three fills of ONE position, not three independent trades. Opening several
+at once is a different change to the position model, and nothing here measures
+whether it would help.

@@ -1868,8 +1868,12 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         tranche = getattr(position, "entry_tranche_qty", 0) or 0
         opened = getattr(position, "opened_at", None)
         if remaining > 0 and tranche > 0 and opened is not None:
-            filled_so_far = ENTRY_SLICES - remaining
-            due_at_min = filled_so_far * ENTRY_SLICE_MINUTES
+            _w = PB.window_by_playbook(getattr(position, "playbook", "") or "")
+            _s = (getattr(_w, "entry_slices", None) or ENTRY_SLICES) if _w else ENTRY_SLICES
+            _sm = ((getattr(_w, "entry_slice_minutes", None) or ENTRY_SLICE_MINUTES)
+                   if _w else ENTRY_SLICE_MINUTES)
+            filled_so_far = _s - remaining
+            due_at_min = filled_so_far * _sm
             try:
                 elapsed_min = (datetime.now(NY) - opened).total_seconds() / 60.0
             except Exception:
@@ -1881,7 +1885,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 logger.info(
                     "Entry tranche %d of %d: added %d contract(s) at %.2f after %.0f min "
                     "— position now %d, blended entry %.2f.",
-                    filled_so_far + 1, ENTRY_SLICES, tranche, price, elapsed_min,
+                    filled_so_far + 1, _s, tranche, price, elapsed_min,
                     position.quantity, position.entry_net_debit,
                 )
 
@@ -2980,24 +2984,35 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     full_quantity = quantity
                     tranche_qty = 0
                     slices_remaining = 0
-                    if ENTRY_SLICES > 1 and quantity >= ENTRY_SLICES:
-                        tranche_qty = quantity // ENTRY_SLICES
-                        slices_remaining = ENTRY_SLICES - 1
+                    # PER WINDOW, falling back to the global. The two books
+                    # want opposite settings -- see PlaybookWindow.entry_slices
+                    # -- so one number cannot serve both while both run.
+                    _slices = ENTRY_SLICES
+                    _slice_min = ENTRY_SLICE_MINUTES
+                    if window is not None:
+                        if getattr(window, "entry_slices", None):
+                            _slices = max(int(window.entry_slices), 1)
+                        if getattr(window, "entry_slice_minutes", None):
+                            _slice_min = float(window.entry_slice_minutes)
+
+                    if _slices > 1 and quantity >= _slices:
+                        tranche_qty = quantity // _slices
+                        slices_remaining = _slices - 1
                         quantity = full_quantity - tranche_qty * slices_remaining
                         logger.info(
                             "Sliced entry: %d contracts over %d tranches %.0f min apart — "
                             "opening %d now, %d x %d to follow.",
-                            full_quantity, ENTRY_SLICES, ENTRY_SLICE_MINUTES,
+                            full_quantity, _slices, _slice_min,
                             quantity, slices_remaining, tranche_qty,
                         )
-                    elif ENTRY_SLICES > 1:
+                    elif _slices > 1:
                         # Cannot slice a position smaller than the slice count.
                         # Said out loud rather than silently opening in full,
                         # because "slicing is on" and "slicing is happening"
                         # are different states and only one of them is visible.
                         logger.info(
                             "Sliced entry configured at %d slices but the position is %d "
-                            "contract(s) — opening in one order.", ENTRY_SLICES, quantity,
+                            "contract(s) — opening in one order.", _slices, quantity,
                         )
 
                     if is_credit_window:

@@ -6378,3 +6378,67 @@ WHAT TO CHECK WHEN A LIST CHANGES: managed-but-not-captured should always be
 empty. Anything in it is a position being traded with no volatility data
 behind it, which is the state PANW and AVGO were in for as long as the capture
 list has existed.
+
+--------------------------------------------------------------------------------
+102. THE WIDTHS WERE NEVER SIZED TO THE NAMES  (2026-09-05)
+--------------------------------------------------------------------------------
+
+Eleven exit rules measured across two days, and the largest lever turned out
+not to be an exit rule at all.
+
+    name   avg day rng  widths traded  widest/range   verdict
+    STX           55.6             10         0.18x   FAR too narrow
+    WDC           32.5             10         0.31x   FAR too narrow
+    MU            52.6          10,20         0.38x   FAR too narrow
+    DELL          29.7          10,12         0.40x   FAR too narrow
+    QQQ            9.0            3,4         0.45x   FAR too narrow
+    SNDK         121.0     5,20,25,30         0.83x   narrow
+    NVDA           6.2         6,8,10         1.61x   sized to the move
+
+A WIDTH BELOW THE DAILY RANGE MAKES THE SPREAD BINARY. The underlying
+routinely travels past both strikes, so by the close it is worth the full
+width or nothing. That is why intrinsic averaged 92-95% of width AT ENTRY
+across the whole book: the spreads were already decided when they were bought.
+
+And that forces everything downstream. Already at maximum, they cost 60-83% of
+width, which fixes reward:risk at 1:5 or worse, and puts the mark below entry
+where no profit rule can reach it. Sections 88, 99 and 100 are eleven separate
+attempts to fix with an exit what had been decided at entry.
+
+WHAT THE NUMBERS SAY TO DO INSTEAD:
+
+    reward:risk is entry / width and nothing else
+       20% of width  4.00:1      50% of width  1.00:1
+       30% of width  2.33:1      65% of width  0.54:1
+       40% of width  1.50:1      80% of width  0.25:1
+
+    the book, bucketed
+       entry/width   n   win%   avg/trade
+       <= 50%        0      -           -   never traded
+       50-65%       19    79%      +1243
+       65-80%       21    71%       +474
+       > 80%         4   100%       +242
+
+Half the width is the BREAK-EVEN geometry, not a target. Below it the ratio
+starts working; above it you are paying more than you can win. The engine's
+own morning ride buys near 29% of width -- 2.4:1 -- and is the one book here
+with a positive live record.
+
+THE CHECK THAT MATTERS AT ENTRY is not "is this in the money" but HOW FAR
+BELOW SPOT THE SHORT STRIKE SITS, measured in that name's own daily moves:
+
+    position           starts losing at   in daily moves
+    SNDK 1500/1560              -10.3%           2.4     genuinely safe
+    PANW 310/327.5               -1.7%           0.6
+    SNDK 1690/1720               -1.1%           0.3     coin flip
+    MU 995/1005                  -1.1%           0.4     coin flip
+    QQQ 716/719                  +0.0%           0.0     already past it
+
+Same name, same day, opposite trades: SNDK 1500/1560 needs a 10.3% fall before
+it starts losing and 13.8% to be wiped out, while SNDK 1690/1720 needs 1.1% --
+which SNDK does before ten in the morning. The first is the deep-ITM,
+shock-resistant trade the book was meant to be running. The second is
+at-the-money wearing its clothes.
+
+Under 1 average daily move of cushion, a position is a coin flip whatever it
+cost. Over 2, it survives a shock.

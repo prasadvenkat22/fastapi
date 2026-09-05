@@ -6044,3 +6044,53 @@ unreliable -- data_feed.py measured 200.9M against Tradier's 19.4M for the
 same session, changing between calls. The harness now computes the right
 SHAPE from a suspect weight. Much closer than a five-day unweighted mean, and
 still not the number the engine saw.
+
+--------------------------------------------------------------------------------
+96. THE SECOND HARNESS BUG: A STOP THE ENGINE CANNOT PLACE  (2026-09-05)
+--------------------------------------------------------------------------------
+
+Fixing the VWAP (section 95) took the harness from trading on two of the nine
+live sessions to eight. It then modelled 2026-09-03 as -79.90 where the engine
+made +478 -- right day, right decision, opposite outcome. That is a second
+divergence and it is not in the decision logic at all.
+
+SWEEP_INTRABAR_STOPS prices the spread at the BAR'S LOW and books the stop
+there. The argument written beside it is that a stop firing mid-bar fires
+before the bar close decides anything, and the five-minute answer is the one
+being replaced. That argument is correct for a resting stop ORDER.
+
+THE ENGINE DOES NOT PLACE ONE. It reads the mark once a minute from the live
+quote and sells at market. It cannot see a thirty-second dip inside a
+five-minute bar, so a stop level touched and left within one bar never
+existed as far as the engine was concerned.
+
+THE SAME TRADE, BOTH WAYS:
+
+    intrabar ON    entry 2.74 -> "exit 3.75"  STOP_LOSS  -159.80  closed 10:55
+    intrabar OFF   entry 2.74 ->  exit 5.20   STALL      +469.20  closed 11:05
+    LIVE           entry 2.83 ->  exit 5.22              +478.00  closed 11:0x
+
+With it off the harness reproduces the real trade to nine cents on entry, two
+cents on exit and nine dollars on the result. With it on it stops out at 10:55
+a position the engine rode for another ten minutes.
+
+AND THE FIRST ROW IS SELF-INCONSISTENT, which is what gave it away: exit 3.75
+against a 2.74 entry is a 37% GAIN reported as a loss. The intrabar path
+recomputes pnl at the stop level while exit_value keeps the bar-close mark, so
+the record shows one number and books another. The pnl is arithmetically right
+for a stop that could fire; the stop could not fire.
+
+EVERY SWEEP RUN THIS WEEKEND HAD IT ON. The runner set
+SWEEP_INTRABAR_STOPS=true as a default, so creditgate, rideguard, latestall
+and creditstall all ran with stops firing that the engine cannot execute.
+Stop-related conclusions from those runs are the most exposed; the take-profit
+band and the entry-slice comparisons less so, since both arms carried the same
+distortion.
+
+DEFAULT IS NOW DOCUMENTED AS FALSE with the reason attached. Turn it on only
+to ask what a resting stop ORDER would have done, and never to tune a
+parameter the live engine acts on.
+
+TWO BUGS, ONE DIRECTION. Both made the harness pessimistic: the VWAP suppressed
+entries, the intrabar stop killed the survivors early. That is why its verdict
+(-19.94/day) and the live record (+600 over 14 trades) pointed opposite ways.

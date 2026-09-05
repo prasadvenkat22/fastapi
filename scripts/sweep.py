@@ -210,6 +210,28 @@ STAND_DOWN_AFTER_RIDE_RATCHET = False
 # optimistic bound: a perfect stop. Off is the pessimistic bound: a stop
 # that waits five minutes. The live engine sits between them, nearer the
 # optimistic end, and reporting both is more honest than picking one.
+# DEFAULT FALSE, AND IT SHOULD USUALLY STAY THERE.
+#
+# This prices the spread at the BAR'S LOW and books the stop there, on the
+# argument that a stop firing mid-bar fires before the bar close decides
+# anything. That argument holds for a resting stop ORDER. The engine does not
+# place one: it reads the mark once a minute from the live quote and sells at
+# market, so it cannot see a thirty-second dip inside a five-minute bar.
+#
+# MEASURED AGAINST A REAL TRADE. QQQ 2026-09-03, MORNING_DRIFT, live bought a
+# 710/720 at 2.83 and sold at 5.22 for +478:
+#
+#     intrabar ON    entry 2.74 -> "exit 3.75"  STOP_LOSS  -159.80
+#     intrabar OFF   entry 2.74 ->  exit 5.20   STALL      +469.20
+#
+# With it on, the harness stops out at 10:55 a position the engine rode to
+# 11:05. Note the first row is also self-inconsistent: exit 3.75 against a
+# 2.74 entry is a GAIN, because the pnl is recomputed at the stop level while
+# exit_value keeps the bar-close mark. The number is right for a stop that
+# could fire; the stop could not fire.
+#
+# Turn it on only to ask what a resting stop order WOULD have done, and never
+# to tune a parameter the live engine acts on.
 INTRABAR_STOPS = _flag("SWEEP_INTRABAR_STOPS", False)
 
 # STALLED-PEAK EXIT. Book when the profit curve stops making new highs.

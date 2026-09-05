@@ -5735,3 +5735,58 @@ THE DOWNSIDE IS DELIBERATELY UNGUARDED. If SNDK gaps to 1500 nothing acts and
 the 12,125 committed to these two spreads is gone. That is the accepted trade
 for giving the position time, and it is the same reasoning that keeps the stop
 off them.
+
+--------------------------------------------------------------------------------
+90. EVERYTHING IN SECTIONS 86-89 RESTS ON ONE SESSION  (2026-09-04)
+--------------------------------------------------------------------------------
+
+The orphan logs carry two sessions, not the five assumed while tuning. The
+manager only began recording intrinsic on 2026-09-03:
+
+    2026-09-03   17 structures   1,057 observations
+    2026-09-04   31 structures   1,560 observations
+
+Split by session, every stop configuration measured today:
+
+    config                                    09-03      09-04       ALL  helps
+    old: -25% touch, no slow                     +0       -479      -479      7
+    -40% touch, no slow                          +0      +1545     +1545      3
+    -40% / 2min + -20%/30min                     +0      +2101     +2101      4
+    -40% / 5min + -20%/30min                     +0      +1621     +1621      3
+    -40% / 10min + -20%/30min                    +0      +1441     +1441      3
+    -20%/30min only                              +0      +1441     +1441      3
+    no stop at all                               +0         +0        +0      0
+
+EVERY CONFIGURATION IS +0 ON 09-03. No position that session ever traded below
+-20%, so no rule fires and no configuration can be distinguished from any
+other. The second session does not corroborate the first -- it is silent.
+
+SO THE BOTH-HALVES TEST, WHICH THIS FILE TREATS AS THE BAR FOR DEPLOYING A
+PARAMETER, COULD NOT BE RUN. It was not run and passed; it was unavailable.
+Every number in sections 86 through 89 comes from one afternoon, and that
+afternoon was a losing day whose names mostly recovered -- the single most
+flattering shape for a loosened stop.
+
+WHAT IS DEPLOYED, AND ON WHAT:
+
+    fast stop -40%, confirmed 2 min   one session, +2,101 combined
+    slow stop -20% held 30 min        ONE TRADE (STX 850/840, +398)
+    ceiling 0.80                      zero fires in both sessions -- inert
+    stall 3.3pts / 5min               not isolated today
+    later-expiry target 90% of width  NO DATA -- every logged series is 0DTE
+
+The 2-minute confirmation was set to 10 minutes at request and reverted the
+same evening when the split showed 10 minutes measuring 660 worse and
+disabling the fast stop entirely (its exit mix becomes SLOW only).
+
+THE HONEST STATEMENT OF CONFIDENCE. These settings were positive on the one
+day that tested them and neutral on the day that did not. That is the best
+available justification and it is a weak one. It is curve-fitting until a
+session with a sustained adverse trend enters the sample and the sign holds.
+
+WHAT SETTLES IT: each trading day appends to the log. Re-running
+sweep_orphan_per_session.py and replay_orphan_compare.py next Friday triples
+the sample and puts a trend-down day in it. If -40% and the slow stop still
+measure positive there, they are real. If they invert, today was fitted to one
+recovery -- and the section to read first is 55, which is the last time a
+deployment decision was made on a number that did not survive.

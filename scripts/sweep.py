@@ -2516,7 +2516,7 @@ def sweep_rideguard(sessions: dict):
 
     print("")
     print("  ABSOLUTE TAKE-PROFIT -- books outright the first time it is reached")
-    for tp in (40.0, 50.0, 75.0, 100.0, 150.0):
+    for tp in (40.0, 50.0, 60.0, 75.0, 100.0, 150.0):
         _reset()
         N.RIDE_TAKE_PROFIT_PCT = tp
         trades, _ = _run_arm(sessions, dtime(10, 15))

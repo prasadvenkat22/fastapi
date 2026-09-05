@@ -5790,3 +5790,49 @@ the sample and puts a trend-down day in it. If -40% and the slow stop still
 measure positive there, they are real. If they invert, today was fitted to one
 recovery -- and the section to read first is 55, which is the last time a
 deployment decision was made on a number that did not survive.
+
+--------------------------------------------------------------------------------
+91. THE RIDE GETS A PROFIT RUNG, AND THE RATCHET IS DEAD  (2026-09-05)
+--------------------------------------------------------------------------------
+
+MORNING_DRIFT has had a working stop and no working profit rung since it was
+written. Section 10 rejected fixed targets on rides; RIDE_CEILING_FRACTION is a
+share of MAX return, and max return on the deployed 10-wide bought near 2.93 is
++217%, putting that ceiling near +195% -- unreachable. So the only live rung
+was the stop, which is how 2026-08-28 peaked at +59% and booked -18%.
+
+Swept over 60 sessions, per day, both live windows:
+
+    off (current)        -19.94    -1196.10   halves -11.44/-28.43
+    book at +50%         -15.95     -957.25   halves  -4.11/-27.80
+    book at +75%         -15.29     -917.25   halves  -5.11/-25.47
+    book at +100%        -19.94    -1196.10   never fires
+
+An absolute take-profit helps, and BOTH HALVES improve at both levels -- +239
+and +279 over the window. Deployed at 55%, between the two measured points and
+nearer the one whose first half improves most.
+
+THE RATCHET NEVER FIRES. Every ratchet arm is identical to "off" to the cent:
++40%, +50%, +60%, with and without stand-down, and all six dynamic-giveback
+variants. -1196.10 in every row. It has been occupying the ride's profit rung
+without ever acting, which is the whole reason the ride had no profit rung at
+all. Left in place and now bypassed by the absolute target; it should be
+removed once the target has a live record.
+
+AND THE BASELINE IS NEGATIVE. -19.94/day, 22% green days over 60 sessions. The
+take-profit improves a losing configuration rather than making it a winner,
+and that is the same finding section 76 recorded from the other direction.
+Recorded so the improvement is not mistaken for a result.
+
+THE BREAK AFTER A WIN. TRADING_WIN_COOLDOWN_MINUTES was 0, so a booked target
+freed the slot instantly -- and equity.py already documented what that costs:
+the engine books the target and buys the same structure back a minute later at
+a worse price, paying the spread twice for the privilege of holding what it
+already held. Set to 30 minutes, matching the loss cooldown. Both directions,
+deliberately: a bearish entry a minute after booking a bullish target is the
+same mistake wearing the other hat.
+
+BOTH ARE FORWARD TESTS. 55% sits between two measured points rather than on
+one, and the win cooldown has never been measured at all -- every result in
+sections 27-51 was taken with it at 0. Monday is the first evidence either
+will have.

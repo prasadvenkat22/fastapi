@@ -5809,8 +5809,25 @@ Swept over 60 sessions, per day, both live windows:
     book at +100%        -19.94    -1196.10   never fires
 
 An absolute take-profit helps, and BOTH HALVES improve at both levels -- +239
-and +279 over the window. Deployed at 55%, between the two measured points and
-nearer the one whose first half improves most.
+and +279 over the window. Deployed at 55%.
+
+ADDENDUM, once +60% was measured: 50%, 55% and 60% are THE SAME SETTING on
+this data. Per trade, +50% and +60% both give -20.18 and -948.25 to the cent
+with the same four TAKE_PROFIT exits -- every trade that reached +50% also
+reached +60%, so the band picks identical trades and 55% lies inside it. The
+choice among the three is immaterial.
+
+    book at +40%   -25.49/tr   -1198.25   TAKE_PROFIT 4   halves -4.15/-45.95
+    book at +50%   -20.18/tr    -948.25   TAKE_PROFIT 4   halves -4.15/-35.54
+    book at +60%   -20.18/tr    -948.25   TAKE_PROFIT 4   halves -4.15/-35.54
+    book at +75%   -19.32/tr    -908.25   TAKE_PROFIT 2   halves -5.45/-32.62
+    book at +100%  -26.77/tr   -1258.25   never fires
+
++75% is 40 dollars better over 60 sessions -- 67 cents a session -- and fires
+half as often. Its first half is worse and its second half better. There is no
+separation worth acting on, so 55% stands. What the table DOES establish is
+that the useful band is roughly 50 to 75: below it (+40%) the rule gives back
+250, and above it (+100%) it never fires at all.
 
 THE RATCHET NEVER FIRES. Every ratchet arm is identical to "off" to the cent:
 +40%, +50%, +60%, with and without stand-down, and all six dynamic-giveback

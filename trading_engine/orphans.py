@@ -118,6 +118,39 @@ ORPHAN_TODAY_ONLY = os.getenv("TRADING_ORPHAN_TODAY_ONLY", "true").lower() == "t
 ORPHAN_ACT_EXPIRY_DAY_ONLY = os.getenv(
     "TRADING_ORPHAN_ACT_EXPIRY_DAY_ONLY", "false").lower() == "true"
 
+# THE ONE RULE A LATER EXPIRY GETS: A PROFIT TARGET, AS A FRACTION OF WIDTH.
+#
+# ORPHAN_ACT_EXPIRY_DAY_ONLY leaves a weekly completely unmanaged -- no stop,
+# no stall, no flatten -- which is right for its DOWNSIDE. A position with
+# five days left has time to recover from a move that would be terminal on
+# expiry day, and section 88 measured every stop and stall variant as a tax.
+#
+# But it also leaves the UPSIDE unattended, and there the 0DTE reasoning does
+# not carry. Section 88's finding -- no profit target beats holding -- rests
+# entirely on a mark that cannot converge to intrinsic before expiry. On a
+# 0DTE spread that convergence happens in the last minutes. On a WEEKLY it
+# happens over days: a spread whose underlying runs well past its short strike
+# on a Tuesday can genuinely be sold near its width on Wednesday, because
+# there is no longer meaningful premium in either leg.
+#
+# So a later expiry gets exactly one rule, and it only ever sells a WINNER:
+#
+#     mark >= width x this fraction   ->  close
+#
+# A FRACTION OF WIDTH, not of maximum return, and the difference is real
+# money: on a 100-wide SNDK spread bought at 61.75, 90% of width is 90.00 and
+# 90% of max return is 96.18. Section 88 recorded getting these two confused.
+#
+# UNMEASURED, and honestly so. It cannot be measured on the data in hand --
+# every logged series is 0DTE, where the convergence this rule depends on
+# never happens. Its case is structural rather than empirical, and the
+# argument above is the whole of it. Next week's logs are what will settle it.
+#
+# 0 disables. Applies ONLY to positions not expiring today; a 0DTE position
+# keeps the ordinary ladder.
+ORPHAN_LATER_TARGET_PCT = float(
+    os.getenv("TRADING_ORPHAN_LATER_TARGET_PCT", "0") or 0)
+
 # ACCOUNT FLOOR: FLATTEN EVERYTHING WHEN EQUITY FALLS THIS LOW.
 #
 # The exit ladder is per-position. Every rule above asks "is THIS structure
@@ -1337,8 +1370,24 @@ def review(engine_symbols: "set | None" = None) -> list:
             else:
                 rec.pop("slow_since", None)
 
+            # A LATER EXPIRY'S ONLY RULE. Checked before everything else and
+            # scoped to positions that are NOT expiring today, so it cannot
+            # interfere with the 0DTE ladder.
+            later_target_hit = False
+            if (ORPHAN_LATER_TARGET_PCT > 0 and not expires_today):
+                width = abs(st["short_strike"] - st["long_strike"])
+                if width > 0:
+                    # For a credit structure the profit is the cost to close
+                    # FALLING, so the target is the mirror of the debit case.
+                    later_target_hit = (
+                        value <= width * (1.0 - ORPHAN_LATER_TARGET_PCT)
+                        if st["credit"] else
+                        value >= width * ORPHAN_LATER_TARGET_PCT)
+
             reason = None
-            if floor_breached:
+            if later_target_hit:
+                reason = "LATER_TARGET"
+            elif floor_breached:
                 # Ahead of every other rule, and deliberately blind to expiry,
                 # the hold window and the intrinsic guards. Those all decide
                 # whether a POSITION is working; this one has already decided
@@ -1421,7 +1470,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 )
             manageable = (MANAGE_ORPHANS
                           and not in_flight
-                          and (floor_breached or expires_today
+                          and (floor_breached or expires_today or later_target_hit
                                or not ORPHAN_ACT_EXPIRY_DAY_ONLY)
                           and (not st.get("inferred") or MANAGE_INFERRED)
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)

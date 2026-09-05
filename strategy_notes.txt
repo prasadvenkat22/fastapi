@@ -5691,3 +5691,47 @@ WHAT REMAINS OPEN, and is worth measuring rather than assuming: this is all
 expiry, and a 90% target could realistically fill on a Tuesday. Nothing here
 tests that -- the weeklies are excluded from every rule -- and next week's
 logs will answer it.
+
+--------------------------------------------------------------------------------
+89. THE ONE RULE A WEEKLY GETS  (2026-09-04)
+--------------------------------------------------------------------------------
+
+ORPHAN_ACT_EXPIRY_DAY_ONLY leaves a later expiry entirely unmanaged, which is
+right for its DOWNSIDE -- five days is time to recover from a move that would
+be terminal on expiry day -- and it also left the UPSIDE unattended.
+
+TRADING_ORPHAN_LATER_TARGET_PCT gives a non-0DTE position exactly one rule:
+
+    mark >= width x 0.90   ->   close
+
+No stop, no stall, no flatten, no ceiling. It can only ever sell a winner.
+
+WHY SECTION 88 DOES NOT APPLY HERE. That section measured eight profit targets
+and found every one worse than holding -- but the cause was specific: on a
+0DTE spread the mark cannot converge to intrinsic before the final minutes, so
+any early exit sells into the short leg's premium. On a WEEKLY the convergence
+happens over DAYS. A spread whose underlying runs well past its short strike
+on Tuesday can genuinely be sold near its width on Wednesday, because by then
+neither leg holds meaningful premium.
+
+    SNDK 1600/1700, width 100, entry 61.75
+      today   intrinsic 100.00, mark 63.40 -- 63% of width, spot 1740
+      target  mark 90.00  ->  +2,825
+      expiry  +3,825
+
+Two thousand dollars given up to be out three days early with certainty.
+
+A FRACTION OF WIDTH, NOT OF MAXIMUM RETURN. On that spread 90% of width is
+90.00 and 90% of max return is 96.18. Section 88 records getting these two
+confused; the correction came from outside and was right.
+
+THIS RULE IS UNMEASURED AND CANNOT BE MEASURED ON THE DATA IN HAND. Every
+logged series is 0DTE. Its case is structural -- the convergence argument
+above is the whole of it -- and next week's logs are the first evidence it
+will ever have. Recorded as unmeasured rather than implied to be backed, which
+is the distinction this file exists to keep.
+
+THE DOWNSIDE IS DELIBERATELY UNGUARDED. If SNDK gaps to 1500 nothing acts and
+the 12,125 committed to these two spreads is gone. That is the accepted trade
+for giving the position time, and it is the same reasoning that keeps the stop
+off them.

@@ -6131,3 +6131,54 @@ sweep whose config was not refreshed the same way as a sweep whose harness was
 not validated. The runner now says so at the top of the file. A better fix is
 for the runner to fetch it itself rather than trusting a file on disk; that is
 worth doing and is not done here.
+
+--------------------------------------------------------------------------------
+98. WHAT THE HARNESS IS FOR, AFTER THREE FIXES  (2026-09-05)
+--------------------------------------------------------------------------------
+
+Validated against the nine sessions the engine traded live, each fix applied
+in turn:
+
+    state                          harness total    live
+    before                         (2 of 9 days traded at all)
+    VWAP fixed (95)                    -512.45      +600.15
+    intrabar stops off (96)            -186.80      +600.15
+    config snapshot refreshed (97)      +101.80     +600.15
+
+It now agrees with the live record in SIGN, reproduces eight of the nine
+sessions, and on 09-03 matches per contract: +249.60 for one contract against
+live's +239 per contract on two.
+
+WHAT REMAINS, AND WHY IT IS NOT A BUG.
+
+  SIZING. Risk sizing reads the SIMULATED account's equity, which drifts from
+  the real one after replaying sixty sessions of different outcomes. On 09-03
+  the harness sized one contract where live took two. Inherent to any
+  backtest that compounds.
+
+  GRANULARITY. Live evaluates every minute; the harness every five-minute
+  bar. Live gets five times as many chances to catch a setup and to re-enter
+  after one closes, which is most of the trade-count difference (09-02: three
+  against one). Fixing it needs one-minute bars, and yfinance keeps those for
+  about seven days, so it cannot be fixed over a sixty-session window.
+
+  CONFIG DRIFT. 08-19's live trades include two ITM_GRINDER fills and that
+  window is not enabled today, so the harness cannot take them. Comparing a
+  current configuration against a historical record will always carry this.
+
+SO WHAT THE HARNESS IS FOR. Relative comparison at five-minute granularity --
+arm A against arm B with everything else held. That is what every sweep in
+this file actually asks, and it is why the credit-slice docstring says the
+model's known overstatement "is common to them and cancels in the comparison".
+
+WHAT IT IS NOT FOR: predicting absolute P&L, or being quoted as the engine's
+expected daily return. Its -30.99/day is a property of the simulation, not a
+forecast, and the live record over the same strategy is +600 across 14 trades.
+
+THE REAL LESSON IS THE METHOD. Three bugs sat in this harness for as long as
+it has existed, and every one was found in an afternoon once the harness was
+compared against the LIVE RECORD trade by trade. Nothing in this repo had
+ever done that -- sweeps were only ever checked against other sweeps, which
+cannot expose a bias they all share. scripts/harness_vs_live.py and
+scripts/harness_indicator_diff.py exist so it can be repeated, and should be
+run whenever the harness or the entry logic is touched.

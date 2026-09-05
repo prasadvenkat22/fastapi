@@ -6241,3 +6241,59 @@ is the mistake this file keeps recording.
 STILL TWO SESSIONS. Every number above rests on 09-03 and 09-04, and 09-03
 contributes few fires. What changed is that the harness now reproduces live
 decisions, so it is at least measuring the right thing.
+
+--------------------------------------------------------------------------------
+100. A RETURN-ON-COST TARGET, DEPLOYED AGAINST THE MEASUREMENT  (2026-09-05)
+--------------------------------------------------------------------------------
+
+TRADING_ORPHAN_TARGET_RETURN_PCT=50. Sells when the mark reaches entry x 1.50,
+regardless of width. Genuinely different from the ceiling, which is a fraction
+of MAX profit and therefore bounded by the width.
+
+    a 10-wide bought at 5.00   target fires at 7.50 -- 75% of width
+    a 10-wide bought at 8.00   target needs 12.00 -- above the width, never
+
+MEASURED, AND IT DOES NOT PAY ON THE SESSIONS IN HAND:
+
+    target   fires  helps      total   vs off
+    +30%         5      0     +26731    -4748
+    +50%         2      0     +30179    -1300
+    +75%         1      0     +31439      -40
+    +100%        0      0     +31479       +0
+
+The two +50% fires: SNDK 1500/1560 booked +1,656 against +2,816 held, QQQ
+722/719 +190 against +370. Zero helps at every level -- the eleventh profit
+target measured on this book and the eleventh to lose.
+
+DEPLOYED ANYWAY, at the account owner's direction and knowingly. The argument
+for it is not in this data: the reachability numbers here come from entries at
+60-80% of width, and every position that ever reached +30% on cost was bought
+at 52-56%. If entries move toward half the width the rule's population
+changes, and forward evidence is the only way to see that.
+
+    reached +10% on cost   15 of 44
+    reached +30%            4 of 44 -- all four paid 52-56% of width
+    reached +50%            1 of 44
+    reached +80%            0 of 44
+
+TWO THINGS MEASURED ALONGSIDE AND WORTH KEEPING.
+
+THE FAST STOP SHOULD NOT WAIT. Sweeping its confirmation with the stall off:
+
+    0 min  3 fires  3 help  +31479      2 min  2 fires  2 help  -98
+    1 min  3 fires  3 help     -63      3 min  1 fire   1 help -548
+                                        5 min  1 fire   1 help -578
+                                       10 min  0 fires        -758
+
+Every fire helps at every setting -- waiting only means firing later on the
+same position at a worse price. Set to 0. The earlier +158 for a 2-minute
+wait came from the broken harness. Note the asymmetry with the SLOW stop,
+which needs its 30 minutes: -20% is inside the noise and -40% is past it.
+
+THE FLATTEN IS ALREADY AT THE RIGHT TIME.
+
+    14:30 +16588   15:00 +20920   15:15 +22672   15:30 +31477   15:45 +31479
+
+15:30 and 15:45 differ by two dollars; everything earlier collapses. The
+book's value appears in the last half hour as the mark converges to intrinsic,
+which is the same wall in clock form. Left at 15:45 at the owner's request.

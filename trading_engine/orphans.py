@@ -365,6 +365,37 @@ STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT",
 # to zero and you keep all of it -- so the ceiling is 90% of the credit.
 ORPHAN_CEILING_FRACTION = float(os.getenv("TRADING_ORPHAN_CEILING", "0.90"))
 
+# A TARGET EXPRESSED AS RETURN ON COST, which the ceiling above is not.
+#
+# The ceiling is a fraction of MAX profit -- entry + f x (width - entry) -- so
+# it is bounded by the width and lands near 95% of it on a position bought at
+# 60-80%. It has never fired: 0 of 44 structures reached it.
+#
+# This is the other shape: sell when the mark reaches entry x (1 + r/100),
+# regardless of width. On a spread bought at half its width the two coincide;
+# on a deep one they diverge sharply, and this one can be unreachable where
+# the ceiling is merely distant.
+#
+# MEASURED AT +50%, and it does not pay on the sessions in hand:
+#
+#     target   fires  helps      total   vs off
+#     +30%         5      0     +26731    -4748
+#     +50%         2      0     +30179    -1300
+#     +75%         1      0     +31439      -40
+#     +100%        0      0     +31479       +0
+#
+# The two +50% fires: SNDK 1500/1560 booked +1,656 against +2,816 held, and
+# QQQ 722/719 +190 against +370. Zero helps at every level, which is the same
+# result every profit target on this book has produced (section 88).
+#
+# DEPLOYED AT 50 ANYWAY, deliberately and at the account owner's direction,
+# to watch it forward on a book whose entries are moving toward half the
+# width -- where the reachability argument is different from the 60-80%
+# entries these numbers are drawn from. Recorded here as deployed AGAINST the
+# measurement rather than on the strength of it.
+ORPHAN_TARGET_RETURN_PCT = float(
+    os.getenv("TRADING_ORPHAN_TARGET_RETURN_PCT", "0") or 0)
+
 # FORCE CLOSE. The engine flattens its own book at 15:45; orphans had no time
 # exit at all and would have ridden into expiry.
 #
@@ -1423,6 +1454,9 @@ def review(engine_symbols: "set | None" = None) -> list:
             elif zero_dte and _past_force_close():
                 # Time beats everything. These settle in shares, not cash.
                 reason = "FORCE_CLOSE"
+            elif ORPHAN_TARGET_RETURN_PCT > 0 and ret_pct >= ORPHAN_TARGET_RETURN_PCT:
+                # Return on cost, not a fraction of max profit. See the knob.
+                reason = "TARGET"
             elif ceiling is not None and ret_pct >= ceiling:
                 reason = "CEILING"
             elif zero_dte and past_hold and giveback_held:

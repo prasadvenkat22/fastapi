@@ -6323,3 +6323,27 @@ WHAT WOULD BRING IT BACK: entries much cheaper than this book has seen. At 20%
 of width the ceiling's threshold falls to 84% of width, which is within reach
 of marks that have been observed. Nothing here tested that, and the cheapest
 debit entry in the sample was 52%.
+
+ADDENDUM TO 100: THE MANUAL TARGET MATCHES THE ENGINE AT 55%.
+
+TRADING_ORPHAN_TARGET_RETURN_PCT 50 -> 55, matching TRADING_RIDE_TAKE_PROFIT.
+Both 0DTE books now take profit at the same figure -- +55% of what was paid --
+so there is one number to remember rather than two that differ for no reason
+anybody could state.
+
+It also measures marginally better, though that is not why:
+
+    +50%   2 fires  0 helps   -1300
+    +55%   2 fires  0 helps   -1160
+    +60%   2 fires  0 helps    -990
+
+Same two fires at every level; the difference is only how much of SNDK
+1500/1560 is left on the table (+1,776 at 55 against +2,816 held). Still
+negative, still deployed knowingly, still waiting on forward evidence from a
+book whose entries are moving toward half the width.
+
+THE WEEKLY TARGET STAYS A FRACTION OF WIDTH (90%), and the difference is not
+an inconsistency. A 0DTE mark cannot converge to intrinsic before the last
+minutes, so return-on-cost is the only measure with any chance of firing. A
+weekly's mark converges over DAYS, which makes a fraction of width both
+reachable and the more natural statement of "this trade is done".

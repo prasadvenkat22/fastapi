@@ -267,9 +267,12 @@ ADOPTED / MANUAL 0DTE  (orphans.py)
     slow stop   entry x 0.80, held 30 minutes CONTINUOUSLY, clock resets the
                 moment the mark recovers. Does NOT respect the intrinsic guard.
   taking profit
-    target      +50% RETURN ON COST -- deployed against the measurement, see
-                section 100. Fires only on spreads bought cheap relative to
-                width; on one bought at 80% of width it cannot fire at all.
+    target      +55% RETURN ON COST -- the SAME number as the engine's ride
+                take-profit, deliberately, so 0DTE has one figure to remember.
+                Deployed against the measurement (section 100): it fires twice
+                across 44 structures and helps zero times. It can only fire on
+                a spread bought below 2/3 of its width -- above that, entry x
+                1.55 exceeds the width and the rule is inert by arithmetic.
     ceiling     OFF. It needed a mark averaging 94% of width and the median
                 position's best moment reached 73%; 0 of 44 fires. Removed
                 because two profit rules where one is dead invites confusion,

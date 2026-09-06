@@ -7185,3 +7185,45 @@ WHAT TO RE-RUN. `python scripts/sweep.py macro` now reproduces the deployed
 engine by default. Re-run it when forward data grows: the question is whether
 crude's gate ever refuses a session the engine would have lost on, and whether
 the TNX gate is refusing the wrong third.
+
+--------------------------------------------------------------------------------
+113. THE MACRO GATES WERE MEASURING A GAP THE MARKET HAD ALREADY PRICED
+     (2026-09-06)
+--------------------------------------------------------------------------------
+
+Every macro term -- VIX velocity, the 10-year spike, and the crude gate added
+in section 112 -- measured its move from the 09:30 cash open. That is the
+wrong baseline, and the engine already contained the argument against it.
+
+WARMUP_MINUTES has been 15 since the beginning, and section 2 states why: "no
+entries for 15 minutes -- the opening auction produces whipsaws the indicators
+read as trend." The engine refuses to ENTER on the first fifteen minutes
+because it does not trust them, and then anchored every macro reading to the
+first tick of exactly that window. It was distrusting the open and measuring
+from it at the same time.
+
+WHAT THE OPEN CONTAINS IS ALREADY PRICED. Crude, yields and whatever political
+news broke overnight are in the 09:30 print. A gate reading "change since the
+open" is scoring a gap that was public before the bell, which every
+participant has already traded, and which the engine cannot act on because it
+is not allowed to enter yet. By 10:15, when MORNING_DRIFT actually opens, that
+number is an hour-old fact about yesterday.
+
+WHAT A 0DTE BOOK NEEDS is whether conditions are DETERIORATING inside the
+session it is holding through -- yields still climbing at 11:00, crude backing
+off, VIX easing after an opening spike. That is a different measurement, and
+it is the one the risk-off exit at nodes.py:2286 is trying to make.
+
+DEPLOYED: TRADING_MACRO_ANCHOR_MINUTES=15, so every session-move reading is
+taken from 09:45 rather than 09:30. Set 0 to restore the old anchor. The
+fallback matters and is deliberate: a cycle running before 09:45 has no
+anchored bar yet and drops back to the 09:30 open rather than failing, since
+the engine cannot enter then anyway.
+
+THIS ALSO REFRAMES SECTION 112'S TABLE. Those terciles bucketed the move from
+the OPEN, which is the baseline this section is retiring. "10Y by 10:15" was
+09:30-to-10:15 including the gap; it is now 09:45-to-10:15, a cleaner reading
+of intra-session drift. The sweep must be re-run before its numbers are quoted
+again -- and in particular the finding that the TNX gate may be on the wrong
+tail was computed on the old anchor and is not yet a statement about the
+deployed engine.

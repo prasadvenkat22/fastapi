@@ -429,6 +429,34 @@ def _tradier_session_volume() -> "float | None":
 OIL_SYMBOL = os.getenv("TRADING_OIL_SYMBOL", "CL=F")
 
 
+# How far past 09:30 to anchor every macro session-move reading.
+#
+# THE OPEN HAS ALREADY PRICED THE OVERNIGHT. Crude, yields and whatever
+# political news broke since yesterday's close are in the 09:30 print; a gate
+# measuring "change since the open" therefore measures a gap that was public
+# before the bell and is stale by the time the engine can act. What a 0DTE
+# book needs to know is whether conditions are DETERIORATING during the
+# session it is holding through.
+#
+# 15 minutes, matching WARMUP_MINUTES exactly, and that match is the point.
+# nodes.py already refuses to ENTER before 09:45 because "the opening auction
+# produces whipsaws the indicators read as trend" -- and then anchored every
+# macro term to 09:30, the one bar the entry logic had already decided was
+# unreliable. The engine was distrusting the open and measuring from it at the
+# same time.
+#
+# Set 0 to restore the old 09:30 anchor.
+MACRO_ANCHOR_MINUTES = int(os.getenv("TRADING_MACRO_ANCHOR_MINUTES", "15"))
+
+
+def _anchor_time() -> time:
+    """The clock time every macro session-move reading is measured from."""
+    if MACRO_ANCHOR_MINUTES <= 0:
+        return MARKET_OPEN_ET
+    total = MARKET_OPEN_ET.hour * 60 + MARKET_OPEN_ET.minute + MACRO_ANCHOR_MINUTES
+    return time(total // 60, total % 60)
+
+
 def _regular_session_open(bars: pd.DataFrame) -> float:
     """First regular-hours opening print in an intraday bar series.
 
@@ -452,7 +480,12 @@ def _regular_session_open(bars: pd.DataFrame) -> float:
         ny_index = bars.index.tz_convert(NY)
         bars = bars[ny_index.date == ny_index.date.max()]
         ny_times = bars.index.tz_convert(NY).time
-        regular_hours = bars[ny_times >= MARKET_OPEN_ET]
+        regular_hours = bars[ny_times >= _anchor_time()]
+        # Fall back to the 09:30 bar if the anchored window has not opened
+        # yet -- a 09:35 cycle must still get a reading, just one anchored to
+        # the cash open until 09:45 exists.
+        if regular_hours.empty:
+            regular_hours = bars[ny_times >= MARKET_OPEN_ET]
     except (TypeError, AttributeError):  # tz-naive index — not expected intraday
         regular_hours = bars
     session_bars = regular_hours if not regular_hours.empty else bars

@@ -7119,3 +7119,69 @@ trades.
 WHAT THIS DID NOT CHANGE. No trading behaviour. The macro verdict was inert
 before and is inert now, just sampled less often; the news feature was
 advisory before and is advisory now.
+
+--------------------------------------------------------------------------------
+112. THE MACRO GATES, MEASURED FOR THE FIRST TIME -- AND TWO ADDED ANYWAY
+     (2026-09-06)
+--------------------------------------------------------------------------------
+
+sweep.py macro has existed since the macro terms were written and had never
+been run at the deployed configuration. Its own docstring states the question
+correctly -- "not whether crude moves QQQ, but whether knowing crude's move
+would have changed what we should trade" -- and it is careful about the trap
+that makes most versions of this test meaningless: bucketing a session by its
+FULL-DAY change scores the engine on information that did not exist at 10:15.
+
+OBSERVABLE AT THE DECISION, 60 sessions, engine P&L per day by tercile:
+
+    10Y by 10:15   n=50   down  -6.44   flat  +8.21   up  -1.37
+    10Y by 13:30   n=50   down  +5.76   flat  +5.75   up -10.02
+    crude by 10:15 n=49   down  -7.94   flat +16.61   up  -2.15
+    crude by 13:30 n=49   down  +3.00   flat +26.12   up -21.40
+    VIX by 10:15   n=58   down  -7.23   flat  +3.18   up -12.52
+    VIX by 13:30   n=58   down +14.47   flat -32.36   up  +0.62
+
+THREE READINGS, AND THEY DISAGREE WITH EACH OTHER.
+
+  Rising yields and rising crude ARE the worst buckets by 13:30. That is the
+  intuition, and it is there.
+
+  But the MIDDLE bucket wins four of six rows. A real directional effect is
+  monotone; "the middle third is best" is what noise looks like cut in three.
+
+  And the two observation times invert. At 10:15 FALLING yields is the worst
+  bucket (-6.44) and rising is nearly flat (-1.37); by 13:30 it reverses. A
+  stable effect does not change sign with when you look at it.
+
+  VIX by 13:30 is incoherent outright -- down +14.47, flat -32.36, up +0.62.
+
+  Fifty days in three buckets is ~17 sessions each against daily P&L that
+  swings in the hundreds. Everything above is inside the noise.
+
+THE TNX GATE MAY BE ON THE WRONG TAIL. It refuses when yields RISE >= 4bp,
+evaluated on what is visible at the decision. On the 10:15 row rising yields
+is -1.37 a day and FALLING yields is -6.44. Its supporting evidence -- "4bp,
+not 8, measured over a month of 5-minute history" -- calibrated WHERE to draw
+the line and never tested whether the line helps. That is a live gate on the
+0DTE book resting on a threshold study.
+
+CRUDE WAS ADDED ANYWAY, at the account owner's direction, knowingly, after
+this table was put in front of them twice. TRADING_CRUDE_SPIKE_PCT=2.5 forces
+risk-off when crude is 2.5% above its session open. It is a named gate in the
+same dict as the others, so the log records "refused by: crude" rather than
+leaving it to elimination -- which is the mistake section 14 recorded costing
+a database query and a process of elimination to undo. Set it to 0 to disable
+without a deploy.
+
+VIX VELOCITY TIGHTENED, 10% -> 7%. This is the "things change in an hour"
+case and the one term on the board already gating on a measured threshold.
+Tightening a live term is a smaller step than adding an unmeasured one.
+
+THE LLM GATE STAYS OFF. It was offered and declined. Section 14's finding
+still stands: over 08-24 and 08-25 it refused 55 of 55 cycles on a day QQQ
+rose $6.50 off its low.
+
+WHAT TO RE-RUN. `python scripts/sweep.py macro` now reproduces the deployed
+engine by default. Re-run it when forward data grows: the question is whether
+crude's gate ever refuses a session the engine would have lost on, and whether
+the TNX gate is refusing the wrong third.

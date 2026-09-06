@@ -765,6 +765,13 @@ RISK_OFF_STOP_LOSS_PCT = float(os.getenv("TRADING_RISK_OFF_STOP_LOSS_PCT", "-13.
 VIX_LEVEL_MAX = float(os.getenv("TRADING_VIX_LEVEL_MAX", "22.0"))
 VIX_SPIKE_PCT = float(os.getenv("TRADING_VIX_SPIKE_PCT", "10.0"))
 
+# Crude's intraday move, in percent from the session open, that forces
+# risk-off. 0 disables the term entirely, which is what it was until
+# 2026-09-06 -- "fetched and REPORTED but does not gate anything yet".
+# See the block beside the gates dict for the measurement this was added
+# against, and section 112.
+CRUDE_SPIKE_PCT = float(os.getenv("TRADING_CRUDE_SPIKE_PCT", "0"))
+
 # 10-year Treasury yield, judged purely on intraday velocity. The Nasdaq-100
 # is the longest-duration equity index, so its multiple moves inversely with
 # real rates — a sharp yield spike is a direct headwind that neither VIX nor
@@ -1698,11 +1705,36 @@ async def market_signals_agent(state: TradingState) -> dict:
     # By elimination the LLM verdict refused all 55 on a day QQQ rose $6.50
     # off its low. That is a real finding and it took a database query and a
     # process of elimination to reach. One field makes it readable.
+    # CRUDE, added 2026-09-06 at the account owner's direction and knowingly
+    # against the only measurement of it. sweep.py macro bucketed the engine's
+    # own daily P&L by each macro input at the decision, 60 sessions:
+    #
+    #     crude by 10:15  n=49   down -7.94/day   flat +16.61/day   up -2.15/day
+    #     crude by 13:30  n=49   down +3.00/day   flat +26.12/day   up -21.40/day
+    #
+    # The MIDDLE bucket is best on both rows, which is the signature of noise
+    # rather than a directional effect, and ~17 sessions a bucket cannot carry
+    # a live gate either way. Rising crude IS the worst bucket by 13:30, which
+    # is the reading this gate acts on; it is not the worst by 10:15.
+    #
+    # Set TRADING_CRUDE_SPIKE_PCT=0 to disable without a deploy. Recorded here
+    # so that when this is re-examined the evidence it was added against is
+    # beside it, not in a commit message nobody will find.
+    crude_spiking = (
+        oil is not None and CRUDE_SPIKE_PCT > 0 and oil.change_pct >= CRUDE_SPIKE_PCT
+    )
+    if crude_spiking:
+        logger.warning(
+            "Crude spiking: %.2f, %+.2f%% from today's open — forcing risk-off.",
+            oil.level, oil.change_pct,
+        )
+
     gates = {
         "breadth": breadth_is_bullish,
         "vix_level": vix.level < VIX_LEVEL_MAX,
         "vix_spike": vix.change_pct < VIX_SPIKE_PCT,
         "yields": not yields_spiking,
+        "crude": not crude_spiking,
         "llm": llm_verdict == "GOOD" or not MACRO_LLM_GATE,
     }
     failed = [name for name, ok in gates.items() if not ok]

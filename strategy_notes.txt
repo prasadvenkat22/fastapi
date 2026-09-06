@@ -6753,3 +6753,46 @@ LOCAL NOW MIRRORS THE SERVER. .env carries all 64 TRADING_ keys read from
 `docker exec app env`, with two deliberate inversions: TRADING_LIVE_ORDERS
 false and TRADING_ORDER_PREVIEW_ONLY true. A local run that silently differs
 from production is how section 103 happened.
+
+--------------------------------------------------------------------------------
+106. THE CREDIT TRAIL WAS SWITCHED OFF BY AN ENV OVERRIDE NOBODY RECORDED
+     (2026-09-06)
+--------------------------------------------------------------------------------
+
+Section 105's exit sweep found the credit window's final take-profit measuring
+as a no-op: 50%, 70% and 90% returned byte-identical results across 11 trades.
+The reason it does nothing in REPLAY is benign -- the 5-minute stall books
+first in almost every session. The reason it was set to 50 is not.
+
+    playbook.py:741   final_take_profit_pct default 90
+    server            TRADING_CREDIT_FINAL_TAKE_PROFIT=50.0
+
+The design is a trail: take_profit_pct=50 ARMS it, final_take_profit_pct=90
+BOOKS it. Setting the booking level TO the arming level collapses the trail to
+zero width, and nodes.py:453 already says so in as many words:
+
+    "The credit window books the instant it touches final_take_profit_pct,
+     and with TRADING_CREDIT_FINAL_TAKE_PROFIT=50 in production that target
+     sits ON the trail-arming level, collapsing the designed 50-to-90 trail
+     to zero width."
+
+The code recorded the defect, the deployment kept causing it, and no sweep
+looked because no sweep had ever run the deployed configuration (section 103).
+
+WHAT IT COST, ON THE RECORD. The 2026-08-20 call credit spread booked at +51%
+and was worth +72% forty-five minutes later, with spot four dollars below the
+short strike. trading_history carries that fill: AFTERNOON_CREDIT:CLEAN,
+TAKE_PROFIT, +51.4%. Twenty-one points of a bounded structure handed back on a
+session where nothing had gone wrong -- which, for 0DTE short premium, is the
+base case.
+
+REMOVED RATHER THAN RE-SET. The right value is the one playbook.py already
+defaults to, so the override is deleted rather than changed to 90. A setting
+that exists only to restate a default is one more place for the two to drift.
+
+THIS IS THE THIRD UNDOCUMENTED SERVER OVERRIDE FOUND TODAY. RIDE_TAKE_PROFIT
+55 against a recorded 50, MORNING_WIDTH 10.0 against a code default of 6.0
+(that one CORRECT and load-bearing), and now CREDIT_FINAL_TAKE_PROFIT 50
+against a designed 90. Two of the three contradicted a decision this file had
+written down. The pattern is not that the server is wrong -- it is that
+nothing reconciles the two, so whichever was edited last silently wins.

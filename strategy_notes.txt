@@ -6967,3 +6967,57 @@ STILL NOT CAPTURED, DELIBERATELY: VWAP and intraday high/low per name. Both are
 intraday measures and this book holds for days; neither has a measured rule
 attached; and the file's standard is that an unmeasured term is logged beside a
 decision or not at all, never wired into one.
+
+--------------------------------------------------------------------------------
+109. VWAP WAS EXCLUDED BY AN ARGUMENT THAT ONLY APPLIED TO THE SESSION FORM
+     (2026-09-06)
+--------------------------------------------------------------------------------
+
+weekly_signals.py has carried this since it was written, under "What is
+deliberately NOT here":
+
+    "VWAP. It is a session-scoped intraday measure and a weekly position spans
+     five sessions and five VWAPs, so there is no single value to record and
+     no meaning in the one from Friday afternoon."
+
+Section 108 repeated it when refusing the outside note's VWAP stop rule. Both
+were half right. The argument rules out the SESSION form and says nothing about
+an ANCHORED one, and "there is no single value to record" is exactly wrong for
+the anchored form -- one value is what it is.
+
+A VWAP ANCHORED TO MONDAY'S OPEN spans the same sessions the position spans,
+does not reset under the trade, and is the level the week's flow actually
+transacted at. That is the reference a five-day hold wants on day four, and the
+original objection assumed it could not exist.
+
+MEASURED THE MOMENT IT EXISTED:
+
+    SNDK   weekly VWAP 1576.00   close 1740.00   ABOVE by 164.00 = 1.50 ATR
+    QQQ    weekly VWAP  713.51   close  718.96   ABOVE by   5.45 = 0.66 ATR
+
+SNDK's 2026-09-04 gap left it a full one and a half ATR above where the week's
+volume changed hands. A session VWAP on the Friday close cannot say that, and
+the daily bars alone do not either -- it is a statement about where SIZE
+traded, which is the one thing this book had no reading of.
+
+APPROXIMATED FROM DAILY BARS: typical price (H+L+C)/3 weighted by daily volume.
+Coarser than a true intraday tick VWAP, and the column should be read as
+"roughly where the week's volume transacted". data_feed._tradier_session_vwap
+already consumes Tradier's per-bar vwap, so a precise version is available for
+the live path if the coarse one earns its place.
+
+SIDE IS BANDED, NOT A KNIFE EDGE. ABOVE/AT/BELOW uses a quarter-ATR tolerance,
+so the label does not flip on a move the position cannot feel. A boolean
+"holds VWAP" flag on a name whose ATR is 6.3% of price would change state
+constantly and mean nothing.
+
+STILL NOT A GATE. The note's rule -- "never stop out if the stock holds VWAP"
+-- remains unmeasured and is not wired to anything. What has changed is that it
+is now testable: sig_vwap_side sits beside sig_atr14 and the forward returns in
+news_symbol_impact, so in a few weeks the question "does holding weekly VWAP
+predict anything" has an answer instead of an opinion.
+
+THE LESSON IS THE ONE FROM SECTION 103 IN A DIFFERENT COSTUME. A reason written
+down once gets re-read as settled. This one sat in a module docstring for weeks
+and was quoted back approvingly in section 108 on the same day it turned out to
+be too broad. Rejections deserve the same scepticism as decisions.

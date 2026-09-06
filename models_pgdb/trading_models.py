@@ -300,6 +300,10 @@ class WeeklyShadow(Base):
     # sentiment would be an unmeasured model sitting next to measured columns.
     # NET position greeks -- the spread's, not a leg's. short_delta above
     # describes one contract; these describe the trade. See greeks.py.
+    # Weekly-ANCHORED VWAP (Monday's open), not the session form. One value
+    # across the sessions the position spans; see weekly_signals.py.
+    sig_vwap_week = Column(Float, nullable=True)
+    sig_vwap_side = Column(String, nullable=True)   # ABOVE / AT / BELOW
     sig_net_delta = Column(Float, nullable=True)
     sig_net_gamma = Column(Float, nullable=True)
     sig_net_theta = Column(Float, nullable=True)

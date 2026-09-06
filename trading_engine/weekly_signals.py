@@ -17,10 +17,17 @@ before, and these columns are notes beside the row.
 
 What is deliberately NOT here
 -----------------------------
-VWAP. It is a session-scoped intraday measure and a weekly position spans
-five sessions and five VWAPs, so there is no single value to record and no
-meaning in the one from Friday afternoon. It belongs to the 0DTE engine and
-does not transfer.
+SESSION VWAP. It is a session-scoped intraday measure and a weekly position
+spans five sessions and five VWAPs, so there is no single value to record and
+no meaning in the one from Friday afternoon. It belongs to the 0DTE engine
+and does not transfer.
+
+  [2026-09-06: that argument was stated as if it ruled out VWAP entirely, and
+  it does not. It rules out the SESSION form only. A VWAP ANCHORED to Monday's
+  open is one value across the whole week, does not reset, and is the level
+  the week's flow actually transacted at -- exactly the reference a five-day
+  hold wants on day four. "There is no single value to record" is precisely
+  wrong for the anchored form. sig_vwap_week and sig_vwap_side below.]
 
 Everything is computed on DAILY bars, not the 5-minute bars data_feed serves
 the 0DTE engine. A 20-period Bollinger band on 5-minute bars describes the
@@ -33,6 +40,7 @@ six months without waiting another ten Fridays to re-collect the data.
 """
 import logging
 import math
+from datetime import timedelta
 
 import pandas as pd
 import yfinance as yf
@@ -155,6 +163,49 @@ def read(symbol: str) -> dict:
     except Exception:
         pass
 
+    # WEEKLY-ANCHORED VWAP. Anchored to the most recent Monday, so it is ONE
+    # value spanning the same sessions the position spans, and it does not
+    # reset under the trade the way a session VWAP does.
+    #
+    # Approximated from DAILY bars: typical price (H+L+C)/3 weighted by daily
+    # volume. That is coarser than a true intraday tick VWAP, and the column
+    # should be read as "roughly where the week's volume transacted", not as
+    # an exact figure. Tradier's timesales already returns a per-bar vwap --
+    # data_feed._tradier_session_vwap consumes it -- so a precise version is
+    # available for the live path if this one ever earns its place.
+    vwap_week = vwap_side = None
+    try:
+        idx = list(bars.index)
+        last = idx[-1]
+        last_date = last.date() if hasattr(last, "date") else last
+        # Monday of the week containing the latest session.
+        anchor = last_date - timedelta(days=last_date.weekday())
+        num = den = 0.0
+        for i, ts in enumerate(idx):
+            d = ts.date() if hasattr(ts, "date") else ts
+            if d < anchor:
+                continue
+            vol = float(bars["Volume"].iloc[i] or 0.0)
+            if vol <= 0:
+                continue
+            typical = (float(bars["High"].iloc[i]) + float(bars["Low"].iloc[i])
+                       + float(bars["Close"].iloc[i])) / 3.0
+            num += typical * vol
+            den += vol
+        if den > 0:
+            vwap_week = round(num / den, 4)
+            # A band, not a knife-edge: within 0.25 ATR of the level is AT, so
+            # the label does not flip on noise the position cannot feel.
+            tol = (atr14 or 0.0) * 0.25
+            if close > vwap_week + tol:
+                vwap_side = "ABOVE"
+            elif close < vwap_week - tol:
+                vwap_side = "BELOW"
+            else:
+                vwap_side = "AT"
+    except Exception:
+        pass
+
     move_5d = None
     if len(closes) >= 6:
         prior = float(closes.iloc[-6])
@@ -164,6 +215,8 @@ def read(symbol: str) -> dict:
     return {
         "close": round(close, 4),
         "atr14": atr14,
+        "vwap_week": vwap_week,
+        "vwap_side": vwap_side,
         "atr_pct": atr_pct,
         "ema9": round(ema9, 4),
         "ema20": round(ema20, 4),
@@ -281,6 +334,8 @@ def entry_signals(symbol: str, short_iv: "float | None" = None,
         "sig_rv20": rv20,
         "sig_rv_iv_ratio": rv_iv,
         "sig_atr14": sym.get("atr14"),
+        "sig_vwap_week": sym.get("vwap_week"),
+        "sig_vwap_side": sym.get("vwap_side"),
         "sig_atr_pct": sym.get("atr_pct"),
         # Cushion in the name's OWN daily moves -- section 102's test, done
         # with True Range. Under 1 is a coin flip whatever the position cost;

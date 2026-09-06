@@ -7227,3 +7227,58 @@ of intra-session drift. The sweep must be re-run before its numbers are quoted
 again -- and in particular the finding that the TNX gate may be on the wrong
 tail was computed on the old anchor and is not yet a statement about the
 deployed engine.
+
+--------------------------------------------------------------------------------
+114. MAXIMISING THE PROBABILITY OF SUCCESS IS THE LOSING OBJECTIVE  (2026-09-06)
+--------------------------------------------------------------------------------
+
+Asked for the highest probability of success, adjusting ITM depth. Ranked the
+tracked names by exactly that, on live quotes:
+
+    DELL 430/480   long leg +3.14 ATR ITM
+      P(win) 88.9%   R:R 1:0.01   risk $4,960   reward $40
+      break-even 99.2%   edge -10.3 points   EV -$164
+
+The highest-probability structure on the board loses money. Push the long leg
+deeper and probability rises, but the BREAK-EVEN RISES FASTER. Every one of the
+top six by probability was negative.
+
+THE FRONTIER, same names and same session:
+
+    deep ITM    DELL 430/480  +3.14 ATR   P 88.9%  R:R 1:0.01   need 99.2%  EV -164
+    moderate    NVDA 230/240  +0.05 ATR   P 52.0%  R:R 1:2.68   need 27.2%  EV  +24
+    far OTM     NVDA 242/248  -1.59 ATR   P  9.0%  R:R 1:40.7   need  2.4%  EV  +16
+
+The middle is where the gap between what you get and what you need is widest.
+The far-OTM cell is positive but its entire EV sits in a 3% tail estimated from
+~25 observations, and it loses outright 91% of the time. What to maximise is
+EDGE -- P(win) minus cost/width -- not P(win).
+
+EV NEEDS THREE TERMS, NOT TWO. A vertical can finish BETWEEN its strikes, and
+for the structures this book trades that band holds most of the probability:
+NVDA 230/240 is 12.9% max / 39.1% partial / 48.0% loss. Scoring it as win-or-
+lose misprices it badly. The ranker computes the full expectation over the
+name's own drift-removed distribution, which is where P comes from -- ITM depth
+only decides where the strike boundaries fall inside it.
+
+NET DELTA IS A PROBABILITY, BUT NOT THE ONE IT IS QUOTED AS. A leg's delta
+approximates P(that strike finishes ITM), so the SHORT leg's delta is P(MAX
+profit) and the difference -- the "net delta" people call the probability of
+the trade -- is P(finishing BETWEEN the strikes). Checked against three years
+of drift-removed moves:
+
+                     net delta   realised    gap
+    DELL 430/480       10.8%       9.9%    +0.9p
+    MRVL 220/235       32.5%      36.4%    -3.9p
+    NVDA 230/240       46.0%      39.1%    +6.9p
+
+Good on the body, weakest on P(max) -- off by -6.0p on NVDA and +5.2p on MRVL,
+which is exactly where the payoff lives. Delta is a sanity check available
+instantly from the chain, not a replacement for the empirical bands.
+
+AND THE OUTSIDE NOTE'S BENCHMARK IS HALF RIGHT. "Long 70-80 delta, short 40-50
+delta" is a sensible net delta of 25-40. Its stated REASON is not: a 40-50
+delta short leg is at the money, which is where vega and gamma peak -- the most
+volatility-sensitive strike on the board, and the opposite of defensive. The
+SNDK position works because its short leg sits at 0.613 delta, comfortably ITM,
+which is why its net vega is only -0.271 (section 108).

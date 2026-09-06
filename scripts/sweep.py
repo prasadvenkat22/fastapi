@@ -389,7 +389,14 @@ class _Account:
 # probability approximation. Off by default so that every result already
 # committed in playbook.py can still be reproduced by re-running this file;
 # turn it on with SWEEP_CHAIN_PRICING=1 and the two are one flag apart.
-CHAIN_PRICING = _flag("SWEEP_CHAIN_PRICING", False)
+# Defaults ON. Every result recorded in strategy_notes.txt is chain-priced,
+# so OFF-by-default meant the honest invocation -- `python scripts/sweep.py
+# <arm>` with nothing exported -- produced numbers that were not comparable
+# to a single figure in the file, and said so only in a banner line that is
+# easy to read past. Section 103 is what that cost: an entire grid measured
+# in MODEL prices before the banner was noticed. Export SWEEP_CHAIN_PRICING=0
+# to get the old behaviour deliberately.
+CHAIN_PRICING = _flag("SWEEP_CHAIN_PRICING", True)
 
 # Session VIX, so the smile scales to the day being replayed rather than
 # pricing a March panic at the quiet session it was fitted on.

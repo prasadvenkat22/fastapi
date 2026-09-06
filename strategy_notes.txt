@@ -6796,3 +6796,52 @@ THIS IS THE THIRD UNDOCUMENTED SERVER OVERRIDE FOUND TODAY. RIDE_TAKE_PROFIT
 against a designed 90. Two of the three contradicted a decision this file had
 written down. The pattern is not that the server is wrong -- it is that
 nothing reconciles the two, so whichever was edited last silently wins.
+
+--------------------------------------------------------------------------------
+107. THE HARNESS NOW REPRODUCES THE DEPLOYMENT BY DEFAULT  (2026-09-06)
+--------------------------------------------------------------------------------
+
+Sections 103 to 106 all trace to one root: `python scripts/sweep.py <arm>`,
+typed exactly as this file documents it, did not reproduce the engine. It
+took a $6 width, no stall exit, no ride take-profit, half the sizing and
+MODEL prices, and reported the result in the same format as every trustworthy
+number here.
+
+CLOSED, in three parts, none of which rely on remembering to export anything:
+
+  1. sys.path bootstrap. The documented invocation used to die outright on
+     ModuleNotFoundError unless the shell already carried PYTHONPATH.
+
+  2. .env mirrors the server. All 64 TRADING_ keys, read from
+     `docker exec app env`, with TRADING_LIVE_ORDERS false and
+     TRADING_ORDER_PREVIEW_ONLY true as the only deliberate inversions. The
+     harness reads the same file the app does, so width, stop, stall, ride
+     take-profit, sizing and equity now arrive correct with nothing exported.
+
+  3. SWEEP_CHAIN_PRICING defaults to TRUE. It was False, while every result
+     in this file is chain-priced -- so the honest invocation produced numbers
+     comparable to nothing here, and said so only in a banner line. Export
+     SWEEP_CHAIN_PRICING=0 to opt out deliberately.
+
+VERIFIED by typing the plain command with an empty environment:
+
+    pricing          CHAIN-CALIBRATED   tick grid on
+    entry fraction   0.20   equity 6,500
+    morning stop     +55% take-profit   credit floor 0.20   short delta 0.25
+    stall exit       5 min / 3% giveback
+    morning window   width 10.0   stop -50%   10:15:00-12:30:00
+
+Field for field the deployed engine, with no exports and no ceremony.
+
+WHAT THIS DOES NOT DO. It does not make old numbers right. Every figure in
+sections 27 through 102 was produced by the old defaults and should be read as
+describing a $6-wide spread with no stall and no ride take-profit at half
+sizing -- an instrument that has never traded. Re-measure before quoting, and
+prefer the banner over the section heading.
+
+THE RULE THAT WOULD HAVE PREVENTED ALL OF IT. A harness whose defaults differ
+from the deployment will eventually be run with the defaults, and the run will
+look exactly like a real one. Declaring the divergence in a banner is
+necessary and was not sufficient: the banner was printed, correctly, at the
+top of the very run that produced section 103's wrong grid, and it was read
+past. Defaults are what get measured.

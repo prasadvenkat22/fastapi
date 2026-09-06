@@ -6901,3 +6901,69 @@ look exactly like a real one. Declaring the divergence in a banner is
 necessary and was not sufficient: the banner was printed, correctly, at the
 top of the very run that produced section 103's wrong grid, and it was read
 past. Defaults are what get measured.
+
+--------------------------------------------------------------------------------
+108. WHAT THE SINGLE-NAME BOOK NOW CAPTURES, AND THE ONE OUTSIDE CLAIM THAT
+     SURVIVED CHECKING  (2026-09-06)
+--------------------------------------------------------------------------------
+
+An outside note proposed a master list for weekly single-name spreads: the four
+greeks, VWAP, ATR, intraday high/low, Bollinger bands, RSS from the prime wires,
+vector embeddings, cosine distance, and a source-weight matrix. Scored against
+what this repository actually holds, most of it already existed, two items were
+genuinely missing, and one recommendation is the kind this file has repeatedly
+had to retract.
+
+ALREADY HELD: delta (weekly_shadow.short_delta), IV (short_iv), realised vol and
+the RV/IV ratio, Bollinger zone and width, vector embeddings (Voyage, 2,321
+rows), cosine distance (query_similar_headlines), and ATR14 as of section 107.
+
+MISSING AND NOW ADDED: net position greeks, and the feed a headline arrived on.
+
+NEVER STOP OUT IF THE STOCK HOLDS VWAP is the one to refuse. It is a hard rule
+with no measurement behind it, VWAP resets every session while these positions
+are held four to five days, and the cushion test of section 102 already does
+that job with evidence. The 0.2x/2.5x source weights are the same shape --
+hardcoded constants nobody measured -- which is why the source COLUMN was added
+and the weighting was not.
+
+THE VEGA CLAIM IS CORRECT, AND IT IS THE WHOLE TRADE. Measured on the live SNDK
+1600/1700 chain with spot 1740 and four sessions left:
+
+    1600C  mid 157.30  IV 75.6%  delta 0.823  gamma 0.00156  theta -3.710  vega +0.569
+    1700C  mid  90.20  IV 77.7%  delta 0.613  gamma 0.00225  theta -5.630  vega +0.839
+
+    NET           delta +0.211  gamma -0.0007  theta +1.920/day  vega -0.271
+
+Both legs bleed theta and both are long vega. The SPREAD earns theta and is
+SHORT vega, and neither fact is visible from either leg -- which is exactly what
+short_delta alone had been recording since weekly_shadow was written.
+
+    cost 67.10   intrinsic 100.00   extrinsic -32.90   max profit +32.90
+
+MAX PROFIT AND NEGATIVE EXTRINSIC ARE THE SAME NUMBER. The position pays 67.10
+for 100.00 of intrinsic, and everything it can earn is that discount closing.
+Theta and vega are the only two engines that close it: at +1.92 a day, four
+sessions recover 7.68 of the 32.90, and the remaining ~25 needs only that the
+spread stay above the short strike -- delta's job, and delta is just +0.21. An
+IV crush PAYS this structure, ten points being +2.71 a share, because the short
+leg sits nearer the money and so nearer peak vega than the long one.
+
+That reframes the deep-ITM trade correctly. It is not a directional bet with a
+cushion; it is a theta and vega harvest with a modest directional requirement.
+It also explains why section 106's drift test could read EV near zero while the
+structure still looks sound: the drift test measures the directional half only.
+
+WHAT WAS BUILT
+  trading_engine/greeks.py       leg and net greeks, driftless, zero rate --
+                                 the same convention chain_pricer already uses
+  weekly_shadow                  sig_net_delta/gamma/theta/vega written per row
+  market_news_vectors.source     populated from the scrape via nodes._LAST_SOURCES
+                                 and _feed_name(); PR_NEWSWIRE, BUSINESS_WIRE and
+                                 SEC are already recognised, so adding those feeds
+                                 later labels itself
+
+STILL NOT CAPTURED, DELIBERATELY: VWAP and intraday high/low per name. Both are
+intraday measures and this book holds for days; neither has a measured rule
+attached; and the file's standard is that an unmeasured term is logged beside a
+decision or not at all, never wired into one.

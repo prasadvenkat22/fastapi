@@ -447,6 +447,28 @@ def _maybe_open(db, now: datetime, symbol: str) -> None:
         # part that cannot be reconstructed later.
         signals = weekly_signals.entry_signals(symbol, short_iv, now.date())
 
+        # NET position greeks, not leg greeks. short_delta describes one
+        # contract; it does not describe the spread. Both legs of a vertical
+        # bleed theta and both are long vega, while the SPREAD earns theta and
+        # is short vega -- neither fact is visible from a single leg, and for a
+        # deep-ITM structure they are the entire P&L engine. See greeks.py.
+        try:
+            from .greeks import spread_greeks
+            from datetime import date as _date_cls
+
+            _y, _m, _d = (int(x) for x in expiry.split("-"))
+            _years = max((_date_cls(_y, _m, _d) - now.date()).days, 0) / 365.0
+            _is_call = cs is not None
+            _short_k, _long_k = (cs, cl) if _is_call else (ps, pl)
+            _long_leg = (chain.get(("call", float(_long_k))) if _is_call
+                         else chain.get(("put", float(_long_k)))) if _long_k else None
+            _long_iv = _long_leg.iv if _long_leg else None
+            signals.update(spread_greeks(spot, _long_k, _short_k, _years,
+                                         _long_iv, short_iv, call=_is_call))
+        except Exception:
+            logger.warning("Net greeks not computed for %s %s.", symbol, variant,
+                           exc_info=True)
+
         # THE ONE SLICE THAT TRADES. Everything else on this row stays an
         # observation. Submitted BEFORE the row is written so a failed order
         # leaves a clean shadow record rather than a row claiming a fill that

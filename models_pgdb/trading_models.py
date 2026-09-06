@@ -298,6 +298,12 @@ class WeeklyShadow(Base):
     # Headline COUNT for this name in the lookback window, and the most
     # recent one. A count, not a sentiment score -- attention is a fact,
     # sentiment would be an unmeasured model sitting next to measured columns.
+    # NET position greeks -- the spread's, not a leg's. short_delta above
+    # describes one contract; these describe the trade. See greeks.py.
+    sig_net_delta = Column(Float, nullable=True)
+    sig_net_gamma = Column(Float, nullable=True)
+    sig_net_theta = Column(Float, nullable=True)
+    sig_net_vega = Column(Float, nullable=True)
     sig_news_count_3d = Column(Integer, nullable=True)
     sig_news_latest = Column(String, nullable=True)
 

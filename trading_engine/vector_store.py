@@ -27,6 +27,15 @@ async def _init_db(conn: asyncpg.Connection) -> None:
     """)
 
 
+def _source_for(headline: str) -> "str | None":
+    """Which feed this headline arrived on, if the scrape recorded it."""
+    try:
+        from .nodes import _LAST_SOURCES
+        return _LAST_SOURCES.get(headline)
+    except Exception:
+        return None
+
+
 async def store_headlines(headlines: List[str], embeddings: VoyageEmbeddings) -> None:
     """Embed and store any headline not already held.
 
@@ -62,10 +71,14 @@ async def store_headlines(headlines: List[str], embeddings: VoyageEmbeddings) ->
         vectors = embeddings.embed_documents(fresh)
         await conn.executemany(
             """
-            INSERT INTO market_news_vectors (id, headline_text, text_embedding)
-            VALUES ($1, $2, $3)
+            INSERT INTO market_news_vectors (id, headline_text, text_embedding, source)
+            VALUES ($1, $2, $3, $4)
             """,
-            [(str(uuid.uuid4()), headline, vector) for headline, vector in zip(fresh, vectors)],
+            # source is looked up per headline from the scrape that produced
+            # it. Absent before 2026-09-06, which left no way to weight a wire
+            # above a blog -- see nodes._LAST_SOURCES.
+            [(str(uuid.uuid4()), headline, vector, _source_for(headline))
+             for headline, vector in zip(fresh, vectors)],
         )
     finally:
         await conn.close()

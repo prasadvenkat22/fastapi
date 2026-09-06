@@ -944,6 +944,24 @@ def _write_macro_cache(verdict: str, confidence: float, risk_factor: str) -> Non
         # Non-fatal: a failed write just means the next cycle recomputes.
         logger.exception("Macro cache write failed.")
 
+# Headline -> feed it arrived on, for the scrape just completed. A module
+# global rather than a return value because _scrape_headlines() is called from
+# one place and store_headlines() from another, and threading a second value
+# through market_signals_agent would touch the cycle's hot path for a column
+# that is observational.
+_LAST_SOURCES: dict = {}
+
+
+def _feed_name(url: str) -> str:
+    """A short, stable label for a feed URL."""
+    for frag, name in (("yahoo", "YAHOO_FINANCE"), ("dowjones", "MARKETWATCH"),
+                       ("cnbc", "CNBC"), ("prnewswire", "PR_NEWSWIRE"),
+                       ("businesswire", "BUSINESS_WIRE"), ("sec.gov", "SEC")):
+        if frag in url.lower():
+            return name
+    return "OTHER"
+
+
 RSS_FEEDS = [
     "https://finance.yahoo.com/news/rssindex",
     "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
@@ -1441,10 +1459,21 @@ def rsi_agent(state: TradingState) -> dict:
 
 def _scrape_headlines() -> List[str]:
     headlines: List[str] = []
+    _LAST_SOURCES.clear()
     for url in RSS_FEEDS:
         try:
             feed = feedparser.parse(url)
-            headlines.extend(entry.title for entry in feed.entries[:10] if getattr(entry, "title", None))
+            for entry in feed.entries[:10]:
+                title = getattr(entry, "title", None)
+                if not title:
+                    continue
+                headlines.append(title)
+                # WHICH FEED IT CAME FROM. Discarded until 2026-09-06, which
+                # made "weight a wire above a blog" unimplementable -- there
+                # was nothing to key a source weight on. Recorded now so the
+                # idea can be TESTED against news_symbol_impact rather than
+                # asserted with hardcoded multipliers.
+                _LAST_SOURCES[title] = _feed_name(url)
         except Exception as e:
             logger.warning("Failed to parse RSS feed %s: %s", url, e)
     return headlines

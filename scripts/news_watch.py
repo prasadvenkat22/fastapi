@@ -107,8 +107,15 @@ def main():
     # this check decides whether the run is real. Weekends exit here too,
     # which is why a Saturday invocation prints nothing and costs nothing.
     if not args.force:
-        if now.weekday() > 4:
-            print(f"{now:%Y-%m-%d %H:%M %Z} — weekend, nothing to do.")
+        # market_calendar, not weekday() -- the cron fires Mon-Fri and would
+        # otherwise run on Labor Day, Thanksgiving and Good Friday. The
+        # calendar already carries the observed-date shifts (Independence Day
+        # 2026 is observed on the 3rd because the 4th is a Saturday), which a
+        # weekday check cannot know.
+        from trading_engine.market_calendar import is_trading_day
+
+        if not is_trading_day(now.date()):
+            print(f"{now:%Y-%m-%d %H:%M %Z} — not a trading day, nothing to do.")
             return
         if not (dtime(8, 45) <= now.time() <= dtime(16, 30)):
             print(f"{now:%Y-%m-%d %H:%M %Z} — outside 08:45-16:30 ET, nothing to do.")

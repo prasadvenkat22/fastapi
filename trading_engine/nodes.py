@@ -849,6 +849,22 @@ BREADTH_COLLAPSE_RATIO = float(os.getenv("TRADING_BREADTH_COLLAPSE_RATIO", "0.40
 # every refusal, so a few weeks of forward data answers it either way.
 MACRO_LLM_GATE = os.getenv("TRADING_MACRO_LLM_GATE", "true").lower() == "true"
 
+# Model for the macro verdict. LEFT ON OPUS, unlike the per-symbol news
+# sentiment which moved to Haiku after being checked on a real case.
+#
+# The two are not the same task. Headline sentiment is a classification over
+# one day's text. This one synthesises breadth, VIX level AND velocity, the
+# 10-year, up to thirty headlines and three semantically similar past ones
+# into a risk verdict -- and it is the term that would gate live entries if
+# TRADING_MACRO_LLM_GATE were ever switched back on. Downgrading a decision
+# input while it is cheap to run is how you find out it mattered later.
+#
+# The saving would be marginal anyway: at MACRO_REFRESH_MINUTES=60 this runs
+# about seven times a session, so Haiku would save a few dollars a month
+# against the twelve-fold cut the interval change already delivered. Env var
+# so the choice stays yours, and so a future comparison needs no deploy.
+MACRO_MODEL = os.getenv("TRADING_MACRO_MODEL", "claude-opus-5")
+
 # Standard Wilder's RSI(14) thresholds.
 RSI_OVERBOUGHT = float(os.getenv("TRADING_RSI_OVERBOUGHT", "70.0"))
 RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
@@ -1580,7 +1596,7 @@ async def market_signals_agent(state: TradingState) -> dict:
             breadth_trend.recent_peak_ratio, breadth_trend.reading_count,
         )
 
-    llm = None if cache_fresh else ChatAnthropic(model="claude-opus-5", max_tokens=1024).with_structured_output(MarketSentimentOutput)
+    llm = None if cache_fresh else ChatAnthropic(model=MACRO_MODEL, max_tokens=1024).with_structured_output(MarketSentimentOutput)
     prompt = (
         "You are a macro risk classifier for a same-day QQQ options trading system. "
         "Classify today's market risk as GOOD (safe to hold/enter a bullish position) or BAD (risk-off).\n\n"

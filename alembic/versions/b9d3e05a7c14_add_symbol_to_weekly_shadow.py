@@ -30,6 +30,7 @@ API down with it.
 """
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b9d3e05a7c14"
@@ -38,7 +39,25 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _weekly_shadow_missing() -> bool:
+    """True on a database where weekly_shadow has not been created yet.
+
+    The table has no CREATE migration -- it is built by main.py's startup
+    create_all() from models_pgdb.trading_models. On an EXISTING database that
+    happened long ago and these ALTERs apply normally. On a FRESH one, compose
+    runs `alembic upgrade head && uvicorn`, so alembic reaches this revision
+    before the app has ever started and the ALTER kills the boot: the && never
+    fires, uvicorn never runs, and the container crash-loops with
+    UndefinedTable. Skipping is correct rather than merely safe -- create_all
+    builds the table from the current model, which already has every column
+    these revisions add.
+    """
+    return not sa.inspect(op.get_bind()).has_table("weekly_shadow")
+
+
 def upgrade() -> None:
+    if _weekly_shadow_missing():
+        return
     op.execute("ALTER TABLE weekly_shadow ADD COLUMN IF NOT EXISTS symbol VARCHAR")
     # Existing rows are all QQQ. Backfill before the NOT NULL so the constraint
     # cannot fail on the history it is being added to.
@@ -52,5 +71,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if _weekly_shadow_missing():
+        return
     op.execute("DROP INDEX IF EXISTS ix_weekly_shadow_symbol_expiration")
     op.execute("ALTER TABLE weekly_shadow DROP COLUMN IF EXISTS symbol")

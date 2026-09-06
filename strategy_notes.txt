@@ -6678,3 +6678,78 @@ The honest position is that this is the largest single item measured on this
 engine and the least safe to act on blind. What settles it is live trades:
 if a second morning fill ever appears in trading_history, its P&L is the
 whole experiment.
+
+--------------------------------------------------------------------------------
+105. THE RE-ENTRY COOLDOWN WAS SET BELOW THE THRESHOLD WHERE ANYTHING
+     HAPPENS, AND A FRESH DATABASE COULD NOT BOOT  (2026-09-06)
+--------------------------------------------------------------------------------
+
+Section 104 measured re-entries at -41.00 a trade and declined to act because
+capping them needed a code change. It needed no code change. The knob already
+exists -- TRADING_REENTRY_COOLDOWN_MINUTES, equity.py:61, defaulting to 30 and
+unset on the server -- and 30 is INERT.
+
+    by gap since the previous exit
+       0-15 min    0 tr                                <- nothing is here
+      15-30 min    0 tr                                <- nothing is here
+      30-60 min   11 tr  18% win  EV -45.49  tot -500.40
+        60+ min    4 tr  25% win  EV -28.65  tot -114.60
+
+    what a gap rule earns (first entries + re-entries that waited >= N)
+      gap >= 30 (was live)  54 tr  41% win  EV  -7.18   <- identical to no rule
+      gap >= 45             45 tr  47% win  EV  +1.31
+      gap >= 60             43 tr  47% win  EV  +2.62
+      gap >= 90             42 tr  48% win  EV  +3.39
+      no re-entries at all  39 tr  49% win  EV  +5.83
+
+NOTHING EVER RE-ENTERS INSIDE 30 MINUTES, so "gap >= 0" and "gap >= 30" return
+the same number to the cent. The rule was not failing; it was set below the
+range where any trade lives. Monotone from there: longer is better and never
+is best.
+
+A HYPOTHESIS THAT WAS WRONG, recorded because it was confidently held. The
+loss cooldown blocks only the direction that lost (equity.py:74), so the
+expectation was that the damage came from re-entries which FLIPPED direction
+and slipped through immediately. Zero of the fifteen flipped. All were
+same-direction and all had waited past 30 minutes.
+
+DEPLOYED: 90. Chosen over a full ban because the morning window is 135
+minutes (10:15-12:30), so a 90-minute block after a loss runs past its close
+-- most of a ban's effect through a parameter that already exists. The
+remaining gap to a true ban is 2.44 a trade across 3 trades.
+
+READ THE SAMPLE. Fifteen re-entries, in replay, of a behaviour the LIVE
+engine has never once exhibited: no session in trading_history has two
+MORNING_DRIFT fills. This changes behaviour that has not yet occurred.
+
+A FRESH DATABASE COULD NOT BOOT, AND ONLY A NEW CHECKOUT WOULD SHOW IT
+
+Bringing the stack up locally against an empty Postgres crash-looped:
+
+    sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedTable)
+    relation "weekly_shadow" does not exist
+    [SQL: ALTER TABLE weekly_shadow ADD COLUMN IF NOT EXISTS symbol VARCHAR]
+
+weekly_shadow has NO create migration. It is built by main.py's startup
+create_all() from models_pgdb.trading_models. But docker-compose.yml:50 runs
+
+    alembic upgrade head && uvicorn main:app ...
+
+so on a fresh database alembic reaches b9d3e05a7c14 before the app has ever
+started, the ALTER raises, the && never fires, uvicorn never runs, and the
+container restarts forever. The production droplet has never hit this because
+its database predates all three revisions -- the tables were already there
+when they were written. THE BUG IS INVISIBLE FROM ANY MACHINE THAT HAS
+ALREADY RUN THE APP ONCE.
+
+Fixed by guarding all three weekly_shadow revisions (b9d3e05a7c14,
+c8e2a94f6b71, e4b8c2a71d59) with a has_table check that returns early.
+Skipping is correct and not merely safe: create_all builds the table from the
+current model, which already carries every column those revisions add.
+Verified on an empty database -- app boots, /docs returns 200, weekly_shadow
+exists with symbol, sig_rv20 and sig_index_trend present, alembic at head.
+
+LOCAL NOW MIRRORS THE SERVER. .env carries all 64 TRADING_ keys read from
+`docker exec app env`, with two deliberate inversions: TRADING_LIVE_ORDERS
+false and TRADING_ORDER_PREVIEW_ONLY true. A local run that silently differs
+from production is how section 103 happened.

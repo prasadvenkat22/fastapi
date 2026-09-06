@@ -31,6 +31,7 @@ inventing one from the opened_at date would be fabricating history.
 """
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -62,11 +63,31 @@ _COLUMNS = (
 )
 
 
+def _weekly_shadow_missing() -> bool:
+    """True on a database where weekly_shadow has not been created yet.
+
+    The table has no CREATE migration -- it is built by main.py's startup
+    create_all() from models_pgdb.trading_models. On an EXISTING database that
+    happened long ago and these ALTERs apply normally. On a FRESH one, compose
+    runs `alembic upgrade head && uvicorn`, so alembic reaches this revision
+    before the app has ever started and the ALTER kills the boot: the && never
+    fires, uvicorn never runs, and the container crash-loops with
+    UndefinedTable. Skipping is correct rather than merely safe -- create_all
+    builds the table from the current model, which already has every column
+    these revisions add.
+    """
+    return not sa.inspect(op.get_bind()).has_table("weekly_shadow")
+
+
 def upgrade() -> None:
+    if _weekly_shadow_missing():
+        return
     for name, sqltype in _COLUMNS:
         op.execute(f"ALTER TABLE weekly_shadow ADD COLUMN IF NOT EXISTS {name} {sqltype}")
 
 
 def downgrade() -> None:
+    if _weekly_shadow_missing():
+        return
     for name, _ in _COLUMNS:
         op.execute(f"ALTER TABLE weekly_shadow DROP COLUMN IF EXISTS {name}")

@@ -291,6 +291,15 @@ class WeeklyShadow(Base):
     sig_index_bb_zone = Column(String, nullable=True)
     sig_index_rsi14 = Column(Float, nullable=True)
     sig_index_move_5d_pct = Column(Float, nullable=True)
+    # ATR14 and it as a percent of price. True Range, not High-Low: the gap
+    # is what a news catalyst produces and H-L cannot see it. See section 108.
+    sig_atr14 = Column(Float, nullable=True)
+    sig_atr_pct = Column(Float, nullable=True)
+    # Headline COUNT for this name in the lookback window, and the most
+    # recent one. A count, not a sentiment score -- attention is a fact,
+    # sentiment would be an unmeasured model sitting next to measured columns.
+    sig_news_count_3d = Column(Integer, nullable=True)
+    sig_news_latest = Column(String, nullable=True)
 
     # The live order behind this row, when it was actually traded. NULL on
     # every observation-only row, which is all of them before 2026-09-01.

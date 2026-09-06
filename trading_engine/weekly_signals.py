@@ -134,6 +134,27 @@ def read(symbol: str) -> dict:
 
     rv20 = _realised_vol(closes, 20)
 
+    # ATR14, not mean(High-Low). True Range takes the GAP into account --
+    # max(H-L, |H-prevC|, |L-prevC|) -- and the gap is exactly what a news
+    # catalyst produces. Measured across the tracked names on 2026-09-06,
+    # High-Low understates the real daily move by 4% (DELL) to 29% (MRVL),
+    # with QQQ at 23%; section 102 sized every width in the book on the
+    # understated version. SNDK's 2026-09-04 session is the case in one line:
+    # High-Low 159.00, True Range 185.01, ATR14 109.83 -- a 1.68x day that
+    # the H-L reading would have called 1.45x.
+    atr14 = atr_pct = None
+    try:
+        highs = bars["High"].astype(float)
+        lows = bars["Low"].astype(float)
+        prev = closes.shift(1)
+        tr = (highs - lows).combine((highs - prev).abs(), max).combine(
+            (lows - prev).abs(), max)
+        if len(tr.dropna()) >= 14:
+            atr14 = round(float(tr.rolling(14).mean().iloc[-1]), 4)
+            atr_pct = round(atr14 / close * 100.0, 3) if close else None
+    except Exception:
+        pass
+
     move_5d = None
     if len(closes) >= 6:
         prior = float(closes.iloc[-6])
@@ -142,6 +163,8 @@ def read(symbol: str) -> dict:
 
     return {
         "close": round(close, 4),
+        "atr14": atr14,
+        "atr_pct": atr_pct,
         "ema9": round(ema9, 4),
         "ema20": round(ema20, 4),
         "sma20": round(sma20, 4),
@@ -212,6 +235,19 @@ def earnings_between(symbol: str, start, end) -> "object | None":
     return hit
 
 
+def _news(symbol: str) -> dict:
+    """Headline count and latest headline for the name, or empty on failure.
+
+    Imported lazily so a signals read cannot be broken by the news module or
+    its database driver being unavailable -- these columns are notes.
+    """
+    try:
+        from .symbol_news import news_signals
+        return news_signals(symbol)
+    except Exception:
+        return {}
+
+
 def entry_signals(symbol: str, short_iv: "float | None" = None,
                   day=None) -> dict:
     """Columns for one weekly_shadow row: the name's state and the index's.
@@ -244,6 +280,13 @@ def entry_signals(symbol: str, short_iv: "float | None" = None,
         "sig_move_5d_pct": sym.get("move_5d_pct"),
         "sig_rv20": rv20,
         "sig_rv_iv_ratio": rv_iv,
+        "sig_atr14": sym.get("atr14"),
+        "sig_atr_pct": sym.get("atr_pct"),
+        # Cushion in the name's OWN daily moves -- section 102's test, done
+        # with True Range. Under 1 is a coin flip whatever the position cost;
+        # over 2 survives a shock. Null when no strike is supplied, because
+        # the caller knows the strike and this function does not.
+        **_news(symbol),
         "sig_index_symbol": INDEX_SYMBOL,
         "sig_index_trend": idx.get("trend"),
         "sig_index_bb_zone": idx.get("bb_zone"),

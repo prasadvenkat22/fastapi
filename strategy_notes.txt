@@ -6564,8 +6564,16 @@ stall on, chain-priced, 60 sessions, one factor at a time:
   THE RIDE TAKE-PROFIT HAD DRIFTED. The server ran 55 against the 50 this
   file records as a deliberate risk-preference decision. 55 measured WORST of
   five. READ THE CAVEAT: the result is NON-MONOTONE -- 50 and 70 both pay
-  1:1.21 and only 55 dips to 1:1.03 -- so this restores a documented value
-  rather than establishing a new one. DEPLOYED: 50.
+  1:1.21 and only 55 dips to 1:1.03 -- so this would restore a documented
+  value rather than establish a new one.
+
+  MOVED TO 50 AND THEN BACK TO 55 THE SAME DAY, deliberately. A non-monotone
+  result on 62 trades, where both neighbouring cells are identical and better
+  and only the middle dips, is far more likely to be two or three trades than
+  a parameter effect. The stop change in this section is monotone across four
+  levels and stands on its own; this one was riding along on it. DEPLOYED: 55
+  (unchanged from before this session). Revisit only if a monotone sweep or
+  live evidence contradicts it.
 
 TWO TOOL BUGS FOUND ON THE WAY, BOTH OF WHICH HAVE CORRUPTED PAST RESULTS.
 
@@ -6603,3 +6611,70 @@ not from playbook.py and not from this file. Where they disagree the
 environment is what trades, and this file has been wrong about it twice in
 one day: sections 9 and 16 were "corrected" from the code into an error, then
 corrected back from the server.
+
+--------------------------------------------------------------------------------
+104. THE REPLAY WAS NEVER MEASURING THE LIVE ENGINE: RE-ENTRIES  (2026-09-06)
+--------------------------------------------------------------------------------
+
+Section 103 left one thing unresolved: at the corrected configuration the
+replay still read -8.63 a trade while the live record read +104.75. It is
+not a pricing question and not a config question. THE TWO ARE NOT TRADING THE
+SAME NUMBER OF POSITIONS.
+
+    replay   54 trades over 60 sessions   0.90/day
+    live      6 trades over 12 sessions   0.50/day, NEVER two in one day
+
+    trades in a session   sessions
+          0                   21
+          1                   25
+          2                   13
+          3                    1
+
+    14 of 60 sessions take a second or third position. Those 15 trades are
+    28% of everything the replay measures.
+
+SCORE THE SAME REPLAY BOTH WAYS. $10 wide, $2 ITM, stop -50, deployed config:
+
+    every trade                54 tr  41% win  1:1.19  EV  -7.18  tot -387.60
+    FIRST of session only      39 tr  49% win  1:1.22  EV  +5.83  tot +227.40
+    the re-entries alone       15 tr  20% win  1:0.49  EV -41.00  tot -615.00
+
+    per session: all -6.46/day    first-only +3.79/day
+
+THE WINDOW IS PROFITABLE AND THE RE-ENTRIES BURY IT. Fifteen trades at a 20%
+win rate and a 1:0.49 payoff take +227.40 to -387.60. Every negative EV
+figure quoted for MORNING_DRIFT in this file -- including section 103's own
+exit sweep, where the best cell read -8.63 -- is a blend of a positive
+first-entry population and a catastrophic re-entry one, reported as a single
+average. The blend is what made the replay disagree with the live record, and
+scored the way the live engine actually behaves the two agree in SIGN.
+
+WHAT IT DOES NOT ESTABLISH. Whether the LIVE engine would take these trades.
+nodes.py:2217 says re-entry is available on any later cycle once conditions
+recover, and playbook.py:284 sizes post-loss re-entries deliberately at a 30%
+share, halved -- so the engine is built to do this and simply has not yet.
+Over 6 trading days that produced a morning fill, the replay's rate predicts
+about 2 re-entries; live saw 0. That is consistent with luck and with a
+harness that re-enters more eagerly than the engine, and 6 days cannot
+separate them.
+
+  A COOLDOWN EXISTS ONLY AFTER A WIN. TRADING_WIN_COOLDOWN_MINUTES=30 is
+  live. There is NO equivalent after a loss, which is exactly the case that
+  measures badly: the first position stops out, and the engine re-enters into
+  the move that just stopped it. The -50 stop deployed in section 103 already
+  reduces the exposure (53 trades at -50% against 62 at -25%) because a
+  looser stop fires less often, but it does not close it.
+
+  SECTION 21 REACHED THE OPPOSITE CONCLUSION and should not be read as
+  contradicting this. It measured standing the session down after a loss at
+  +10.13/day against +13.55 with re-entry and concluded "the re-entries were
+  never the problem." That was a different window, a different width, and
+  before the harness modelled the deployed configuration at all.
+
+NOT ACTIONED. Capping the morning window at one entry per session has no
+knob -- it needs a code change to a live trading engine, on evidence from a
+replay whose relationship to live behaviour is the very thing in question.
+The honest position is that this is the largest single item measured on this
+engine and the least safe to act on blind. What settles it is live trades:
+if a second morning fill ever appears in trading_history, its P&L is the
+whole experiment.

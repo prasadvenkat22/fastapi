@@ -2,8 +2,30 @@
 QQQ 0DTE TRADING ENGINE - STRATEGY NOTES
 ================================================================================
 
-Current as of 2026-08-22. Every number here is read from the deployed
+Current as of 2026-09-06. Every number here is read from the deployed
 configuration, not from intent.
+
+  READ THIS BEFORE QUOTING ANY FIGURE BELOW.
+
+  Two rules, both learned the hard way on 2026-09-06:
+
+  1. THE ENVIRONMENT IS THE ENGINE, NOT THE CODE. Where playbook.py and the
+     server disagree, the server wins. Read a parameter from
+     `docker exec app env`, never from a default and never from this file.
+     Sections 9 and 16 were "corrected" from the code into an error and back
+     again inside one day for exactly this reason.
+
+  2. EVERY DOLLAR FIGURE IN SECTIONS 27 THROUGH 102 IS SUSPECT. They were
+     produced by `python scripts/sweep.py <arm>` when its defaults were a $6
+     width, no stall exit, no ride take-profit, half the deployed sizing and
+     MODEL prices -- an instrument that has never traded a live contract. The
+     RANKINGS in those sections mostly survive, because all arms in a run
+     shared the sizing; the MAGNITUDES do not. Re-measure before acting on
+     one. Section 107 records what was fixed and why the fix could not be a
+     banner.
+
+  The banner is now honest: the plain command reproduces the deployment field
+  for field. That is a guarantee about runs made AFTER 2026-09-06 only.
 
 This file describes WHAT the engine does. The WHY lives beside each parameter
 in trading_engine/playbook.py and trading_engine/nodes.py, where the sweep
@@ -782,13 +804,26 @@ DEPLOYED CONFIGURATION as of 2026-09-06, read from the SERVER's own
 environment (docker exec app env), not from playbook.py:
 
     MORNING_DRIFT     10:15-12:30  $10 wide, long $2 ITM (short $8 OTM)
-                      stop -25%, ride take-profit 55%, 13:25 handoff
-    AFTERNOON_CREDIT  14:00-15:00  $4 wide, short at max(2sd, $2) OTM
+                      stop -50%, ride take-profit 55%, 13:25 handoff
+                      long 0.71 delta / short 0.01 / net +0.70
+                      debit $277 = 28% of width, max reward $723, R:R 1:2.61
+    AFTERNOON_CREDIT  14:00-15:00  $4 wide, short strike by DELTA at 0.25
+                      (nodes.py:2796 overrides the max(2sd,$2) placement
+                      whenever a chain is available -- the sigma offset is
+                      the FALLBACK, not what places the live strike)
                       arms at 50% of credit, books at 90%, stop -600%
-    stall exit        5 min / 3.3% giveback, credit included
+    re-entry cooldown 90 min after a loss, same direction (equity.py:61)
+    stall exit        5 min / 3.3% giveback, credit included, unarmed
     exit polling      10s while a position is open (section 43's fix, live)
     macro LLM gate    OFF          the one term never in any backtest
     orders            production, $6,500 budget
+
+    CHANGED 2026-09-06, both on evidence and both verified on the server:
+      MORNING_STOP_PCT          -25 -> -50   monotone across four levels
+      REENTRY_COOLDOWN_MINUTES   30 -> 90    the 30 was inert
+      CREDIT_FINAL_TAKE_PROFIT   50 -> unset restores the designed 50->90 trail
+    RIDE_TAKE_PROFIT was moved 55 -> 50 and back to 55 the same day; the
+    result behind it is non-monotone and does not support the change.
 
     READ THIS BEFORE QUOTING playbook.py. The code defaults and the deployed
     environment DISAGREE, and the environment wins:
@@ -1681,6 +1716,15 @@ ordering.
   demonstrates.
 
 DEPLOYED: TRADING_RIDE_TAKE_PROFIT=50.
+
+  [2026-09-06: THE SERVER RUNS 55, AND HAS FOR AN UNRECORDED PERIOD. Nobody
+  wrote down why. Swept at the deployed config it measured WORST of five --
+  off -23.31, 50% -22.27, 55% -30.09, 70% -21.66 a trade -- so it was moved
+  to 50 and then moved back the same day: the result is non-monotone, both
+  neighbouring cells pay 1:1.21 and only 55 dips to 1:1.03, which on 62
+  trades is more likely two or three trades than a parameter effect. The
+  reasoning in this section still stands on its own terms; what it no longer
+  describes is the deployment. Section 103.]
 
 This is NOT the expectancy-maximising cell and the file should say so
 plainly. It gives up about 61 dollars a day of measured average against
@@ -3149,7 +3193,19 @@ tighten execution and the same cell reads -11.89. A parameter whose value
 comes from an artefact of the harness is not a parameter anyone owns.
 
 DEPLOYED: STOP -25%, EXIT POLLING BACK ON AT 10s. That pair earns 22 to 25 a
-day whichever way the stop is modelled. It gives up about 13 a day of nominal
+day whichever way the stop is modelled.
+
+  [2026-09-06: THE STOP IS NOW -50. This section's reasoning -- that a stop
+  justified by the harness failing to enforce it is not a parameter anyone
+  owns -- is right, and it is the reasoning that led here. But it was settled
+  at a $6 width with no stall exit. Re-swept at the deployed $10 width with
+  the stall on, the stop is MONOTONE across four levels and improves EV, win
+  rate, payoff AND the worst single trade together: -20% -32.39, -25% -30.09,
+  -35% -18.06, -50% -8.63 a trade, worst trade -448.20 to -157.40. The tight
+  stop manufactures its own worst days by firing and re-entering into the
+  same move. All three live morning losses were STOP_LOSS closes; both live
+  winners rode to a stall exit. Section 103. Exit polling at 10s is unchanged
+  and still correct.] It gives up about 13 a day of nominal
 average against -8%/no-poller, in exchange for a number that survives contact
 with a stop that actually fires.
 

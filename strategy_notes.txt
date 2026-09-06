@@ -7335,3 +7335,53 @@ and compare the fills to the prices above; then after expiry compare the
 realised outcome against the P bands. Two things are being tested at once and
 should be judged separately: whether the QUOTES were real, and whether the
 PROBABILITIES were.
+
+--------------------------------------------------------------------------------
+116. THREE PROBABILITY ENGINES ON ONE POSITION, AND WHERE THEY DISAGREE
+     (2026-09-06)
+--------------------------------------------------------------------------------
+
+weekly_pick.py now prints three independent estimates of the same probability:
+
+    Pimp    implied     short-leg delta from the live chain
+    Phist   realised    3y of the name's own drift-removed moves, resampled
+    Pmc     realised    10,000 driftless random walks calibrated to ATR
+
+ATR -> SIGMA IS WHERE A NAIVE VERSION GOES WRONG. For a driftless walk the
+expected daily high-low range is about 1.596 sigma, so sigma = ATR / 1.596.
+Feeding ATR/price straight in as a daily sigma overstates volatility by ~60%
+and makes every structure look far more dangerous than the stock is.
+
+THE SNDK 1600/1700 POSITION, every engine, spot 1740, 4 days, cost 67.10:
+
+    P(above 1700) = MAX profit          P(above 1667.10) = ANY profit
+      Z-score, IV 72.3%      60.0%        67.7%
+      Z-score, live IV       58.1%        64.5%
+      Z-score, ATR           61.4%        70.2%
+      chain delta            61.3%          --
+      Monte Carlo, ATR       60.2%        69.2%
+      historical demeaned    56.4%        63.4%
+      historical RAW         71.6%        76.0%
+
+Five forward-looking methods cluster at 58-61% for max profit. Only the raw
+historical row breaks away, at 71.6%, and the difference is drift.
+
+WIN IS NOT MAX PROFIT, and an outside note calculating this got it wrong by
+measuring the wrong line. The spread cost 67.10 so it breaks even at 1667.10;
+above 1700 is the BEST case. Reporting P(above the short strike) as the win
+rate understates it by about eight points. The same note then widened a
+computed 60% to "60% to 82.4% depending on bullish skew and momentum", which
+is not a calculation -- every engine here says 58-61%.
+
+WHERE MONTE CARLO AND HISTORY DISAGREE IS THE USEFUL PART. MC puts max loss at
+15.4%, the observed distribution at 26.0%, and MC's EV at +614 against the
+demeaned historical -110. A Gaussian walk has no fat tails; SNDK gapped 11.9%
+two sessions before this was written. Where Pmc is well below Phist the payoff
+depends on a tail a normal curve cannot produce, and the historical number is
+the better estimate.
+
+RANKING THE THREE FOR THIS BOOK: historical resampling first, because it uses
+moves that actually happened including gaps; implied second, free and instant
+from the chain but a risk-neutral view rather than a forecast; Monte Carlo
+last, most assumption-laden, with the single real advantage of being
+calibrated to TODAY's volatility rather than three years of it.

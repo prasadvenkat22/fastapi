@@ -78,6 +78,34 @@ def trading_days_to(exp: str) -> int:
     return max(n, 1)
 
 
+MC_PATHS = int(os.getenv("PICK_MC_PATHS", "10000"))
+
+
+def monte_carlo_terminal(spot: float, atr: float, days: int, seed: int = 7):
+    """Terminal prices from a driftless random walk calibrated to ATR.
+
+    A THIRD probability estimate, and it exists for one reason the historical
+    bands cannot cover: resampling three years of moves assumes the last three
+    years describe next week. For a name that just gapped 11.9% -- SNDK on
+    2026-09-04 -- that assumption is doing real work. A walk calibrated to
+    TODAY's ATR does not care what the name did in 2024.
+
+    ATR -> sigma. For a driftless random walk the expected high-low range over
+    one period is about 1.596 sigma, so sigma ~ ATR / 1.596. Using ATR/price
+    directly as a daily sigma overstates volatility by roughly 60%, which is
+    what makes a naive ATR Monte Carlo look far more dangerous than the stock.
+
+    DRIFTLESS on purpose, to match the demeaned historical bands. A walk with
+    drift would disagree with them for a reason that is not about method.
+    """
+    if not (spot > 0 and atr > 0 and days > 0):
+        return None
+    sigma_d = (atr / 1.596) / spot
+    rng = np.random.default_rng(seed)
+    steps = rng.normal(-0.5 * sigma_d ** 2, sigma_d, size=(MC_PATHS, days))
+    return spot * np.exp(steps.sum(axis=1))
+
+
 def usable(row):
     b, a = float(row["bid"]), float(row["ask"])
     if b <= 0 or a <= 0 or float(row.get("openInterest") or 0) < MIN_OI:
@@ -99,6 +127,7 @@ def evaluate(sym, side):
     c = h["Close"].values
     fwd = c[fwd_days:] / c[:-fwd_days] - 1.0
     dem = fwd - fwd.mean()
+    mc = monte_carlo_terminal(spot, a14, fwd_days)
     chain = tk.option_chain(exp)
     calls = side == "call"
     df = chain.calls if calls else chain.puts
@@ -148,6 +177,12 @@ def evaluate(sym, side):
                 p_max = float((prices <= lo).mean())
                 p_min = float((prices >= hi).mean())
             p_mid = max(0.0, 1.0 - p_max - p_min)
+            if mc is None:
+                mc_max = float("nan")
+            elif calls:
+                mc_max = float((mc >= hi).mean())
+            else:
+                mc_max = float((mc <= lo).mean())
             g = spread_greeks(spot, long_k, short_k, fwd_days / 252.0, ivl, ivs_,
                               call=calls)
             # DELTA AS PROBABILITY, beside the realised bands. A leg's delta
@@ -171,7 +206,7 @@ def evaluate(sym, side):
                 ev_dem=float(dm.mean()) * 100, ev_raw=float(raw.mean()) * 100,
                 pwin=float((dm > 0).mean()), need=cost / w,
                 rr=(w - cost) / cost, room=room, n=len(dem),
-                p_max=p_max, p_mid=p_mid, p_min=p_min,
+                p_max=p_max, p_mid=p_mid, p_min=p_min, mc_max=mc_max,
                 d_long=dl, d_short=dh, d_net=dl - dh,
                 # How deep the LONG leg sits, in the name's own ATR. THIS IS
                 # THE KNOB: deeper ITM buys probability and sells payoff, and
@@ -233,7 +268,7 @@ def main():
     print(f"\n=== {args.side.upper()} DEBIT SPREADS — ranked by {label}, "
           f"priced at ask/bid ===")
     print(f"{'sym':6s} {'strikes':>14s} {'ITMatr':>7s} {'risk':>7s} {'reward':>7s} "
-          f"{'R:R':>7s} {'dLong':>6s} {'dShrt':>6s} {'Pmax':>6s} {'Pmid':>6s} "
+          f"{'R:R':>7s} {'Pimp':>6s} {'Phist':>6s} {'Pmc':>6s} {'Pmid':>6s} "
           f"{'Pmin':>6s} {'need':>6s} {'edge':>7s} {'EV%':>7s} {'EV$':>8s} "
           f"{'drift':>8s}")
     key = {"ev": lambda x: -x["ev_dem"], "evpct": lambda x: -x["ev_pct"],
@@ -241,8 +276,8 @@ def main():
     for r in sorted(rows, key=key)[:args.top]:
         print(f"{r['sym']:6s} {r['lo']:6.0f}/{r['hi']:<7.0f} {r['itm']:+7.2f} "
               f"{r['cost']*100:7.0f} {(r['w']-r['cost'])*100:7.0f} "
-              f"1:{r['rr']:<5.2f} {r['d_long']:6.2f} {r['d_short']:6.2f} "
-              f"{r['p_max']*100:5.1f}% {r['p_mid']*100:5.1f}% "
+              f"1:{r['rr']:<5.2f} {r['d_short']*100:5.1f}% {r['p_max']*100:5.1f}% "
+              f"{r['mc_max']*100:5.1f}% {r['p_mid']*100:5.1f}% "
               f"{r['p_min']*100:5.1f}% {r['need']*100:5.1f}% "
               f"{(r['pwin']-r['need'])*100:+6.1f}p {r['ev_pct']:+6.1f}% "
               f"{r['ev_dem']:+8.1f} {r['ev_raw'] - r['ev_dem']:+8.1f}")

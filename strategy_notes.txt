@@ -7066,3 +7066,56 @@ PAIRS WITH news_watch.py. Run both at 09:15: the screen says where options are
 mispriced, the watcher says which names carry a same-day catalyst. A name that
 is both cheap-optioned and carrying fresh news is the one to look at hardest --
 and neither instrument is wired to an order.
+
+--------------------------------------------------------------------------------
+111. THE LARGEST RECURRING COST WAS A VERDICT NOTHING READS  (2026-09-06)
+--------------------------------------------------------------------------------
+
+Asked what the hourly news read costs. Answering it found something bigger
+already running.
+
+TRADING_MACRO_LLM_GATE=false has been the deployed state since 2026-08-25, and
+the code says so plainly at nodes.py:1523 -- "a sentiment verdict whose LLM
+gate is off by default". What none of that says is that THE CALL STILL HAPPENS.
+The flag controls whether the verdict influences a decision, not whether the
+model is invoked; nodes.py:1616 runs `await llm.ainvoke(prompt)` whenever the
+macro cache is stale, and MACRO_REFRESH_MINUTES defaulted to 5.
+
+    ~78 Opus-5 calls a session, on a large prompt (breadth, VIX, TNX, up to
+    30 headlines, 3 similar past headlines), for a value nothing reads.
+
+Against that, the entire new per-symbol news feature -- alias tagging, same-day
+sentiment, hourly checks across 15 names -- costs 10 to 20 calls a DAY, because
+it fires on a headline-set digest change rather than on the clock. The thing
+that gates nothing cost five to ten times the thing that was just built.
+
+DEPLOYED: TRADING_MACRO_REFRESH_MINUTES=30. Roughly 13 calls a session instead
+of 78. The verdict is still logged, which is the only reason not to set it to
+zero: that log is the sole record of what the macro model would have said, and
+it is what a decision to re-enable the gate would have to rest on. Deleting the
+call ends that record; lengthening the interval keeps it at a sixth the cost.
+
+SENTIMENT MOVED TO HAIKU, AFTER CHECKING. Headline sentiment is a
+classification. On the 2026-09-04 SanDisk headlines -- the case the whole
+feature exists for -- three models agreed:
+
+    claude-opus-5     NEUTRAL  conf 0.70  2.7s
+    claude-haiku-4-5  NEUTRAL  conf 0.95  1.5s
+    claude-sonnet-5   NEUTRAL  conf 0.85  2.8s
+
+All three gave the same reason: backward-looking round-ups describing a move
+already in the price. Haiku is $1/$5 per MTok against Opus at $5/$25 and was
+the fastest. TRADING_NEWS_MODEL is an env var so reverting costs no deploy, and
+ONE TEST CASE IS NOT VALIDATION -- if a verdict looks wrong, compare against
+Opus before concluding the prompt is at fault.
+
+SCHEDULE TRIMMED to three runs a session (09:15, 12:30, 15:45 ET, scheduled
+wide in UTC for DST) rather than nine. A weekly position is decided once a day
+and holds five days; hourly detection was precision the holding period cannot
+use. The saving is small -- runs that find no digest change cost one SELECT --
+but so is the loss, and the cheaper schedule matches how the book actually
+trades.
+
+WHAT THIS DID NOT CHANGE. No trading behaviour. The macro verdict was inert
+before and is inert now, just sampled less often; the news feature was
+advisory before and is advisory now.

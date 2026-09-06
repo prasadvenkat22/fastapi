@@ -67,6 +67,23 @@ ALIASES: Dict[str, List[str]] = {
 
 LOOKBACK_DAYS = int(os.getenv("TRADING_NEWS_LOOKBACK_DAYS", "3"))
 
+# Haiku, not Opus, and the switch is an ENV VAR so reverting costs no deploy.
+#
+# Headline sentiment is a classification, which is the task Haiku is built for,
+# and it was checked rather than assumed. On the 2026-09-04 SanDisk headlines
+# -- the exact case this whole feature exists for -- all three models returned
+# the same answer with the same reasoning:
+#
+#     claude-opus-5     NEUTRAL  conf 0.70  2.7s  "both items are backward-looking"
+#     claude-haiku-4-5  NEUTRAL  conf 0.95  1.5s  "merely lists SNDK in a round-up"
+#     claude-sonnet-5   NEUTRAL  conf 0.85  2.8s  "generic round-up ... already-occurred"
+#
+# Haiku is $1/$5 per MTok against Opus at $5/$25, so this is 5x cheaper on the
+# one call that scales with news volume. ONE TEST CASE IS NOT VALIDATION: if a
+# verdict ever looks wrong, set TRADING_NEWS_MODEL=claude-opus-5 and compare
+# before concluding the prompt is at fault.
+NEWS_MODEL = os.getenv("TRADING_NEWS_MODEL", "claude-haiku-4-5")
+
 
 def patterns_for(symbol: str) -> List[str]:
     return ALIASES.get(symbol.upper(), [symbol.lower()])
@@ -200,7 +217,7 @@ def classify_day(symbol: str, day: Optional[date] = None) -> dict:
         from langchain_anthropic import ChatAnthropic
 
         llm = ChatAnthropic(
-            model="claude-opus-5", max_tokens=1024,
+            model=NEWS_MODEL, max_tokens=1024,
         ).with_structured_output(NewsSentiment)
         listed = "\n".join(f"- {h}" for h in heads[:25])
         out = llm.invoke(

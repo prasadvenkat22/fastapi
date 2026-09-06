@@ -7021,3 +7021,48 @@ THE LESSON IS THE ONE FROM SECTION 103 IN A DIFFERENT COSTUME. A reason written
 down once gets re-read as settled. This one sat in a module docstring for weeks
 and was quoted back approvingly in section 108 on the same day it turned out to
 be too broad. Rejections deserve the same scepticism as decisions.
+
+--------------------------------------------------------------------------------
+110. THE MONDAY MORNING SCREEN, AND WHAT IT IS ALLOWED TO CLAIM  (2026-09-06)
+--------------------------------------------------------------------------------
+
+scripts/iv_rv_screen.py ranks the tracked names on IV/RV -- the front weekly's
+near-the-money implied vol against the same annualised RV20 a weekly_shadow row
+carries. Above 1.0 the market charges more vol than the name has been
+realising, which is the only place section 50 could find an edge for a
+premium-selling structure; below 1.0 the reverse, which favours buying it.
+
+FIRST RUN, 2026-09-06:
+
+    richest (sell premium)          cheapest (buy premium)
+      GOOGL  1.34                     PANW   0.69
+      QQQ    1.25                     MRVL   0.76
+      AMZN   1.22                     NVDA   0.77
+      MSFT   1.18                     DELL   0.77
+      AVGO   1.12                     CRWV   0.85
+      WDC    1.09                     SNDK   0.90
+    fair: META 1.04, MU 1.00, STX 0.99
+
+SNDK READS 0.90 -- LEAN BUY, NOT SELL. Realised 88% against implied 79%: the
+name is moving more than the market is charging for, so nobody is being paid to
+sell premium on it. That is consistent with the deep-ITM DEBIT structure of
+section 108 and inconsistent with writing calls against it, which is the trade
+that was nearly taken on 2026-09-04.
+
+THE BOARD IS UNIFORMLY EXTENDED and that is worth knowing before reading any
+trend column. Fourteen of fifteen names sit ABOVE or AT their weekly VWAP, and
+only PANW and AVGO are below both moving averages. When nearly everything
+agrees, "the trend agrees" carries no information -- the IV/RV column is doing
+all the work on this particular morning.
+
+WHAT THE SCREEN IS ALLOWED TO CLAIM. IV/RV is the only column on it with
+measured backing for this book. Trend, RSI, Bollinger zone and the VWAP side
+are printed beside it as context and have never been validated against weekly
+outcomes; a name should not be traded because three unmeasured columns agree
+with each other. The thresholds are banded rather than cut at 1.0 for the same
+reason -- 1.01 is noise around fair, not a sell.
+
+PAIRS WITH news_watch.py. Run both at 09:15: the screen says where options are
+mispriced, the watcher says which names carry a same-day catalyst. A name that
+is both cheap-optioned and carrying fresh news is the one to look at hardest --
+and neither instrument is wired to an order.

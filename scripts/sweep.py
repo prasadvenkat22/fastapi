@@ -70,6 +70,12 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
+# Repo root on the path, so `python scripts/sweep.py <arm>` runs from a plain
+# checkout. Without it every invocation documented in strategy_notes.txt dies
+# on ModuleNotFoundError: trading_engine, and the only runs that worked were
+# ones whose shell happened to carry PYTHONPATH.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import trading_engine.broker as broker_mod
 import trading_engine.nodes as N
 import trading_engine.playbook as PB

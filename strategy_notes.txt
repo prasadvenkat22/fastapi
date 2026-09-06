@@ -258,9 +258,14 @@ account down after losses and up after wins.
 
 MORNING_DRIFT - 10:15 to 12:30, rides to the 13:25 handoff
   Structure     $10 wide, long leg $2 in the money, short leg $8 out. Bullish
-                only, CLEAN tier only.
+                only, CLEAN tier only. This is CORRECT and is what trades:
+                the server sets TRADING_MORNING_WIDTH=10.0, overriding the
+                6.0 that playbook.py defaults to. A reader who trusts the
+                code over the environment gets this backwards -- as this file
+                briefly did on 2026-09-06.
   Sizing        20% entry fraction (global, no window override), 50% risk share.
-  Exits         -10% stop, 13:25 handoff, 15:45 force close. NO take-profit
+  Exits         -25% stop (server), ride take-profit 55%, stall 5 min / 3.3%
+                giveback, 13:25 handoff, 15:45 force close.
                 and no ratchet; the 90%-of-max ceiling exists but is
                 unreachable (see below).
 
@@ -773,14 +778,44 @@ WINDOW LENGTH IS A GENUINE OPTIMUM, not a default:
 12:30 wins on total and nearly ties the best second half. Too short and it
 misses setups; too long and it takes worse ones.
 
-DEPLOYED CONFIGURATION as of 2026-08-25 close:
+DEPLOYED CONFIGURATION as of 2026-09-06, read from the SERVER's own
+environment (docker exec app env), not from playbook.py:
 
     MORNING_DRIFT     10:15-12:30  $10 wide, long $2 ITM (short $8 OTM)
-                      stop -20%, rides to a 13:25 exit
-    AFTERNOON_CREDIT  13:30-15:00  $2 wide, 0.25 delta (~$1 OTM)
-                      books at 50% of credit, stop -200%
+                      stop -25%, ride take-profit 55%, 13:25 handoff
+    AFTERNOON_CREDIT  14:00-15:00  $4 wide, short at max(2sd, $2) OTM
+                      arms at 50% of credit, books at 90%, stop -600%
+    stall exit        5 min / 3.3% giveback, credit included
+    exit polling      10s while a position is open (section 43's fix, live)
     macro LLM gate    OFF          the one term never in any backtest
-    orders            production, 3-contract cap, $4,000 budget
+    orders            production, $6,500 budget
+
+    READ THIS BEFORE QUOTING playbook.py. The code defaults and the deployed
+    environment DISAGREE, and the environment wins:
+
+      parameter                 playbook/nodes default   SERVER
+      TRADING_MORNING_WIDTH               6.0             10.0
+      TRADING_MORNING_STOP_PCT           -20              -25
+      TRADING_RIDE_TAKE_PROFIT             0               55
+      TRADING_STALL_MINUTES                0                5
+      TRADING_POSITION_BUDGET           1000 / .env 5000  6500
+
+    A sweep run from a checkout reproduces NONE of these unless it exports
+    them. Every replay in this file that was invoked without them measured a
+    $6-wide spread with no stall exit and no ride take-profit -- a
+    configuration that has never traded a single live contract.
+
+    Entry geometry priced on the engine's own smile at the real 10:15 spot
+    and session VIX, 60 sessions to 2026-09-04:
+
+      long leg delta 0.71   short leg delta 0.13   NET DELTA +0.58
+      debit $2.56 = 43% of width   risk $256   max reward $344   R:R 1:1.34
+
+    The block above superseded an entry that still read "$10 wide, long $2 ITM
+    (short $8 OTM) / $2 wide, 0.25 delta / $4,000 budget" twelve days after
+    playbook.py had moved. Section 102's "the engine's own morning ride buys
+    near 29% of width -- 2.4:1" describes THAT $10 placement (28% / 1:2.61),
+    not the $6 one, and should not be read as a second measurement of it.
 
 --------------------------------------------------------------------------------
 17. SELL INTO STRENGTH -- BUILT, MEASURED, LEFT OFF  (2026-08-26)
@@ -6422,7 +6457,10 @@ WHAT THE NUMBERS SAY TO DO INSTEAD:
 Half the width is the BREAK-EVEN geometry, not a target. Below it the ratio
 starts working; above it you are paying more than you can win. The engine's
 own morning ride buys near 29% of width -- 2.4:1 -- and is the one book here
-with a positive live record.
+with a positive live record. [2026-09-06: that 29% is the $10-wide placement
+retired on 2026-08-25. The $6 in force prices at 43% of width, 1:1.34, and at
+0.56x QQQ's $10.72 average daily range it falls in the same "width below the
+daily range" bracket this section flags -- a check never run on this book.]
 
 THE CHECK THAT MATTERS AT ENTRY is not "is this in the money" but HOW FAR
 BELOW SPOT THE SHORT STRIKE SITS, measured in that name's own daily moves:
@@ -6442,3 +6480,126 @@ at-the-money wearing its clothes.
 
 Under 1 average daily move of cushion, a position is a coin flip whatever it
 cost. Over 2, it survives a shock.
+
+--------------------------------------------------------------------------------
+103. THE CODE AND THE SERVER WERE NEVER THE SAME ENGINE  (2026-09-06)
+--------------------------------------------------------------------------------
+
+Asked what width, ITM depth and OTM distance maximise EV for the morning
+trade. Answering it took four wrong turns, and every one of them came from
+the same root cause: THE HARNESS AND THE FILE BOTH READ playbook.py, AND THE
+ENGINE READS ITS ENVIRONMENT.
+
+    parameter                  playbook/nodes default   SERVER (docker exec)
+    TRADING_MORNING_WIDTH                6.0                   10.0
+    TRADING_MORNING_STOP_PCT            -20                    -25
+    TRADING_RIDE_TAKE_PROFIT              0                     55
+    TRADING_STALL_MINUTES                 0                      5
+    TRADING_POSITION_BUDGET            1000                   6500
+
+Every sweep in sections 27 onward was invoked without those, so every one
+measured a $6-wide spread with no stall exit and no ride take-profit -- a
+configuration that HAS NEVER TRADED A SINGLE LIVE CONTRACT. Section 38
+recorded five sizing corrections from this same class of error and concluded
+"every ranking survived; no dollar figure did." That was too generous. Here
+the WIDTH itself was wrong, so the rankings were about the wrong instrument.
+
+WHAT THE LIVE RECORD ACTUALLY SHOWS. Six MORNING_DRIFT fills, 2026-08-19 to
+09-03, read from trading_history on the droplet:
+
+    date      strikes    width  q   entry  %width    pnl     pct   exit
+    08-19    715/718       3    1    1.76    59%   -19.34  -11.0  STOP_LOSS
+    08-21    707/712       5    1    3.37    67%   +56.27  +16.7  HANDOFF
+    08-27    716/726      10    2    3.08    31%  -142.00  -23.1  STOP_LOSS
+    08-28    719/729      10    2    2.93    29%  -106.00  -18.1  STOP_LOSS
+    09-02    707/717      10    3    2.47    25%  +189.00  +25.5  STALL
+    09-03    710/720      10    2    2.83    28%  +478.00  +84.5  STALL
+
+    all six      +455.93 total   +75.99/trade   50% win   payoff 1:2.71
+    $10 only     +419.00 total  +104.75/trade   50% win   payoff 1:2.69
+                 break-even 27.1%, actual 50% -- edge +22.9 points
+
+Section 102's metric explains the shape without any model: the $10 fills went
+on at 25-31% of width (reward:risk 2.2-3.0:1); the $3 and $5 fills at 59-67%
+(0.5-0.7:1). Cheap relative to width is the whole edge, and the wide spread
+is what makes it cheap.
+
+PLACEMENT IS SETTLED, AND THE DEPLOYED ONE IS RIGHT. An independent grid --
+no engine, no gating, no stop, buy at 10:15 and sell at 13:25, chain-priced
+over 60 sessions -- ranked thirty placements. $10 wide / $2 ITM / $8 OTM came
+2nd at +70.55 a contract, behind only $10 / $1 ITM / $9 OTM at +77.41. The
+grid is monotone in both directions, wider better and shallower better, which
+is section 9's result reproduced on a completely separate instrument.
+
+    THE WIN RATE IS SET BY DIRECTION, NOT BY WIDTH. Every bullish placement
+    wins 50-52%: that is just how often QQQ is higher at 13:25 than 10:15.
+    Width and depth move the PAYOFF, not the probability. Chasing probability
+    is the losing move -- $5 wide / $5 ITM / $0 OTM wins 62% of the time, the
+    highest hit rate in the grid, and loses 21.29 a contract because it needs
+    70.1%. The best cell wins the LEAST often of any and earns the most.
+
+EXITS, SWEPT AT THE DEPLOYED CONFIG FOR THE FIRST TIME. $10 wide, $2 ITM,
+stall on, chain-priced, 60 sessions, one factor at a time:
+
+    stall     0 min  -49.44      ride TP  off  -23.31      stop -20%  -32.39
+              5 min  -30.09  <-           50%  -22.27           -25%  -30.09  <-
+             10 min  -49.18               55%  -30.09  <-       -35%  -18.06
+             15 min  -43.05               70%  -21.66           -50%   -8.63
+
+  THE STOP IS THE LEVER. Monotone across four levels, and it improves EV, win
+  rate, payoff AND the worst single trade at the same time -- worst goes
+  -448.20 to -157.40. That is not the trade-off a stop is supposed to make.
+  The tight stop manufactures its own worst days: it fires, the engine
+  re-enters into the same adverse move, and the session compounds (62 trades
+  at -25% against 53 at -50%). The live record agrees from the other side --
+  all three live LOSSES were STOP_LOSS closes, both live WINNERS rode to a
+  stall exit. DEPLOYED: -50.
+
+  THE STALL WAS ALREADY OPTIMAL. 5 minutes beats off, 10 and 15. Section 99
+  had flagged that the engine's own stall "has never been separately
+  measured"; it has now, on the population it actually runs against, and it
+  is the best of four. Left at 5 min / 3.3%. Note it is also doing most of
+  the work: both of the largest live wins exited on it.
+
+  THE RIDE TAKE-PROFIT HAD DRIFTED. The server ran 55 against the 50 this
+  file records as a deliberate risk-preference decision. 55 measured WORST of
+  five. READ THE CAVEAT: the result is NON-MONOTONE -- 50 and 70 both pay
+  1:1.21 and only 55 dips to 1:1.03 -- so this restores a documented value
+  rather than establishing a new one. DEPLOYED: 50.
+
+TWO TOOL BUGS FOUND ON THE WAY, BOTH OF WHICH HAVE CORRUPTED PAST RESULTS.
+
+  A WINDOW'S stop_loss_pct=None DOES NOT DISABLE THE STOP. thresholds_for()
+  falls back to nodes.STOP_LOSS_PCT (-20). An arm set up that way returns
+  BYTE-IDENTICAL numbers to the -20% arm, which is how it was caught. Any
+  sweep that tested "no stop" by nulling that field measured -20% and
+  labelled it no-stop. The only way off is TRADING_STOP_LOSS_PCT.
+
+  scripts/sweep.py DID NOT RUN FROM A CHECKOUT. Every invocation documented
+  in this file died on ModuleNotFoundError: trading_engine. The only runs
+  that ever worked were ones whose shell happened to carry PYTHONPATH. Fixed
+  with a sys.path bootstrap at the top of the file.
+
+THE DISAGREEMENT THAT SURVIVED ALL OF IT. At the corrected configuration the
+replay still reads -8.63 to -30.09 a trade while the live record reads
++104.75. Fixing the config drift did NOT close that gap, so it can no longer
+be blamed on the harness modelling the wrong engine. Either the replay is
+systematically pessimistic about this structure, or four live trades carried
+by a single +478 were lucky. Nothing measured here settles it, and the file's
+own bar -- twenty live trades -- is still not met.
+
+WHAT WAS CHANGED. On the server, .env.production: MORNING_STOP_PCT -25 -> -50
+and RIDE_TAKE_PROFIT 55 -> 50, backed up first, applied with a full `up -d`
+across both compose files, verified from `docker exec app env`. In the repo,
+.env.production.example was reconciled against the server: seven values
+disagreed, forty-three keys the engine runs on were absent entirely, and
+TRADING_ENTRY_FRACTION was set TWICE with different values (0.4 and 0.20).
+It now carries all 63 keys with no duplicates. TRADING_LIVE_ORDERS is held
+at false there on purpose -- a template that routes real orders on copy is
+not a template.
+
+WHAT TO DO WHEN A PARAMETER IS QUOTED. Read it from `docker exec app env`,
+not from playbook.py and not from this file. Where they disagree the
+environment is what trades, and this file has been wrong about it twice in
+one day: sections 9 and 16 were "corrected" from the code into an error, then
+corrected back from the server.

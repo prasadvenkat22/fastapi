@@ -924,6 +924,7 @@ def _read_macro_cache():
 
 
 def _write_macro_cache(verdict: str, confidence: float, risk_factor: str) -> None:
+    from sqlalchemy import text as sqltext
     from sqlalchemy.sql import func as sqlfunc
     from models_pgdb.trading_models import MacroCache
     from config.db_pgrs import SessionLocal
@@ -937,6 +938,18 @@ def _write_macro_cache(verdict: str, confidence: float, risk_factor: str) -> Non
             else:
                 row.verdict, row.confidence = verdict, confidence
                 row.risk_factor, row.updated_at = risk_factor, sqlfunc.now()
+            # HISTORY, not just the cache. MacroCache is ONE ROW, upserted --
+            # every verdict the model has ever given overwrote the last, so
+            # after weeks of running there was nothing to analyse and no way
+            # to ask whether the macro read predicted anything. That is what
+            # made the 5-minute cadence pure cost: the call was paid for and
+            # the answer discarded. An append here is what turns the spend
+            # into a dataset.
+            db.execute(sqltext(
+                "INSERT INTO trading_macro_verdicts "
+                "(verdict, confidence, risk_factor, recorded_at) "
+                "VALUES (:v, :c, :r, now())"),
+                {"v": verdict, "c": confidence, "r": risk_factor})
             db.commit()
         finally:
             db.close()

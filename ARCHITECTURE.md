@@ -26,6 +26,7 @@ This file is the map.
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
 | 09:30 | `news_watch.py` | grades **today's** news per symbol, writes `news_verdicts`. Window guard 09:20–10:05 |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
+| 17:15 (21:15 UTC, both DST offsets land after the close) | `macro_outcome.py` | records the morning's macro read against the session that followed |
 
 Cron is UTC and lists both DST offsets; the scripts reject the wrong one.
 
@@ -177,6 +178,7 @@ compare test AUC against 0.496.
 | `delta_calibration.py` | is market delta a well-calibrated probability |
 | `xgb_probability.py` | does a learned model beat it (no) |
 | `backfill_news_impact.py` | label stored headlines with what price did |
+| `macro_outcome.py --report` | did the macro verdict separate sessions, and what would a gate have cost |
 | `sweep.py` | 0DTE replay. **Read the RUN CONFIG banner** |
 
 ---
@@ -192,6 +194,7 @@ compare test AUC against 0.496.
 | `news_verdicts` | one graded verdict per symbol per trading day |
 | `trading_macro_verdicts` | append-only macro read history |
 | `trading_macro_readings` | VIX and 10Y per cycle |
+| `macro_session_outcomes` | one row per session: morning verdicts vs QQQ's move and the engine's P&L |
 
 ---
 

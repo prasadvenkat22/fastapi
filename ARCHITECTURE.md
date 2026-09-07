@@ -49,10 +49,30 @@ overnight, and the engine cannot trade it anyway):
   computed hourly, recorded to `trading_macro_verdicts`, and gates nothing.
   Turned off 2026-08-25 after refusing 55 of 55 cycles on a day QQQ rose $6.50
   off its low (section 14).
-- **No per-symbol news.** QQQ does get a `news_verdicts` row, and it is not
-  useful: a ticker feed for an index ETF returns fund-comparison articles
-  ("Forget JEPQ..."), not market-moving news. QQQ's news is the macro tape,
-  which the objective terms above already read.
+**A macro news verdict now exists for QQQ, and it is recorded, not wired in.**
+QQQ does not match its own ticker — matching `"qqq"` returned fund-comparison
+articles ("Forget JEPQ...") because that is what an ETF ticker feed carries.
+It matches `MACRO_TERMS` instead, grouped into the four vectors that move an
+index: central bank and liquidity, geopolitics and commodity shocks, sovereign
+debt and fixed income, systemic economic data.
+
+Measured across consecutive sessions it flips direction correctly and reads
+the transmission channel, not the headline:
+
+| session | verdict | driver |
+|---|---|---|
+| 2026-09-03 | **BULLISH** 0.72 | *"yields falling, participants paring rate-hike expectations"* — Dow +635 |
+| 2026-09-04 | **BEARISH** 0.72 | *"stronger-than-expected jobs report... raises rate-hike odds, pressuring rate-sensitive tech"* — Dow −250 |
+| 2026-09-07 | **BEARISH** 0.72 | oil to 6-week high on Iran, Fed hike in view, yields testing 4.8% |
+
+Good jobs data reading as bearish for equities through the rate channel is the
+kind of inference a keyword count or a tree on technicals cannot reach.
+
+**It gates nothing.** `trading_macro_verdicts` and `news_verdicts` are
+accumulating so the question can be settled: did BEARISH verdicts precede down
+sessions, or refuse days the engine would have won? That is the same test the
+weekly overlay is built for, and it is the honest route back to the LLM gate
+that was switched off on two days of evidence.
 - **No ML model.** See below.
 
 ---

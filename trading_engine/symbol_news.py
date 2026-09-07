@@ -62,10 +62,62 @@ ALIASES: Dict[str, List[str]] = {
     "GOOGL": ["alphabet", "googl", "google"],
     "META": ["meta platforms", "facebook"],
     "MSFT": ["microsoft", "msft"],
-    "QQQ": ["nasdaq 100", "nasdaq-100", "qqq"],
+    # QQQ is deliberately absent -- see MACRO_TERMS.
 }
 
+# QQQ IS NOT A COMPANY AND MUST NOT BE READ LIKE ONE.
+#
+# Matching "qqq" and "nasdaq 100" returns what a ticker feed carries for an
+# ETF: fund-comparison articles. On 2026-09-07 QQQ's entire same-day set was
+# two pieces about JEPQ versus Invesco's own income fund, graded NEUTRAL 0.85
+# -- correctly, because neither is a market event.
+#
+# What actually moves QQQ is the macro tape: rates, yields, oil, jobs,
+# inflation, geopolitics. The general feeds carry that well and always did.
+# Today's set includes "Oil prices rise to 6-week high after Iran and U.S.
+# trade blows", "A Fed rate hike is coming into view", "Treasury yields face
+# 4.8% test" and "Dow Jones Futures Fall With Iran, Apple, Inflation In Focus"
+# -- the whole picture, none of it reachable through a QQQ ticker match.
+#
+# Kept SPECIFIC rather than broad. "rate" alone matches every mortgage and CD
+# story; "rate hike" and "interest rate" do not. A macro read assembled from
+# retail-finance noise is worse than none, because it arrives graded.
+MACRO_TERMS: List[str] = [
+    # 1. CENTRAL BANK & LIQUIDITY
+    "federal reserve", "the fed", "fed rate", "fed chair", "fomc", "powell",
+    "rate hike", "rate cut", "interest rate", "quantitative easing",
+    "quantitative tightening", "balance sheet runoff", "dot plot",
+
+    # 2. GEOPOLITICS & COMMODITY SHOCKS
+    # For QQQ the transmission is inflation, not the commodity itself: an oil
+    # shock matters because it moves rate expectations, which move the
+    # multiple on long-duration tech.
+    "iran", "strait of hormuz", "sanctions", "escalation", "crude oil",
+    "oil price", "opec", "brent", "supply disruption", "export ban",
+    "taiwan strait", "chip export",
+
+    # 3. SOVEREIGN DEBT & FIXED INCOME
+    # Global yields, not just the US 10-year: a JGB or Bund repricing pulls
+    # capital out of duration everywhere, and QQQ is a duration trade.
+    "treasury yield", "10-year", "bond yield", "yield curve", "inversion",
+    "global bond", "bunds", "jgb", "gilt", "term premium", "auction tailed",
+
+    # 4. SYSTEMIC ECONOMIC DATA
+    "cpi", "core inflation", "pce", "non-farm payroll", "nonfarm payroll",
+    "nfp", "jobs report", "unemployment rate", "jobless claims",
+    "retail sales", "ism ", "gdp",
+
+    # Index-level tape, which is the outcome these four vectors produce
+    "nasdaq futures", "dow jones futures", "s&p 500 futures", "stock futures",
+]
+
 LOOKBACK_DAYS = int(os.getenv("TRADING_NEWS_LOOKBACK_DAYS", "3"))
+
+# Headlines handed to the classifier for one symbol-day. 25 was fine for a
+# single ticker and truncates the macro read: 2026-09-04 matched exactly 25
+# macro terms, which is the cap, not the count. A truncated macro day drops
+# whichever vector sorts last and can flip a verdict for no reason.
+MAX_HEADLINES = int(os.getenv("TRADING_NEWS_MAX_HEADLINES", "45"))
 
 # Haiku, not Opus, and the switch is an ENV VAR so reverting costs no deploy.
 #
@@ -86,7 +138,12 @@ NEWS_MODEL = os.getenv("TRADING_NEWS_MODEL", "claude-haiku-4-5")
 
 
 def patterns_for(symbol: str) -> List[str]:
-    return ALIASES.get(symbol.upper(), [symbol.lower()])
+    """Match strings for a symbol. QQQ resolves to the macro tape, not to
+    articles that happen to name the ETF."""
+    sym = symbol.upper()
+    if sym == "QQQ":
+        return MACRO_TERMS
+    return ALIASES.get(sym, [sym.lower()])
 
 
 def _dsn() -> str:
@@ -113,9 +170,9 @@ def recent_headlines(symbol: str, days: int = None) -> List[Tuple[str, object]]:
         sql = (
             "SELECT headline_text, publication_date FROM market_news_vectors "
             f"WHERE ({clause}) AND publication_date > now() - interval %s "
-            "ORDER BY publication_date DESC LIMIT 25"
+            "ORDER BY publication_date DESC LIMIT %s"
         )
-        args = [f"%{p}%" for p in pats] + [f"{int(days)} days"]
+        args = [f"%{p}%" for p in pats] + [f"{int(days)} days", MAX_HEADLINES]
         with psycopg2.connect(_dsn()) as conn, conn.cursor() as cur:
             cur.execute(sql, args)
             return [(r[0], r[1]) for r in cur.fetchall()]
@@ -191,10 +248,10 @@ def same_day_headlines(symbol: str, day: Optional[date] = None) -> List[str]:
             "SELECT headline_text FROM market_news_vectors "
             f"WHERE ({clause}) "
             "AND (publication_date AT TIME ZONE 'America/New_York')::date = %s "
-            "ORDER BY publication_date DESC LIMIT 25"
+            "ORDER BY publication_date DESC LIMIT %s"
         )
         with psycopg2.connect(_dsn()) as conn, conn.cursor() as cur:
-            cur.execute(sql, [f"%{p}%" for p in pats] + [day])
+            cur.execute(sql, [f"%{p}%" for p in pats] + [day, MAX_HEADLINES])
             return [r[0] for r in cur.fetchall()]
     except Exception:
         logger.warning("Same-day news lookup failed for %s.", symbol, exc_info=True)

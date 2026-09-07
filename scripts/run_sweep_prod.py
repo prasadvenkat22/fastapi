@@ -2,8 +2,14 @@
 
 The sweep's whole value is that it replays the engine AS DEPLOYED, so it has
 to see the same TRADING_* values the droplet does. .env.production is not in
-the repo (and the repo's .env is a decoy carrying a different budget), so the
-values are pulled off the droplet and loaded here.
+the repo, so the values are pulled off the droplet and loaded here.
+
+[2026-09-07: the repo's .env is NO LONGER a decoy. It now mirrors the server's
+64 TRADING_ keys with two deliberate inversions -- LIVE_ORDERS false and
+ORDER_PREVIEW_ONLY true -- so `python scripts/sweep.py <arm>` reproduces the
+deployment on its own, chain-priced by default. This wrapper is still the
+authority when a parameter has just been changed on the droplet and not yet
+mirrored locally; the diff to check is in deployment_notes.txt.]
 
 REFRESH trading.env BEFORE EVERY RUN. A snapshot taken once and reused goes
 stale the moment anything is deployed, and a sweep against a stale snapshot

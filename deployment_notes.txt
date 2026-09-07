@@ -361,3 +361,101 @@ CONFIDENCE, HONESTLY
   0 evidence:   the weekly 90% target, the 30-minute win cooldown
   against the
   measurement:  the +50% return-on-cost target (section 100)
+
+=======================================
+ARCHITECTURE AS OF 2026-09-07
+=======================================
+
+Three books share one engine, one database and one cron. They differ in what
+they trade and in how much of them is automated.
+
+  0DTE QQQ          fully automated. run_cycle.py every minute, entries and
+                    exits placed by the engine.
+  WEEKLY single     observational plus one live slice. weekly_shadow records
+  names             every structure on every tracked symbol; TRADING_WEEKLY_LIVE
+                    routes one of them.
+  MANUAL / orphan   positions opened by hand, MANAGED by the engine once
+                    TRADING_MANAGE_ORPHANS is on.
+
+DAILY TIMELINE (America/New_York; every job owns its own clock because the
+crontab is UTC and would be an hour wrong for half the year)
+
+  every minute    run_cycle.py            the 0DTE engine. Checks market hours
+                                          and holidays itself via
+                                          trading_engine/market_calendar.py.
+  09:30           news_watch.py           per-symbol news verdict for the day.
+                                          ONCE -- the verdict sets the day's
+                                          structure and that is decided once.
+                                          Guard window 09:20-10:05.
+  10:00,12:00,    capture_chain.py        option-chain snapshots.
+  14:00,15:30
+
+THE NEWS PIPELINE (built 2026-09-06/07)
+
+  ingest      nodes._scrape_headlines(). Three general feeds PLUS a per-symbol
+              Yahoo and Seeking Alpha feed for every name in
+              TRADING_MANAGE_UNDERLYING. The per-symbol half is not optional:
+              general feeds carry macro and mega-cap news and miss single-name
+              catalysts entirely -- SNDK's S&P 100 inclusion, the event that
+              moved it 11.9% on 09-04, produced ZERO stored headlines before
+              this was added and appears immediately after.
+  store       market_news_vectors, embedded with Voyage, deduped, with a
+              `source` column recording which feed it came from.
+  tag         trading_engine/symbol_news.py. A ticker-to-company-name alias
+              map, because the engine holds SNDK and the wires write SanDisk.
+  grade       classify_day() -> VERY_BULLISH..VERY_BEARISH via
+              TRADING_NEWS_MODEL, same trading day only, written to
+              news_verdicts. Fires on a headline-set digest change, so a
+              re-run with the same headlines costs one SELECT.
+  label       news_symbol_impact. One row per (headline, symbol) carrying the
+              symbol's spot, ATR14 and 1- and 5-day forward returns in percent
+              AND in ATR units. This is what makes any sentiment scheme
+              TESTABLE rather than asserted.
+
+  NOTHING IN THIS PIPELINE GATES A TRADE. On the 365 rows backfilled so far,
+  news mentions do not predict a move. It is recorded beside the decision, in
+  the way section 22 treated crude and section 14 the macro verdict.
+
+ANALYSIS SCRIPTS (run by hand, none of them trade)
+
+  scripts/iv_rv_screen.py       IV against realised vol per name. The one
+                                column with measured backing (section 50).
+  scripts/weekly_pick.py        ranks real verticals on drift-corrected EV,
+                                priced at ask/bid behind a quote-width filter,
+                                with three probability engines side by side.
+  scripts/delta_calibration.py  checks whether market delta is a well-
+                                calibrated probability. As of 2026-09-07 it is,
+                                to inside a point (section 118).
+  scripts/backfill_news_impact.py  labels stored headlines with what the price
+                                did next.
+  scripts/sweep.py              the 0DTE replay harness. SEE BELOW.
+
+RUNNING A SWEEP -- WHAT CHANGED 2026-09-06
+
+  `python scripts/sweep.py <arm>` now reproduces the deployment on its own:
+  it bootstraps sys.path, defaults SWEEP_CHAIN_PRICING to TRUE, and reads the
+  repo .env which mirrors the server's 64 TRADING_ keys. The banner is the
+  check -- read the RUN CONFIG block before trusting any figure under it.
+
+  run_sweep_prod.py remains the authority immediately after a droplet change,
+  before the local mirror is updated.
+
+  THE MIRROR IS NOT AUTOMATIC. After changing anything in .env.production,
+  update the repo .env to match, keeping LIVE_ORDERS=false and
+  ORDER_PREVIEW_ONLY=true. To verify:
+
+    ssh root@<host> "docker exec app env | grep -E '^TRADING_' | sort"
+
+  and diff against the local file. Two differences are expected and correct;
+  any others mean a sweep is measuring an engine that does not exist.
+
+TABLES ADDED 2026-09-06/07
+
+  news_symbol_impact        headline x symbol, with forward returns in ATR
+  news_verdicts             one graded verdict per symbol per trading day
+  trading_macro_verdicts    append-only history of the macro read, which was
+                            previously overwritten in a single row and so
+                            could never be analysed
+  weekly_shadow (columns)   sig_atr14, sig_atr_pct, sig_vwap_week,
+                            sig_vwap_side, sig_net_delta/gamma/theta/vega,
+                            sig_news_count_3d, sig_news_latest

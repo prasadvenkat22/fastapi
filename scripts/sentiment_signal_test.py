@@ -114,10 +114,63 @@ def bootstrap_by_day(sc, lb, dy, n=4000, seed=7):
         else (float("nan"), float("nan"))
 
 
+def regrade(rows, threshold: float, cache_path: str):
+    """Re-grade every stored symbol-day with re-reports dropped.
+
+    THE POINT IS THE COMPARISON, not the new verdicts. Filtering changes what
+    the model sees, and a changed verdict is not by itself an improvement --
+    plenty of ways to make a signal different make it worse. The only thing
+    that settles it is whether the filtered verdicts rank the forward returns
+    any better than the unfiltered ones, which is the AUC printed below.
+    """
+    from trading_engine import symbol_news as SN
+
+    SN.NOVELTY_THRESHOLD = threshold
+    cache = {}
+    if cache_path and os.path.exists(cache_path):
+        with open(cache_path, encoding="utf-8") as fh:
+            for line in fh:
+                p = line.rstrip().split("|")
+                if len(p) >= 5:
+                    cache[(p[0], p[1])] = (p[2], float(p[3]), int(p[4]))
+        print(f"{len(cache)} verdicts read from cache {cache_path}")
+
+    out, fresh = [], 0
+    for sym, day, v0, c0, n0 in rows:
+        key = (sym, str(day))
+        if key in cache:
+            v, c, n = cache[key]
+        else:
+            heads = SN.session_headlines(sym, day)
+            if not heads:
+                v, c, n = "NEUTRAL", 0.0, 0
+            else:
+                g = SN.classify_day(sym, day)
+                v, c, n = g["verdict"], g["confidence"], g["headline_count"]
+            cache[key] = (v, c, n)
+            fresh += 1
+        out.append((sym, day, v, c, n))
+    if cache_path:
+        with open(cache_path, "w", encoding="utf-8") as fh:
+            for (sym, day), (v, c, n) in sorted(cache.items()):
+                fh.write(f"{sym}|{day}|{v}|{c}|{n}" + chr(10))
+    changed = sum(1 for (s0, d0, v0, _, _), (s1, d1, v1, _, _)
+                  in zip(rows, out) if v0 != v1)
+    print(f"re-graded at novelty {threshold:.2f}: {fresh} model calls, "
+          f"{changed} of {len(rows)} verdicts changed")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backfill", action="store_true")
     ap.add_argument("--horizons", default="1,4")
+    ap.add_argument("--novelty", type=float, default=0.0,
+                    help="re-grade every symbol-day with re-reports dropped at "
+                         "this cosine threshold, and score THOSE verdicts")
+    ap.add_argument("--cache", default="",
+                    help="file to cache re-graded verdicts in, so a second run "
+                         "at the same threshold costs nothing")
     args = ap.parse_args()
 
     conn = psycopg2.connect(_dsn())
@@ -134,6 +187,9 @@ def main():
     cur.execute("SELECT symbol, trading_day, verdict, confidence, headline_count "
                 "FROM news_verdicts ORDER BY trading_day, symbol")
     rows = cur.fetchall()
+
+    if args.novelty:
+        rows = regrade(rows, args.novelty, args.cache)
     print(f"{len(rows)} graded symbol-days available\n")
     if not rows:
         return

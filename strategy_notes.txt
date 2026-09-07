@@ -8031,3 +8031,82 @@ interval between two numbers computed by other means (section 121), the guard
 stays because it needs no forecast (section 122), and the probability itself
 stays delta. Re-run this section when news_verdicts holds a few hundred
 sessions rather than eleven.
+
+
+126. ONLY WHAT IS NEW AT 09:30 COUNTS  (2026-09-07)
+--------------------------------------------------------------------------------
+
+The rule, as it was put: news and macro are judged on a daily 09:30 basis;
+previous events are worthless because the market has already discounted them.
+That is right, and the window fix in section 123 only implemented half of it.
+
+THE HOLE THE WINDOW LEFT. A window of [previous close, 09:30] admits every
+headline published in it -- including the wires re-reporting a standing story
+for the ninth morning running. Iran, the Fed's next move, yields testing a
+level: all fresh by timestamp, all priced weeks ago. The classifier graded them
+as new information every session.
+
+THEY ARE NOT DUPLICATES, WHICH IS WHY THIS WAS NOT OBVIOUS. Measured against
+the previous ten sessions of the same symbol's coverage, cosine similarity ran:
+
+    p10 0.613   p25 0.719   MEDIAN 0.767   p75 0.826   p90 0.868   p99 0.912
+
+A threshold of 0.88 drops 7%. The recycling is not verbatim -- it is the same
+standing theme rewritten daily, which no exact-match rule catches. The
+threshold was set at 0.83, the 75th percentile, BEFORE any outcome was scored.
+
+THE FILTER COSTS NOTHING TO RUN. Every headline already carries a Voyage
+embedding, so novelty is one SQL query against pgvector and no model calls.
+
+WHAT IT DID TO SINGLE NAMES -- SUBSTANTIAL, AND MOSTLY TOWARD NEUTRAL:
+
+    NVDA   42% of headlines were re-reports;  09-04 VERY_BULLISH -> NEUTRAL
+    SNDK   42% re-reports
+    MU     30% re-reports
+    QQQ    24% re-reports
+
+    overall: 35 of 167 verdicts changed, NEUTRAL 101 -> 120
+
+A signal that mostly evaporates into NEUTRAL when the recycled narrative is
+removed was mostly recycled narrative. That is the finding, not a failure.
+
+AND WHAT IT DID TO THE MEASURED SIGNAL:
+
+                          before filter              after filter
+    1d AUC     0.546  CI [0.441, 0.634]     0.551  CI [0.481, 0.626]
+    4d AUC     0.532  CI [0.405, 0.641]     0.528  CI [0.437, 0.636]
+
+The point estimates barely move. THE INTERVAL NARROWS BY A QUARTER at one day
+(width 0.193 -> 0.145), which is the filter removing noise rather than adding
+signal. The bucket means are the more interesting change:
+
+    1d   bullish +0.88% -> +0.98%   (up 65% -> 67%)
+         neutral +0.66% -> +0.71%
+         bearish +0.22% -> -0.11%   (up 50% -> 48%)
+
+BEFORE THE FILTER THE BEARISH HALF OF THE LADDER CARRIED NOTHING -- bearish
+reads went up at exactly the base rate. After it, bullish, neutral and bearish
+separate monotonically and the bearish mean is finally negative. n = 21. It is
+a direction, not a result, and 0.500 is still inside both intervals.
+
+THE QQQ TILT SURVIVED, WHICH LOCATES IT. Re-grading all seventeen QQQ sessions
+with re-reports dropped changed five verdicts -- three BEARISH to NEUTRAL and
+two NEUTRAL to BEARISH. Distribution 11/5/1 -> 10/6/1. That is churn.
+
+    So the standing bearish read is NOT repetition. It is the term set.
+    MACRO_TERMS is built from central-bank tightening, geopolitical and
+    commodity shocks, sovereign debt stress and systemic data -- four vectors
+    that only fire on trouble. A classifier reading a feed selected for alarm
+    will report alarm daily, and no novelty filter fixes an input that never
+    contained the other side.
+
+    The fix is either to balance the vectors with the expansionary terms
+    (easing, disinflation, liquidity injection, capex and earnings upgrades)
+    or to demean each verdict against that symbol's own trailing baseline so
+    that only DEVIATION from its standing narrative counts. Not yet done.
+
+STATUS. The filter is on by default for every symbol. It is justified on the
+principle -- a priced story is not news -- and supported by a narrower interval
+and a bearish half that finally points down. It is NOT justified as predictive:
+nothing here clears a coin flip, and section 125's decision stands. Probability
+remains delta.

@@ -110,9 +110,15 @@ zero (section 120).
 
 **The QQQ macro read has a standing bearish tilt** — 10 BEARISH of 14 graded
 sessions, 5/10 on next-session direction, and the tilt survives the tape
-reversing. `MACRO_TERMS` is doom-weighted by construction, so the classifier
-finds something to worry about daily. That is the same failure that keeps
-`TRADING_MACRO_LLM_GATE` off (section 125).
+reversing. That is the same failure that keeps `TRADING_MACRO_LLM_GATE` off
+(section 125).
+
+**It is not repetition** — re-grading all 17 sessions with re-reports dropped
+changed five verdicts in both directions, 11/5/1 → 10/6/1. It is the term set:
+`MACRO_TERMS` has four vectors and all four only fire on trouble. A feed
+selected for alarm reports alarm daily. Fix is to balance the vectors or to
+demean each verdict against the symbol's own trailing baseline. **Not yet
+done** (section 126).
 
 ---
 
@@ -140,6 +146,22 @@ respects half-day closes. Backtests must pass an explicit 09:30 cutoff.
 
 A story that merely recaps the LAST session still grades NEUTRAL: that move is
 priced, and the classifier is told so.
+
+**Only what is NEW at 09:30 is graded** (section 126). A window of
+[previous close, 09:30] still admits the wires re-reporting a standing story
+for the ninth morning running, and the market priced that story weeks ago. Each
+headline is scored by cosine against the same symbol's previous 10 sessions
+using the Voyage embeddings already in the table — one SQL query, no model
+calls — and anything at or above `TRADING_NEWS_NOVELTY` (0.83, the 75th
+percentile of the observed distribution) is dropped as a re-report.
+
+The recycling is not verbatim: median similarity to prior coverage is 0.767, so
+an exact-match rule catches nothing. Re-report share: NVDA 42%, SNDK 42%,
+MU 30%, QQQ 24%. 35 of 167 verdicts changed, `NEUTRAL` 101 → 120. The measured
+effect is a **narrower interval, not a better point estimate** — 1-day AUC
+0.546 [0.441, 0.634] → 0.551 [0.481, 0.626] — and a bearish bucket that finally
+points down (+0.22% → −0.11%). The cost is that a genuine follow-up to a
+covered story can be dropped with it.
 
 **`news_watch.py` scrapes before it grades, and must.** The only other scraper
 is the trading cycle, which refuses to run outside market hours — so at 09:30
@@ -220,7 +242,8 @@ point across 525 strikes (section 118).
 | `delta_calibration.py` | is market delta a well-calibrated probability |
 | `xgb_probability.py` | does a learned model beat it (no) |
 | `xgb_sentiment.py` | does adding sentiment beat the same model without it (no) |
-| `sentiment_signal_test.py` | does the graded verdict carry information at all, with a day-clustered interval |
+| `sentiment_signal_test.py` | does the graded verdict carry information at all, with a day-clustered interval; `--novelty X` re-grades with re-reports dropped |
+| `novelty_check.py` | how much of a symbol's window is recycled coverage, and does dropping it move the verdict |
 | `backfill_news_impact.py` | label stored headlines with what price did |
 | `macro_outcome.py --report` | did the macro verdict separate sessions, and what would a gate have cost |
 | `news_ev_backtest.py` | re-price an expired `weekly_shadow` cohort and ask whether the news overlay moved EV toward the outcome |

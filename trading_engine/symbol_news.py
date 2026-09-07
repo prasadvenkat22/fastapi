@@ -234,6 +234,35 @@ class NewsSentiment(BaseModel):
     rationale: str = Field(description="One sentence, citing the headline that decided it.")
 
 
+
+# A RECURRING THEME IS NOT A NEW EVENT. The wires re-report the same standing
+# macro story every morning -- Iran, the Fed's next move, yields testing a
+# level -- and those headlines land inside the 09:30 window looking fresh. The
+# market priced them the day they broke. Grading them again every session is
+# what gave the QQQ read a standing bearish tilt: BEARISH on 10 of 14 sessions,
+# 5/10 on direction, and unmoved while the tape reversed (section 125).
+#
+# So a headline counts only if it is not a near-duplicate of something this
+# symbol already carried in the trailing window. The embeddings needed for that
+# are already stored, so this costs one query and no model calls.
+NOVELTY_LOOKBACK_DAYS = int(os.getenv("TRADING_NEWS_NOVELTY_DAYS", "10"))
+# Cosine similarity above which a headline is treated as a re-report.
+#
+# CHOSEN AT THE 75th PERCENTILE of the observed similarity-to-prior-coverage
+# distribution (median 0.767, p75 0.826, p90 0.868), BEFORE the effect on
+# forward returns was measured -- so the AUC below is a check on the choice,
+# not the thing that made it. 0.88 was the first guess and dropped only 7%:
+# these headlines are not duplicates, they are the same standing themes in
+# different words, which is exactly what a market has already priced.
+#
+# THE COST OF THIS FILTER IS A FOLLOW-UP. A genuine development on a story
+# already covered -- "index funds must now buy $X billion of SNDK" the day
+# after the inclusion itself -- scores similar to its predecessor and can be
+# dropped with it. That is the trade being made, and it is the reason this is
+# a threshold rather than an exact-match rule.
+NOVELTY_THRESHOLD = float(os.getenv("TRADING_NEWS_NOVELTY", "0.83"))
+
+
 def previous_session_close(day: date) -> datetime:
     """16:00 ET on the trading day before `day`, holidays included."""
     try:
@@ -255,7 +284,9 @@ def previous_session_close(day: date) -> datetime:
 
 
 def session_headlines(symbol: str, day: Optional[date] = None,
-                      cutoff: Optional[dtime] = None) -> List[str]:
+                      cutoff: Optional[dtime] = None,
+                      novel_only: bool = True,
+                      with_scores: bool = False):
     """Headlines for this symbol SINCE THE PREVIOUS SESSION'S CLOSE.
 
     NOT the calendar day, which was the original filter and was wrong. A
@@ -269,6 +300,15 @@ def session_headlines(symbol: str, day: Optional[date] = None,
     `day` when one is given. Backtests MUST pass a cutoff -- reading a whole
     session's headlines to grade its open is lookahead, and it is the reason
     same-day agreement looked so good: the headlines were reporting the move.
+
+    AND ONLY WHAT IS NEW IN IT. With novel_only, a headline is dropped when it
+    is within NOVELTY_THRESHOLD cosine of something this symbol already carried
+    in the previous NOVELTY_LOOKBACK_DAYS. A market prices a story when it
+    breaks; a wire re-reporting it the next morning is not a second event, and
+    counting it as one is how a standing narrative turns into a daily verdict.
+
+    with_scores returns (headline, similarity_to_prior) so the threshold can be
+    inspected rather than trusted.
     """
     day = day or datetime.now(NY).date()
     start = previous_session_close(day)
@@ -281,15 +321,49 @@ def session_headlines(symbol: str, day: Optional[date] = None,
         import psycopg2
 
         clause = " OR ".join(["headline_text ILIKE %s"] * len(pats))
+        likes = [f"%{p}%" for p in pats]
+        if not novel_only:
+            sql = (
+                "SELECT headline_text FROM market_news_vectors "
+                f"WHERE ({clause}) "
+                "AND publication_date > %s AND publication_date <= %s "
+                "ORDER BY publication_date DESC LIMIT %s"
+            )
+            with psycopg2.connect(_dsn()) as conn, conn.cursor() as cur:
+                cur.execute(sql, likes + [start, end, MAX_HEADLINES])
+                rows = [(r[0], 0.0) for r in cur.fetchall()]
+            return rows if with_scores else [h for h, _ in rows]
+
+        # Each headline in the window scored against everything this symbol
+        # carried in the lookback. max() over an empty prior set is NULL, which
+        # COALESCE turns into 0.0 -- no prior coverage means everything is new,
+        # which is the correct reading and not an error.
         sql = (
-            "SELECT headline_text FROM market_news_vectors "
-            f"WHERE ({clause}) "
-            "AND publication_date > %s AND publication_date <= %s "
-            "ORDER BY publication_date DESC LIMIT %s"
+            "WITH win AS ("
+            "  SELECT headline_text, text_embedding FROM market_news_vectors"
+            f"  WHERE ({clause}) AND publication_date > %s AND publication_date <= %s"
+            "  ORDER BY publication_date DESC LIMIT %s"
+            "), prior AS ("
+            "  SELECT text_embedding FROM market_news_vectors"
+            f"  WHERE ({clause}) AND publication_date <= %s"
+            "    AND publication_date > %s - make_interval(days => %s)"
+            ") "
+            "SELECT w.headline_text, COALESCE(("
+            "  SELECT max(1 - (w.text_embedding <=> p.text_embedding)) FROM prior p"
+            "), 0.0) AS prior_sim "
+            "FROM win w ORDER BY prior_sim ASC"
         )
+        params = (likes + [start, end, MAX_HEADLINES]
+                  + likes + [start, start, NOVELTY_LOOKBACK_DAYS])
         with psycopg2.connect(_dsn()) as conn, conn.cursor() as cur:
-            cur.execute(sql, [f"%{p}%" for p in pats] + [start, end, MAX_HEADLINES])
-            return [r[0] for r in cur.fetchall()]
+            cur.execute(sql, params)
+            scored = [(r[0], float(r[1] or 0.0)) for r in cur.fetchall()]
+        fresh = [(h, sim) for h, sim in scored if sim < NOVELTY_THRESHOLD]
+        if scored and not fresh:
+            logger.info("%s: all %d headlines in the window are re-reports of "
+                        "stories already carried; nothing new to grade.",
+                        symbol, len(scored))
+        return fresh if with_scores else [h for h, _ in fresh]
     except Exception:
         logger.warning("Session news lookup failed for %s.", symbol, exc_info=True)
         return []
@@ -325,16 +399,17 @@ def classify_day(symbol: str, day: Optional[date] = None,
             "round-up of movers is NEUTRAL. A headline describing an already-completed "
             "move is NEUTRAL -- the move is in the price. Reserve VERY_BULLISH and "
             "VERY_BEARISH for news that re-rates the business.\n\n"
-            "THESE HEADLINES WERE PUBLISHED SINCE THE PREVIOUS SESSION'S CLOSE, so "
-            "the market has not traded on them yet -- an after-hours or weekend "
-            "catalyst is the case this exists for. But a story that merely recaps "
-            "what the LAST session already did is still NEUTRAL: that move is "
-            "priced.\n\n"
+            "THESE HEADLINES WERE PUBLISHED SINCE THE PREVIOUS SESSION'S CLOSE AND "
+            "ARE NOT RE-REPORTS. Near-duplicates of stories this name already "
+            "carried in the last two weeks have been removed before you see them, "
+            "so what remains is what is NEW this morning and not yet in the price. "
+            "Judge it as new information. A story that merely recaps what the LAST "
+            "session already did is still NEUTRAL: that move is priced.\n\n"
             "WEIGH THE HEADLINES, DO NOT COUNT THEM. Ten repetitive 'Is X a Buy?' "
             "pieces are not a bullish signal; one credible report of a cancelled "
             "order, a guidance change or an SEC filing outranks all of them. "
             "Syndicated near-duplicates of the same story are ONE event, not many.\n\n"
-            f"Headlines about {symbol} published since the previous close:\n{listed}"
+            f"New headlines about {symbol} since the previous close:\n{listed}"
         )
         return {
             "verdict": out.verdict,

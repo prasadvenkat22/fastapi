@@ -1,17 +1,15 @@
 """Per-symbol news watcher: grade today's news, decide a structure, review
 what is already open.
 
-Runs pre-open and hourly. The macro half of the news read already fires every
-five minutes inside the trading cycle (MACRO_REFRESH_MINUTES); this is the
-per-symbol half, which had no schedule at all -- classify_day() existed and
-nothing called it.
+RUNS ONCE, AT 09:30 ET. The verdict sets the day's structure and the day's
+structure is decided once; a weekly position is held four to five sessions and
+cannot use hourly precision. The macro half of the news read fires separately
+inside the trading cycle (MACRO_REFRESH_MINUTES), which is where an intraday
+regime change is caught.
 
-WHY IT IS CHEAP TO RUN HOURLY. Same-day sentiment and hourly firing pull
-against each other: re-running the classifier every hour would mostly restate
-the 09:15 answer at 15 symbols x 7 hours = 105 Claude calls a day. So it fires
-ON CHANGE and checks hourly -- a digest of the day's headline set is stored
-with the verdict, and an unchanged digest skips the model. A quiet name costs
-one SELECT; a name that just broke news is re-graded within the hour.
+It still fires ON CHANGE rather than on the clock: a digest of the day's
+headline set is stored with the verdict, so a re-run with the same headlines
+skips the model entirely. That is what makes --force safe to use by hand.
 
 WHAT IT DOES AND DOES NOT DO. It writes a verdict, a suggested structure, and
 an action for any open position in that name. IT DOES NOT TRADE. On the 365
@@ -23,7 +21,7 @@ beside the decision, not wired into it. When news_symbol_impact has enough
 rows to say whether VERY_BULLISH actually precedes a move, that is the moment
 to consider gating.
 
-    python scripts/news_watch.py            # all tracked symbols
+    python scripts/news_watch.py            # all tracked symbols (09:20-10:05 ET)
     python scripts/news_watch.py --symbols SNDK,MU
     python scripts/news_watch.py --force    # ignore the digest, re-grade
 """
@@ -117,8 +115,15 @@ def main():
         if not is_trading_day(now.date()):
             print(f"{now:%Y-%m-%d %H:%M %Z} — not a trading day, nothing to do.")
             return
-        if not (dtime(8, 45) <= now.time() <= dtime(16, 30)):
-            print(f"{now:%Y-%m-%d %H:%M %Z} — outside 08:45-16:30 ET, nothing to do.")
+        # A MORNING WINDOW, not the whole session. The verdict is read once at
+        # the open to set the day's structure, so this runs once -- and the
+        # crontab has to list BOTH 13:30 and 14:30 UTC to cover EDT and EST,
+        # which means one of the two is always an hour late. A wide guard let
+        # the late one through and the job ran twice.
+        lo, hi = dtime(9, 20), dtime(10, 5)
+        if not (lo <= now.time() <= hi):
+            print(f"{now:%Y-%m-%d %H:%M %Z} — outside the "
+                  f"{lo:%H:%M}-{hi:%H:%M} ET open window, nothing to do.")
             return
 
     day = now.date()

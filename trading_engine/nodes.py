@@ -988,9 +988,48 @@ def _write_macro_cache(verdict: str, confidence: float, risk_factor: str) -> Non
 _LAST_SOURCES: dict = {}
 
 
+# PER-SYMBOL FEEDS. The three general feeds above carry macro and mega-cap
+# news well -- Nvidia's Hugging Face acquisition produced NINE stored headlines
+# on 2026-09-03/04 -- and carry single-name catalysts not at all. Measured the
+# same weekend, against the five events that actually moved the book's names on
+# 09-04:
+#
+#     Nvidia / Hugging Face $13B          9 headlines   captured
+#     SNDK added to the S&P 100           0             MISSED
+#     Micron HBM capacity doubling        0             MISSED
+#     Lynx Equity upgrade, PT $1,325      0             MISSED
+#     Dell's NAND scarcity commentary     0             MISSED
+#
+# SNDK rose 11.9% that session on an index inclusion the store had no record
+# of. A general feed front-pages Nvidia; SanDisk's index addition appears on
+# SanDisk's own feed. That is not a matching problem and no alias map fixes it.
+#
+# Verified before shipping: Yahoo's per-ticker feed carried "SanDisk (SNDK)
+# Soars on S&P 100 Inclusion", Seeking Alpha's carried CoreWeave commentary
+# from 09-04 on a name the store had NOTHING current for.
+PER_SYMBOL_FEEDS = (
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s={sym}&region=US&lang=en-US",
+    "https://seekingalpha.com/api/sa/combined/{sym}.xml",
+)
+
+# Entries to take per per-symbol feed. Lower than the general feeds' 10: these
+# are already filtered to one name, so depth buys repetition rather than
+# coverage, and store_headlines dedupes what repeats anyway.
+PER_SYMBOL_ENTRIES = int(os.getenv("TRADING_PER_SYMBOL_ENTRIES", "8"))
+
+
+def _tracked_symbols() -> list:
+    """Names to pull per-symbol news for. The managed list, not the alias map,
+    so a symbol the engine stops trading stops being fetched."""
+    raw = os.getenv("TRADING_MANAGE_UNDERLYING", "") or ""
+    syms = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    return syms[:20]
+
+
 def _feed_name(url: str) -> str:
     """A short, stable label for a feed URL."""
-    for frag, name in (("yahoo", "YAHOO_FINANCE"), ("dowjones", "MARKETWATCH"),
+    for frag, name in (("seekingalpha", "SEEKING_ALPHA"),
+                       ("yahoo", "YAHOO_FINANCE"), ("dowjones", "MARKETWATCH"),
                        ("cnbc", "CNBC"), ("prnewswire", "PR_NEWSWIRE"),
                        ("businesswire", "BUSINESS_WIRE"), ("sec.gov", "SEC")):
         if frag in url.lower():
@@ -1512,6 +1551,25 @@ def _scrape_headlines() -> List[str]:
                 _LAST_SOURCES[title] = _feed_name(url)
         except Exception as e:
             logger.warning("Failed to parse RSS feed %s: %s", url, e)
+
+    # Then one pass per tracked symbol. Guarded individually so a single slow
+    # or dead ticker feed cannot cost the whole scrape -- this runs inside the
+    # trading cycle, and section 55 records what an unguarded network call in
+    # this agent cost: three cycles at the open with seven positions live.
+    for sym in _tracked_symbols():
+        for template in PER_SYMBOL_FEEDS:
+            url = template.format(sym=sym)
+            try:
+                feed = feedparser.parse(url)
+                for entry in feed.entries[:PER_SYMBOL_ENTRIES]:
+                    title = getattr(entry, "title", None)
+                    if not title:
+                        continue
+                    headlines.append(title)
+                    _LAST_SOURCES[title] = f"{_feed_name(url)}:{sym}"
+            except Exception as e:
+                logger.warning("Failed to parse %s feed for %s: %s",
+                               _feed_name(url), sym, e)
     return headlines
 
 

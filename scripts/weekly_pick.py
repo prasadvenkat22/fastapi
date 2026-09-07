@@ -80,6 +80,54 @@ def trading_days_to(exp: str) -> int:
 
 MC_PATHS = int(os.getenv("PICK_MC_PATHS", "10000"))
 
+# HOW A NEWS VERDICT IS ALLOWED TO MOVE THE EV.
+#
+# The two EVs already bracket the answer. EVdem assumes the name's drift is
+# unpredictable; EVraw assumes it continues exactly as it has. Neither is a
+# forecast on its own -- which of them is right is a question about whether
+# there is a REASON for the drift, and a same-day catalyst read is exactly
+# that question.
+#
+# So sentiment does not invent a probability. It sets a weight between two
+# numbers we already have:
+#
+#     EV_adj = EV_dem + w * confidence * (EV_raw - EV_dem)
+#
+# w = 0 is the drift-removed number, w = 1 the drift-inclusive one, and the
+# verdict picks a point between. A NEUTRAL read leaves EVdem untouched, which
+# is the correct default and the one this book has been using.
+#
+# THIS IS A STATED ASSUMPTION, NOT A FITTED MODEL. The weights below were
+# chosen, not measured -- news_verdicts began accumulating 2026-09-07 and has
+# no history to fit against. They are here so the assumption is explicit,
+# versioned and testable: once a few hundred labelled days exist, compare the
+# realised outcome against EV_adj at several weight settings and find out
+# whether any of them beat w = 0. Section 119 is what happens when a number
+# like this is fitted instead of stated on 14 samples.
+NEWS_DRIFT_WEIGHT = {
+    "VERY_BULLISH": 1.0, "BULLISH": 0.5, "NEUTRAL": 0.0,
+    "BEARISH": -0.5, "VERY_BEARISH": -1.0,
+}
+
+
+def news_verdict(symbol: str):
+    """(verdict, confidence) from today's news_verdicts row, or None."""
+    try:
+        import psycopg2
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        url = os.getenv("DATABASE_URL", "")
+        dsn = url.replace("postgresql+psycopg2://", "postgresql://").replace(
+            "postgresql+asyncpg://", "postgresql://")
+        day = datetime.now(ZoneInfo("America/New_York")).date()
+        with psycopg2.connect(dsn) as c, c.cursor() as cur:
+            cur.execute("SELECT verdict, confidence FROM news_verdicts "
+                        "WHERE symbol=%s AND trading_day=%s", (symbol.upper(), day))
+            r = cur.fetchone()
+        return (r[0], float(r[1] or 0.0)) if r else None
+    except Exception:
+        return None
+
 
 def monte_carlo_terminal(spot: float, atr: float, days: int, seed: int = 7):
     """Terminal prices from a driftless random walk calibrated to ATR.
@@ -136,6 +184,15 @@ def evaluate(sym, side):
     # which no market effect produces. Log-demeaning took both inside a point.
     lr = np.log(c[fwd_days:] / c[:-fwd_days])
     dem_prices_factor = np.exp(lr - lr.mean())
+    # A bullish read helps a CALL and hurts a PUT, so the sign flips with side.
+    nv = news_verdict(sym)
+    news_w = 0.0
+    if nv:
+        news_w = NEWS_DRIFT_WEIGHT.get(nv[0], 0.0) * nv[1]
+        if side == "put":
+            news_w = -news_w
+        news_w = max(-1.0, min(1.0, news_w))
+
     mc = monte_carlo_terminal(spot, a14, fwd_days)
     chain = tk.option_chain(exp)
     calls = side == "call"
@@ -212,7 +269,9 @@ def evaluate(sym, side):
             out.append(dict(
                 sym=sym, lo=lo, hi=hi, w=w, cost=cost, spot=spot, atr=a14, rv=rv,
                 iv=atm_iv, exp=exp, days=fwd_days,
+                news=(nv[0] if nv else None), news_w=news_w,
                 ev_dem=float(dm.mean()) * 100, ev_raw=float(raw.mean()) * 100,
+                ev_adj=(float(dm.mean()) + news_w * (float(raw.mean()) - float(dm.mean()))) * 100,
                 pwin=float((dm > 0).mean()), need=cost / w,
                 rr=(w - cost) / cost, room=room, n=len(lr),
                 p_max=p_max, p_mid=p_mid, p_min=p_min, mc_max=mc_max,
@@ -278,7 +337,7 @@ def main():
           f"priced at ask/bid ===")
     print(f"{'sym':6s} {'strikes':>14s} {'ITMatr':>7s} {'risk':>7s} {'reward':>7s} "
           f"{'R:R':>7s} {'Pimp':>6s} {'Phist':>6s} {'Pmc':>6s} {'Pwin':>6s} "
-          f"{'need':>6s} {'edge':>7s} {'EV%':>7s} {'EV$':>8s} "
+          f"{'need':>6s} {'edge':>7s} {'EV$':>8s} {'EVadj':>8s} {'news':>13s} "
           f"{'drift':>8s}")
     key = {"ev": lambda x: -x["ev_dem"], "evpct": lambda x: -x["ev_pct"],
            "prob": lambda x: -x["pwin"]}[args.by]
@@ -288,11 +347,17 @@ def main():
               f"1:{r['rr']:<5.2f} {r['d_short']*100:5.1f}% {r['p_max']*100:5.1f}% "
               f"{r['mc_max']*100:5.1f}% {r['pwin']*100:5.1f}% "
               f"{r['need']*100:5.1f}% "
-              f"{(r['pwin']-r['need'])*100:+6.1f}p {r['ev_pct']:+6.1f}% "
-              f"{r['ev_dem']:+8.1f} {r['ev_raw'] - r['ev_dem']:+8.1f}")
+              f"{(r['pwin']-r['need'])*100:+6.1f}p "
+              f"{r['ev_dem']:+8.1f} {r['ev_adj']:+8.1f} "
+              f"{(r['news'] or '-'):>13s}")
     print("\nrisk/reward are per CONTRACT. need = cost/width = the break-even "
           "win rate. R:R sizes the WIN and says nothing about the ODDS, which "
           "is why a 1:5.78 payoff can still lose money.")
+    print("EV$ is the drift-REMOVED number. EVadj moves it toward the "
+          "drift-inclusive one in proportion to the day's news verdict and its "
+          "confidence: EVadj = EV + w*conf*(EVraw - EV). A NEUTRAL read leaves "
+          "them identical, which is the default. The weights are STATED, not "
+          "fitted -- see the table in the source and section 120.")
     print("Pimp/Phist/Pmc are P(MAX profit) -- finishing beyond the SHORT "
           "strike. Pwin is P(ANY profit) -- beyond the BREAKEVEN -- and Pwin "
           "is what `edge` subtracts `need` from. Printing P(max) beside a "

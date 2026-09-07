@@ -7578,3 +7578,69 @@ and is the first candidate -- a graded same-day catalyst read is not in the
 daily bars. Re-run this script with sentiment as a feature once there are a
 few hundred labelled days, and compare the test AUC against 0.496. That is a
 measurement worth waiting for; the current model is not worth deploying.
+
+--------------------------------------------------------------------------------
+120. SENTIMENT AS AN OVERLAY WEIGHT, NOT AS A PROBABILITY  (2026-09-07)
+--------------------------------------------------------------------------------
+
+Section 119 measured the XGBoost model losing to a constant and declined to
+put it in the EV loop. That leaves the original question standing: how SHOULD
+a news read change the expected value?
+
+THE ANSWER IS THAT IT ALREADY HAS TWO NUMBERS TO CHOOSE BETWEEN. Every
+structure is scored twice -- EVdem assumes the name's drift is unpredictable,
+EVraw assumes it continues exactly as it has. Neither is a forecast on its
+own. WHICH OF THEM IS RIGHT IS THE QUESTION "IS THERE A REASON FOR THE
+DRIFT", and a same-day catalyst read is exactly that question.
+
+    EVadj = EVdem + w * confidence * (EVraw - EVdem)
+
+    VERY_BULLISH  w=+1.0    BULLISH  w=+0.5    NEUTRAL  w=0
+    VERY_BEARISH  w=-1.0    BEARISH  w=-0.5    (sign flips for a put)
+
+WHY THIS CONTAINS THE DAMAGE A WRONG READ CAN DO. EVadj cannot leave the
+interval between two numbers already computed by other means. A mistaken
+verdict moves the answer to a figure that was on the table anyway. A
+predict_proba output has no such bound -- it can print anything, and on
+2026-09-07 it printed 39.6% bearish for SNDK on the afternoon of an S&P 100
+inclusion.
+
+IT IS ALSO BIDIRECTIONAL. Bearish news against a call drives EVadj BELOW the
+demeaned baseline. This is a gate that closes as well as opens, not a way of
+talking a trade up.
+
+AND IT DOES SOMETHING A TREE STRUCTURALLY CANNOT. "Index inclusion forces
+funds to buy on a known date" is a causal claim about future flow. No
+arrangement of RSI, ATR and moving-average distance reaches it, because the
+information is not in the bars. That is the whole reason the LLM read has a
+place where the model did not.
+
+MEASURED ON THE BOOK, 2026-09-07:
+
+    SNDK 1750/1950  VERY_BULLISH 0.85    EV  +821 ->  +2949
+    MU   1005/1125  BULLISH      0.72    EV   -78 ->    +80   (flips sign)
+    CRWV 94/97      NEUTRAL      0.75    EV   +24 ->    +24   (unchanged)
+    CRWV 81/85      NEUTRAL      0.75    EV   +26 ->    +26   (unchanged)
+
+CRWV is the mechanism working correctly: "predominantly analyst opinion pieces
+and valuation commentary with no material corporate events" leaves the
+baseline alone.
+
+THE WEIGHTS ARE STATED, NOT FITTED, AND THAT IS DELIBERATE. news_verdicts
+began accumulating on 2026-09-07 with four rows. There is nothing to fit
+against, and section 119 records what fitting on a small sample produces. They
+sit in a table in scripts/weekly_pick.py so the assumption is explicit and
+versioned rather than buried in a coefficient.
+
+HOW TO TEST IT, WHICH IS THE POINT OF BUILDING IT THIS WAY. Once a few hundred
+labelled days exist, score realised outcomes against EVadj at several weight
+settings and find out whether ANY of them beat w = 0. If none do, the honest
+result is that the news read carries no information and the weights go to
+zero. The framework is built so that answer is reachable.
+
+A NOTE ON WHAT "A BIG POP" MEANS. SNDK's ATR14 is 109.83. A $100 move is 0.91
+ATR -- inside a normal session for that name, not an outlier. The 1750/1950
+spread needs +$210, which is 1.91 ATR, so a hundred-dollar day gets roughly
+halfway to the short strike and into the partial band rather than to the cap.
+Scaling a catalyst in ATR before sizing a trade on it is the same discipline
+section 102 applied to widths.

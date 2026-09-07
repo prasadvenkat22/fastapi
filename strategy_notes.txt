@@ -7701,3 +7701,54 @@ WHAT SURVIVES THE CORRECTIONS AND IS THE ACTUAL ARGUMENT.
   TRANSPARENCY, which is the point. "VERY_BULLISH -> 1.0" is a line in a table
   that can be read, disagreed with, versioned and tested against realised
   outcomes. A split on rsi14 < 43.2 is none of those.
+
+--------------------------------------------------------------------------------
+122. A GUARD IS NOT A FORECAST, AND IT FOUND A BUG ON ITS FIRST RUN
+     (2026-09-07)
+--------------------------------------------------------------------------------
+
+The case for the news feed had been argued on prediction, which is still
+unmeasured, and that framing was too weak. There is a second use that needs no
+prediction at all.
+
+    THE OVERLAY asks "should this name's drift be believed" -- that needs
+    sentiment to carry information.
+
+    THE GUARD asks "are we taking the wrong side of a KNOWN event" -- that
+    needs nothing forecast. Selling upside into forced index-fund buying on a
+    published date is a bad structure whether or not the model can predict
+    anything.
+
+On 2026-09-04 a short call was nearly written on SNDK into its S&P 100
+inclusion. Nothing about that mistake required a forecast to avoid.
+
+CONFLICT fires on VERY_* only -- calls under VERY_BEARISH, puts under
+VERY_BULLISH. An ordinary read against a structure is noise at this sample
+size, and a flag that fires constantly stops being read.
+
+IT DOES NOT FILTER. The conflicting candidates stay in the table, marked. A
+structure cheap enough may still be worth taking; the point is that it should
+not be taken by ACCIDENT. That is the line between a guard and a gate, and
+this book has one live gate too many already.
+
+IT CAUGHT A SIGN ERROR IN THE OVERLAY IMMEDIATELY. Run against the SNDK put
+side under a VERY_BULLISH verdict, the guard fired on 28 of 28 candidates --
+correctly -- and the EVadj column beside it read +1238.7 against an EVdem of
++127.8. Bullish news was making a PUT ten times better.
+
+    The cause: news_w was being sign-flipped for puts. But drift, being
+    EVraw - EVdem, is computed from the SIDE'S OWN payoff and already carries
+    the correct sign -- positive for a call on a rising name, negative for a
+    put. Flipping w on top of that double-negates.
+
+    Corrected: SNDK 1525/1680 put now reads EVdem +127.8 -> EVadj -983.1.
+    Bullish catalyst, bearish structure, EV sharply negative.
+
+THAT THE GUARD FOUND IT IS THE ARGUMENT FOR THE GUARD. A structural check that
+needs no forecast caught an error in the probabilistic mechanism that does.
+The two are worth having for different reasons and they check each other.
+
+EVERY CANDIDATE CONFLICTS, WHICH IS CORRECT. 28 of 28 fired because the
+conflict is with the NAME's catalyst, not with a strike. No arrangement of
+strikes makes buying puts into an index inclusion sensible, and a guard that
+found a "safe" strike here would be wrong.

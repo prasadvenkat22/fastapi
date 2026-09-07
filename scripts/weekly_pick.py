@@ -110,6 +110,28 @@ NEWS_DRIFT_WEIGHT = {
 }
 
 
+# A GUARD, WHICH IS NOT A FORECAST.
+#
+# The overlay above asks "should the drift be believed", which needs sentiment
+# to carry information and is still unmeasured. THIS asks something weaker and
+# structural: are we about to take the wrong side of a KNOWN event?
+#
+# On 2026-09-04 a short call on SNDK was nearly written into an S&P 100
+# inclusion -- forced index-fund buying on a published date. That is not a
+# prediction failure; nothing needs to be forecast to say that selling upside
+# into mechanical buying is a bad structure. The guard fires on VERY_* only,
+# because an ordinary read against a position is noise at this sample size and
+# a flag that fires constantly stops being read (section 120).
+CONFLICT = {
+    ("call", "VERY_BEARISH"): "buying calls into a very bearish catalyst",
+    ("put", "VERY_BULLISH"): "buying puts into a very bullish catalyst",
+}
+
+
+def conflict_for(side: str, verdict: "str | None") -> "str | None":
+    return CONFLICT.get((side, verdict or "")) if verdict else None
+
+
 def news_verdict(symbol: str):
     """(verdict, confidence) from today's news_verdicts row, or None."""
     try:
@@ -188,10 +210,15 @@ def evaluate(sym, side):
     nv = news_verdict(sym)
     news_w = 0.0
     if nv:
-        news_w = NEWS_DRIFT_WEIGHT.get(nv[0], 0.0) * nv[1]
-        if side == "put":
-            news_w = -news_w
-        news_w = max(-1.0, min(1.0, news_w))
+        # NO SIGN FLIP FOR PUTS. The drift term (EVraw - EVdem) is computed
+        # from the SIDE'S OWN payoff, so it already carries the right sign: on
+        # a rising name EVraw exceeds EVdem for a call and falls below it for a
+        # put. Flipping w on top of that double-negates, and the guard caught
+        # it on 2026-09-07 -- an SNDK put under a VERY_BULLISH verdict was
+        # reporting EVadj +1238.7 against an EVdem of +127.8, i.e. bullish news
+        # making a put ten times better. Bounded to [-1, 1] so a confidence
+        # above 1.0 from the model cannot extrapolate past EVraw.
+        news_w = max(-1.0, min(1.0, NEWS_DRIFT_WEIGHT.get(nv[0], 0.0) * nv[1]))
 
     mc = monte_carlo_terminal(spot, a14, fwd_days)
     chain = tk.option_chain(exp)
@@ -270,6 +297,7 @@ def evaluate(sym, side):
                 sym=sym, lo=lo, hi=hi, w=w, cost=cost, spot=spot, atr=a14, rv=rv,
                 iv=atm_iv, exp=exp, days=fwd_days,
                 news=(nv[0] if nv else None), news_w=news_w,
+                conflict=conflict_for(side, nv[0] if nv else None),
                 ev_dem=float(dm.mean()) * 100, ev_raw=float(raw.mean()) * 100,
                 ev_adj=(float(dm.mean()) + news_w * (float(raw.mean()) - float(dm.mean()))) * 100,
                 pwin=float((dm > 0).mean()), need=cost / w,
@@ -331,6 +359,14 @@ def main():
         print("\nNothing passed the quote filter. That is a result, not a failure: "
               "on stale weekend marks it is the correct answer.")
         return
+    bad = [r for r in rows if r.get("conflict")]
+    if bad:
+        print(f"\n!! GUARD: {len(bad)} of {len(rows)} candidates take the wrong "
+              f"side of a known catalyst -- {bad[0]['conflict']}.")
+        print("   These are NOT filtered out. The guard names the conflict and "
+              "leaves the decision with you; a structure that is cheap enough "
+              "may still be worth it, but not by accident.")
+
     label = {"ev": "DEMEANED EV ($)", "evpct": "EV PER $ RISKED",
              "prob": "PROBABILITY OF PROFIT"}[args.by]
     print(f"\n=== {args.side.upper()} DEBIT SPREADS — ranked by {label}, "
@@ -349,7 +385,8 @@ def main():
               f"{r['need']*100:5.1f}% "
               f"{(r['pwin']-r['need'])*100:+6.1f}p "
               f"{r['ev_dem']:+8.1f} {r['ev_adj']:+8.1f} "
-              f"{(r['news'] or '-'):>13s}")
+              f"{(r['news'] or '-'):>13s}"
+              f"{'  <-- CONFLICT' if r.get('conflict') else ''}")
     print("\nrisk/reward are per CONTRACT. need = cost/width = the break-even "
           "win rate. R:R sizes the WIN and says nothing about the ODDS, which "
           "is why a 1:5.78 payoff can still lose money.")

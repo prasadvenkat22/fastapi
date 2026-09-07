@@ -7385,3 +7385,71 @@ moves that actually happened including gaps; implied second, free and instant
 from the chain but a risk-neutral view rather than a forecast; Monte Carlo
 last, most assumption-laden, with the single real advantage of being
 calibrated to TODAY's volatility rather than three years of it.
+
+--------------------------------------------------------------------------------
+117. THE ENTRY CHECKLIST FOR A WEEKLY VERTICAL  (2026-09-06)
+--------------------------------------------------------------------------------
+
+Five checks, in order. Each threshold comes from something measured in this
+file, not from convention. A structure that fails 3 or more is not a trade.
+
+  1. EDGE = P(win) - break-even, where break-even = cost / width.
+     TARGET +10 POINTS OR BETTER.
+
+     This is the only number the other four cannot fake. DELL 430/480 won
+     88.9% of the time and lost money because it needed 99.2%; NVDA 242/248
+     paid 1:40 and was fine because it needed 2.4%. Neither probability nor
+     payoff alone says anything -- only the gap does. Section 114.
+
+  2. DRIFT SHARE = EV_raw - EV_demeaned. REJECT IF DRIFT EXCEEDS THE EDGE.
+
+     SNDK's raw EV was +1192 a contract with 109% of it drift; demeaned it
+     lost 110. NVDA 230/242 shows +52.0 of drift against a +36.5 edge, so its
+     number is more trend than structure. Section 106.
+
+  3. IV/RV. Below 1.0 buy premium (debit), above 1.0 sell it.
+
+     The only column with measured backing on this book and the only one that
+     is drift-independent, so it is comparable across names. Section 50.
+
+  4. CUSHION in the name's own ATR, to the strike that decides the trade.
+     UNDER 1.0 IS A COIN FLIP WHATEVER IT COST.
+
+     SNDK 1500/1560 had 2.4 daily moves and was safe; SNDK 1690/1720 had 0.3
+     and is "at-the-money wearing its clothes". Section 102. NOTE THIS CHECK
+     DOES NOT APPLY TO AN OTM STRUCTURE -- there is no cushion on a spread
+     that needs the move; for those, read the required move in ATR instead.
+
+  5. QUOTE QUALITY. (ask-bid)/mid < 25%, and price at ask/bid, NEVER mid.
+
+     This caught two fake trades on 2026-09-06: a DELL 465/525 that appeared
+     to trade $15 below intrinsic on a stale Friday close whose bid was itself
+     below intrinsic, and a GOOGL spread whose short leg was quoted 0.03/0.08,
+     a market 91% of mid wide. Section 114.
+
+  INSTANT DISQUALIFIERS
+    cost > 65% of width -- section 102's buckets; above 80% the reward:risk is
+      1:5 or worse and no exit rule can reach profit
+    the expiry is not actually next Friday -- three of four candidates on
+      2026-09-06 were one- and two-day trades scored as weeklies
+    Pmc far below Phist -- the payoff depends on a tail a Gaussian cannot
+      produce, so the historical number is the estimate and the gap is the
+      warning
+
+APPLIED, WEEK OF 2026-09-08:
+
+  CALL  CRWV 92/99 exp 09-11  edge +11.2p, drift 25.8 under EV 40.8, IV/RV
+        0.91, cost 22.6% of width, quotes clean. Passes four; check 4 does not
+        apply because the long leg sits 0.52 ATR OTM and the trade needs an
+        0.84 ATR rise to break even. Flag: Pmc 6.6% against Phist 20.9%, a 3x
+        gap -- a jumpy name whose payoff leans on the tail.
+
+  PUT   NOTHING. Every put expiring 09-11 has NEGATIVE edge (STX -4.0p, WDC
+        -2.6p, PANW no candidate cleared the band). The only positive put
+        cells expire on the Tuesday and Wednesday. Fourteen of fifteen names
+        sit at or above their weekly VWAP (section 109): the tape is
+        uniformly extended and puts are the wrong side of it.
+
+        RECORDING "NO TRADE" IS THE POINT OF THE LIST. Forcing a put here
+        means taking the least bad of a negative set, which is how a checklist
+        becomes decoration.

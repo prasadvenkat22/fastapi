@@ -65,14 +65,21 @@ def news_days(cur):
     return [r[0] for r in cur.fetchall()]
 
 
-def backfill(cur, syms, days) -> int:
-    """Grade every symbol-day that has headlines and does not yet have a row."""
+def backfill(cur, syms, days, force: bool = False) -> int:
+    """Grade every symbol-day that has headlines and does not yet have a row.
+
+    With `force`, re-grade the rows that DO exist and overwrite them. A table
+    holding verdicts produced under three different configurations -- no
+    novelty filter, then 0.83, then balanced macro terms -- is worse than an
+    empty one, because every later analysis silently mixes them. Overwriting
+    in place rather than truncating keeps the row ids and costs one pass.
+    """
     cur.execute("SELECT symbol, trading_day FROM news_verdicts")
     have = {(s, d) for s, d in cur.fetchall()}
     n = 0
     for s in syms:
         for d in days:
-            if (s, d) in have:
+            if (s, d) in have and not force:
                 continue
             heads = session_headlines(s, d)
             if not heads:
@@ -81,7 +88,10 @@ def backfill(cur, syms, days) -> int:
             cur.execute(
                 "INSERT INTO news_verdicts (id, symbol, trading_day, verdict, "
                 "confidence, rationale, headline_count) VALUES (%s,%s,%s,%s,%s,%s,%s) "
-                "ON CONFLICT (symbol, trading_day) DO NOTHING",
+                "ON CONFLICT (symbol, trading_day) DO UPDATE SET "
+                "verdict=EXCLUDED.verdict, confidence=EXCLUDED.confidence, "
+                "rationale=EXCLUDED.rationale, "
+                "headline_count=EXCLUDED.headline_count",
                 (str(uuid.uuid4()), s, d, g["verdict"], g["confidence"],
                  g["rationale"], g["headline_count"]))
             n += 1
@@ -164,6 +174,9 @@ def regrade(rows, threshold: float, cache_path: str):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--backfill", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="re-grade rows that already exist, so the "
+                         "table holds one configuration and not three")
     ap.add_argument("--horizons", default="1,4")
     ap.add_argument("--novelty", type=float, default=0.0,
                     help="re-grade every symbol-day with re-reports dropped at "
@@ -182,7 +195,7 @@ def main():
     if args.backfill:
         print("BACKFILLING VERDICTS (one model call per ungraded symbol-day)")
         print(f"  {len(syms)} symbols x {len(days)} days with headlines\n")
-        print(f"\n{backfill(cur, syms, days)} verdicts written\n")
+        print(f"\n{backfill(cur, syms, days, args.force)} verdicts written\n")
 
     cur.execute("SELECT symbol, trading_day, verdict, confidence, headline_count "
                 "FROM news_verdicts ORDER BY trading_day, symbol")

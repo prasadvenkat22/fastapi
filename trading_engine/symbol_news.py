@@ -73,7 +73,7 @@ ALIASES: Dict[str, List[str]] = {
 # -- correctly, because neither is a market event.
 #
 # What actually moves QQQ is the macro tape: rates, yields, oil, jobs,
-# inflation, geopolitics. The general feeds carry that well and always did.
+# inflation, geopolitics -- IN BOTH DIRECTIONS. See vector 5. The general feeds carry that well and always did.
 # Today's set includes "Oil prices rise to 6-week high after Iran and U.S.
 # trade blows", "A Fed rate hike is coming into view", "Treasury yields face
 # 4.8% test" and "Dow Jones Futures Fall With Iran, Apple, Inflation In Focus"
@@ -95,19 +95,49 @@ MACRO_TERMS: List[str] = [
     "iran", "strait of hormuz", "sanctions", "escalation", "crude oil",
     "oil price", "opec", "brent", "supply disruption", "export ban",
     "taiwan strait", "chip export",
+    # ...AND THE RESOLUTION OF ONE. Every term above fires on trouble only, so
+    # the feed could report a conflict starting and never report it ending.
+    "ceasefire", "de-escalation", "peace talks", "sanctions relief",
+    "sanctions lifted", "truce", "supply glut", "output increase",
 
     # 3. SOVEREIGN DEBT & FIXED INCOME
     # Global yields, not just the US 10-year: a JGB or Bund repricing pulls
     # capital out of duration everywhere, and QQQ is a duration trade.
     "treasury yield", "10-year", "bond yield", "yield curve", "inversion",
     "global bond", "bunds", "jgb", "gilt", "term premium", "auction tailed",
+    # "inversion" and "auction tailed" name a stress with no opposite in the
+    # list. These are the opposites.
+    "curve steepen", "auction stopped through", "bond rally",
+    "credit spreads tighten", "yields fall", "yields ease",
 
     # 4. SYSTEMIC ECONOMIC DATA
     "cpi", "core inflation", "pce", "non-farm payroll", "nonfarm payroll",
     "nfp", "jobs report", "unemployment rate", "jobless claims",
     "retail sales", "ism ", "gdp",
 
-    # Index-level tape, which is the outcome these four vectors produce
+    # 5. EASING, DISINFLATION AND GROWTH
+    #
+    # THE SIDE THE FIRST FOUR VECTORS CANNOT PRODUCE. Measured 2026-09-07: the
+    # QQQ read came back BEARISH on 10 of 14 sessions, 5/10 on next-session
+    # direction, and the tilt survived the tape reversing -- five straight
+    # bearish reads while QQQ printed +0.22, +0.04, +0.30, -0.05. Dropping
+    # re-reports changed five verdicts in BOTH directions and left the
+    # distribution at 10/6/1, which ruled repetition out (section 126).
+    #
+    # What was left is retrieval. A term set assembled from tightening,
+    # conflict, debt stress and hard data can only ever hand the classifier
+    # trouble, and a classifier given only trouble reports trouble daily. The
+    # bias was never in the model; it was in what the model was allowed to see.
+    #
+    # Kept as specific as the rest. "rally" and "record high" would drag in
+    # every retail-finance piece on the wire, which is the failure this file
+    # already warns about two comments above.
+    "soft landing", "disinflation", "inflation cools", "cooling inflation",
+    "rate cuts", "dovish", "hawkish", "easing cycle", "fed pivot",
+    "liquidity injection", "goldilocks", "risk-on", "risk appetite",
+    "earnings upgrade", "guidance raised", "capex cycle", "productivity boom",
+
+    # Index-level tape, which is the outcome these five vectors produce
     "nasdaq futures", "dow jones futures", "s&p 500 futures", "stock futures",
 ]
 

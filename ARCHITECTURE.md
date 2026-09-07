@@ -114,11 +114,15 @@ reversing. That is the same failure that keeps `TRADING_MACRO_LLM_GATE` off
 (section 125).
 
 **It is not repetition** — re-grading all 17 sessions with re-reports dropped
-changed five verdicts in both directions, 11/5/1 → 10/6/1. It is the term set:
-`MACRO_TERMS` has four vectors and all four only fire on trouble. A feed
-selected for alarm reports alarm daily. Fix is to balance the vectors or to
-demean each verdict against the symbol's own trailing baseline. **Not yet
-done** (section 126).
+changed five verdicts in both directions, 11/5/1 → 10/6/1. Nor is it the term set — the
+vectors were balanced (60 → 83 terms: ceasefire, disinflation, dovish, bond
+rally, soft landing, guidance raised …) and **zero verdicts changed**. Only 15
+extra headlines matched. The expansionary copy is not being filtered out, it is
+**not on the wire**: financial media reports risk. The tilt is a property of the
+source, and no retrieval rule fixes a corpus without the other side
+(section 127). The remaining candidate is demeaning each verdict against the
+symbol's own trailing baseline — **not done, and not worth doing until the
+re-run wobble is characterised**.
 
 ---
 
@@ -157,11 +161,18 @@ percentile of the observed distribution) is dropped as a re-report.
 
 The recycling is not verbatim: median similarity to prior coverage is 0.767, so
 an exact-match rule catches nothing. Re-report share: NVDA 42%, SNDK 42%,
-MU 30%, QQQ 24%. 35 of 167 verdicts changed, `NEUTRAL` 101 → 120. The measured
-effect is a **narrower interval, not a better point estimate** — 1-day AUC
-0.546 [0.441, 0.634] → 0.551 [0.481, 0.626] — and a bearish bucket that finally
-points down (+0.22% → −0.11%). The cost is that a genuine follow-up to a
-covered story can be dropped with it.
+MU 30%, QQQ 24%. 35 of 167 verdicts changed, `NEUTRAL` 101 → 120. **Its measured effect on
+prediction is unknown and probably unmeasurable here** — two runs at the same
+threshold gave 1-day AUC 0.551 and 0.536, and the bearish bucket changed sign
+between them (−0.11% → +0.33%). That wobble is the classifier, not the data:
+Haiku returns different verdicts on the same headlines run to run, by as much
+as any effect being tested (section 127). The filter is kept on the principle,
+not on a measurement. The cost is that a genuine follow-up to a covered story
+can be dropped with it.
+
+**Any future A/B on this pipeline must grade each configuration several times
+and report the spread.** A difference smaller than the re-run wobble is not a
+difference.
 
 **`news_watch.py` scrapes before it grades, and must.** The only other scraper
 is the trading cycle, which refuses to run outside market hours — so at 09:30

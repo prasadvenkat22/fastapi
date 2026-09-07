@@ -8110,3 +8110,67 @@ principle -- a priced story is not news -- and supported by a narrower interval
 and a bearish half that finally points down. It is NOT justified as predictive:
 nothing here clears a coin flip, and section 125's decision stands. Probability
 remains delta.
+
+
+127. TWO NULLS AND A CORRECTION: THE MACRO TILT IS THE WIRE, AND THE
+     MEASUREMENT IS NOISIER THAN THE EFFECT  (2026-09-07)
+--------------------------------------------------------------------------------
+
+NULL ONE -- BALANCING THE TERM VECTORS CHANGED NOTHING. Section 126 located the
+QQQ bearish tilt in MACRO_TERMS: four vectors that only fire on trouble, so a
+classifier reading them can only report trouble. The fix looked obvious. Added
+to the set: ceasefire, de-escalation, sanctions relief, truce, supply glut,
+output increase; curve steepen, auction stopped through, bond rally, credit
+spreads tighten, yields fall; and a fifth vector for easing and growth --
+soft landing, disinflation, dovish, fed pivot, liquidity injection, goldilocks,
+risk appetite, earnings upgrade, guidance raised, capex cycle. 60 terms -> 83.
+
+    RESULT: 249 headlines -> 264, and ZERO verdicts changed. Still 10 BEARISH,
+    6 NEUTRAL, 1 BULLISH across the same seventeen sessions.
+
+Only fifteen extra headlines matched, out of 83 terms. The expansionary copy is
+not being filtered out -- IT IS NOT ON THE WIRE. Financial media reports risk;
+that is what the business is. The tilt is a property of the SOURCE, and no
+retrieval rule fixes a corpus that does not contain the other side.
+
+The balanced terms were KEPT anyway. A retrieval set that cannot represent a
+ceasefire is wrong whether or not one happened this fortnight, and the cost of
+carrying twenty-three unused patterns is nothing.
+
+NULL TWO, AND IT CORRECTS SECTION 126. Re-grading all 167 symbol-days under one
+configuration -- the table had been accumulating verdicts from three -- gave:
+
+                    section 126 run        this run
+    1d AUC     0.551 CI [0.481, 0.626]   0.536 CI [0.453, 0.625]
+    4d AUC     0.528 CI [0.437, 0.636]   0.510 CI [0.416, 0.608]
+    1d bearish bucket   -0.11% up 48%      +0.33% up 50%
+    4d bearish bucket   +0.29% up 47%      +0.83% up 55%
+
+SAME THRESHOLD, SAME HEADLINES FOR THIRTEEN OF FOURTEEN SYMBOLS. The verdict
+distribution moved by four or five rows and the bearish bucket changed sign.
+
+    THAT IS THE CLASSIFIER, NOT THE DATA. Haiku at temperature returns a
+    different verdict on the same headline set run to run, and the size of that
+    wobble -- 0.015 of AUC, and enough to flip a bucket mean -- is as large as
+    the "improvement" section 126 attributed to the novelty filter.
+
+    So the claim in section 126 that dropping re-reports made the bearish half
+    of the ladder point down IS WITHDRAWN. It pointed down on one run. On the
+    next it did not. Nothing was measured there that survives a re-run.
+
+WHAT THIS MEANS FOR THE NOVELTY FILTER. It stays, on the PRINCIPLE, which was
+never in doubt: a story the market has already priced is not news, and 24-42%
+of every window was recycled coverage. What does not stand is any claim that it
+improved prediction. It removes input that should not have been there. Whether
+that helps cannot be seen at this sample size, and now we also know the
+instrument is too noisy to see it even if it did.
+
+THE GENERAL LESSON, WHICH IS THE EXPENSIVE ONE. Every comparison in sections
+124-126 was a single run against a single run. An LLM verdict is a stochastic
+measurement and needs to be treated like one: before any future A/B on this
+pipeline is believed, grade each configuration SEVERAL TIMES and report the
+spread. A difference smaller than the re-run wobble is not a difference.
+
+STANDING DECISION UNCHANGED, AND NOW BETTER SUPPORTED. Sentiment does not enter
+the EV probability. Delta does. Section 125's kill condition holds, with one
+addition: the re-run spread goes into the test, or the test proves nothing.

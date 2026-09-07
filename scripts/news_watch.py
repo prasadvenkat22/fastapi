@@ -97,6 +97,36 @@ def position_action(strategy: str, verdict: str) -> str:
     return "HOLD — news is neutral or unrelated to the position's direction"
 
 
+def ingest() -> int:
+    """Scrape the wires BEFORE grading, and return how many headlines landed.
+
+    WITHOUT THIS THE OVERNIGHT WINDOW IS ALWAYS EMPTY. The only thing that
+    scrapes is the trading cycle, and the cycle refuses to run outside market
+    hours -- so at 09:30 the freshest row in the store is from 16:00 the
+    previous session, and a window reaching back to the previous close finds
+    nothing in it. Fixing the window (section 123) without fixing this would
+    have read as "there was simply no news", every morning, forever.
+
+    Never raises. No headlines is a real answer and a wire outage must not read
+    as a signal -- the same rule classify_day() follows.
+    """
+    try:
+        import asyncio
+
+        from GENAI.vector_stores import VoyageEmbeddings
+
+        from trading_engine.nodes import _scrape_headlines
+        from trading_engine.vector_store import store_headlines
+
+        heads = _scrape_headlines()
+        if heads:
+            asyncio.run(store_headlines(heads, VoyageEmbeddings()))
+        return len(heads)
+    except Exception as exc:
+        print(f"(pre-open scrape failed, grading on what is already stored: {exc})")
+        return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbols", default="")
@@ -149,7 +179,9 @@ def main():
     except Exception as exc:
         print(f"(open positions unreadable: {exc})")
 
-    print(f"NEWS WATCH  {datetime.now(NY):%Y-%m-%d %H:%M %Z}  trading day {day}\n")
+    n_new = ingest()
+    print(f"NEWS WATCH  {datetime.now(NY):%Y-%m-%d %H:%M %Z}  trading day {day}")
+    print(f"scraped {n_new} headlines, window opens {previous_session_close(day):%a %m-%d %H:%M} ET\n")
     print(f"{'sym':6s} {'verdict':14s} {'conf':>5s} {'n':>3s} {'structure':20s} action")
     for sym in syms:
         heads = session_headlines(sym, day)

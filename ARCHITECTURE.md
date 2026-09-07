@@ -24,7 +24,7 @@ This file is the map.
 | time | job | what it does |
 |---|---|---|
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
-| 09:30 | `news_watch.py` | grades everything published **since the previous close** per symbol, writes `news_verdicts`. Window guard 09:20–10:05 |
+| 09:30 | `news_watch.py` | **scrapes the wires, then** grades everything published since the previous close, writes `news_verdicts`. Window guard 09:20–10:05 |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
 | 17:15 (21:15 UTC, both DST offsets land after the close) | `macro_outcome.py` | records the morning's macro read against the session that followed |
 
@@ -133,6 +133,12 @@ respects half-day closes. Backtests must pass an explicit 09:30 cutoff.
 A story that merely recaps the LAST session still grades NEUTRAL: that move is
 priced, and the classifier is told so.
 
+**`news_watch.py` scrapes before it grades, and must.** The only other scraper
+is the trading cycle, which refuses to run outside market hours — so at 09:30
+the freshest row in the store is 16:00 the previous session and the overnight
+window is empty by construction. Fixing the window without fixing what fills it
+gives a filter that works perfectly on an empty table (section 124).
+
 **Why per-symbol feeds are not optional.** Measured against the five events
 that moved this book's names on 2026-09-04:
 
@@ -187,6 +193,7 @@ compare test AUC against 0.496.
 | `xgb_probability.py` | does a learned model beat it (no) |
 | `backfill_news_impact.py` | label stored headlines with what price did |
 | `macro_outcome.py --report` | did the macro verdict separate sessions, and what would a gate have cost |
+| `news_ev_backtest.py` | re-price an expired `weekly_shadow` cohort and ask whether the news overlay moved EV toward the outcome |
 | `sweep.py` | 0DTE replay. **Read the RUN CONFIG banner** |
 
 ---
@@ -217,3 +224,15 @@ reaches the 0DTE book not at all.
 That is the same discipline section 22 applied to crude and section 14 to the
 macro verdict: an unmeasured term is logged beside the decision, never wired
 into it.
+
+**The first cohort with realized outcomes went against the overlay**
+(section 124). On 2026-08-28, 24 structures, 2 losers. SNDK's short call
+carried `EVraw −96.4` — the most negative figure in the cohort — and expired at
+−1011%; the news window was empty, so `w = 0` collapsed `EVadj` to `EVdem`
+−48.5 and deleted the warning the drift term had already produced. On META a
+BEARISH verdict moved `EVadj` *up*, on the structure that lost 921%.
+
+`EVfloor = min(EVdem, EVraw)` is reported alongside. It needs no verdict, and it
+moves SNDK's short call from third-worst to worst — but also flags CRWV and QQQ
+calls that paid +100%. Two losers is not a sample. It is computed on every run
+and wired into nothing.

@@ -7829,3 +7829,92 @@ which is the signature of an insert time, not of a wire. Only from 2026-09-06
 forward is the timestamp real, so the window fix can be demonstrated forward
 and not backward. That is a consequence of the bug in section 122's neighbour,
 and it costs about two weeks before the guard can be scored on history.
+
+
+124. THE OVERLAY, MEASURED ON A COHORT THAT ACTUALLY EXPIRED  (2026-09-07)
+--------------------------------------------------------------------------------
+
+Two claims were put to the test: 0DTE QQQ EV should have been drastically low
+on Friday's news, and SNDK weekly EV drastically high. Both were checkable
+against weekly_shadow, which recorded every structure at the prices actually
+quoted when it was opened. scripts/news_ev_backtest.py does the re-pricing; the
+terminal distribution for a structure opened on day D uses that name's history
+UP TO D and no further.
+
+FIRST, A BUG THAT WOULD HAVE MADE ALL OF IT SILENT. The corrected news window
+(section 123) reaches back to the previous session's close. Nothing was
+scraping into that window. The only scraper is the trading cycle, and the cycle
+refuses to run outside market hours -- so at 09:30 the freshest row in the store
+was 16:00 the previous session, and an overnight window would have found
+nothing in it. Every morning. Forever, and quietly, reading as "there was no
+news". news_watch.py now scrapes before it grades: 206 headlines on the first
+run, window opening Fri 09-04 16:00.
+
+    Fixing a filter without fixing what fills it produces a filter that works
+    perfectly on an empty table.
+
+THE 2026-08-28 COHORT, WHICH HAS EXPIRED. 24 structures, 2 losers:
+
+  sym  side  short     EVdem   EVraw   EVadj   EVfloor  verdict   realized
+  SNDK call  1665.00   -48.5   -96.4   -48.5    -96.4   (none)     -1011%
+  META call   610.00   -13.7   -17.2   -12.5    -17.2   BEARISH     -921%
+  CRWV call    93.00   -66.0   -73.0   -66.0    -73.0   (none)      +100%
+  QQQ  call   732.00   -46.7   -58.8   -42.3    -58.8   BEARISH     +100%
+
+READ THE SNDK ROW SLOWLY. EVraw was -96.4, the most negative figure in the
+entire cohort, and it expired at -1011%. The news window was empty that day, so
+w = 0, so EVadj collapsed to EVdem = -48.5 and threw the warning away. The
+overlay did not fail to predict the blow-up -- it deleted a warning that the
+drift term had already produced.
+
+ON META THE OVERLAY MOVED THE WRONG WAY. A BEARISH verdict on a short CALL is
+w = -0.36, which pulls EVadj AWAY from the drift case: -13.7 -> -12.5, better,
+on the structure that lost 921%. Correct by the formula, wrong by the outcome.
+
+So on 2 of 2 realized losses the overlay was either inert or harmful, while the
+drift term flagged both. That is the opposite of the expected result and it is
+recorded as such.
+
+EVfloor = min(EVdem, EVraw), WHICH NEEDS NO VERDICT AT ALL. Taking the
+pessimistic side of the pair instead of interpolating between them moves SNDK's
+short call from third-worst to worst in the cohort. It also flags CRWV's call
+at -73.0 and QQQ's at -58.8, both of which paid +100%. Two losers is not a
+sample; this is reported, computed on every run, and wired into nothing.
+
+THE 2026-09-04 COHORT -- THE DIRECTION IS RIGHT EVEN IF THE VALUE IS UNPROVEN:
+
+  SNDK put   EVdem -42.7 -> EVadj -25.2   BULLISH  +0.36   (+41%, correct)
+  QQQ  call  EVdem -55.9 -> EVadj -51.3   BEARISH  -0.36   (bearish helps a
+  QQQ  put   EVdem -45.7 -> EVadj -49.0   BEARISH  -0.36    short call, hurts
+                                                            a short put)
+
+The sign convention survives on credit structures, which is what section 122's
+put-side bug was about. Note the frame: these are SHORT premium structures, so
+bullish news IMPROVES a short put. On the 0DTE book's long debit spreads the
+same verdict pushes the other way.
+
+WHAT FRIDAY'S 0DTE QQQ ACTUALLY DID. The claim was that news should have driven
+EV drastically low. The macro read was BEARISH 0.72 on the jobs print. QQQ
+opened and closed within 0.05% -- -0.05 ATR, a nothing day -- and the engine
+took ZERO trades.
+
+    2026-09-02   +0.30%   1 trade   +189
+    2026-09-03   +0.96%   1 trade   +478
+    2026-09-04   -0.05%   0 trades     0
+
+The objective gates stood it down without any news input, which is the outcome
+a news gate would have been credited with. That is the argument for NOT wiring
+it: on the one day it would have been asked to act, breadth and VIX had already
+answered.
+
+WHAT SNDK'S FRIDAY VERDICT ACTUALLY WAS. Graded from Friday's own window:
+BULLISH 0.72 on 6 headlines, not VERY_BULLISH. The S&P 100 story landed at
+22:11 that night and belongs to the NEXT session's window, where it reads
+VERY_BULLISH 0.82 on 13 headlines. The strong verdict was never available on
+Friday, and no window definition makes it so.
+
+STANDING CONCLUSION. The mechanism is correctly signed and bounded. Its
+predictive value remains unmeasured, and the first cohort with real outcomes
+went against it. Section 120's kill condition stands: score EVadj against
+outcomes at several settings of w once a few hundred labelled days exist, and
+if none beat w = 0, the weights go to zero.

@@ -101,10 +101,18 @@ that was switched off on two days of evidence.
    already computed by other means, so a wrong verdict moves the answer to a
    figure that was on the table anyway.
 
-**The weights are stated, not fitted.** `news_verdicts` began 2026-09-07.
+**The weights are stated, not fitted.** `news_verdicts` now holds 167 graded
+symbol-days over ~15 sessions — all of it, because RSS feeds carry about two
+weeks and cannot be backfilled further. The sample accrues forward only.
 Once a few hundred labelled days exist, score outcomes against `EVadj` at
 several settings and find whether any beat `w = 0`; if none do, they go to
 zero (section 120).
+
+**The QQQ macro read has a standing bearish tilt** — 10 BEARISH of 14 graded
+sessions, 5/10 on next-session direction, and the tilt survives the tape
+reversing. `MACRO_TERMS` is doom-weighted by construction, so the classifier
+finds something to worry about daily. That is the same failure that keeps
+`TRADING_MACRO_LLM_GATE` off (section 125).
 
 ---
 
@@ -176,10 +184,30 @@ The proposed `PoP = 0.40×P_model + 0.60×Delta` is also malformed: the model
 outputs P(any up move), delta outputs P(beyond a specific strike). Averaging
 them is not a probability of anything.
 
-**What would change the answer:** a feature the market cannot already see.
-Every input above is public and priced. `news_verdicts` is the first genuine
-candidate — re-run with sentiment as a feature once there is history, and
-compare test AUC against 0.496.
+**Sentiment was added as a feature and it made the model worse**
+(section 125, `scripts/xgb_sentiment.py`). Identical rows, identical
+walk-forward split, four sentiment columns:
+
+```
+horizon        technicals only   + sentiment   difference
+4 sessions           0.493          0.462        -0.031
+1 session            0.450          0.447        -0.004
+```
+
+Sentiment *alone* as a score scores AUC 0.546 [0.441, 0.634] at 1 day and
+0.532 [0.405, 0.641] at 4 days — day-clustered bootstrap, 0.500 inside both.
+A tree cannot extract what is not in the column.
+
+**Collinearity, since it comes up:** `atr_pct`/`rv20` +0.95, `rsi14`/`dist_sma20`
++0.93; 11 columns carry ~6 independent dimensions. A tree is unharmed by that —
+no matrix to invert — but the importance table above is a report on tie-breaking,
+not a ranking of causes. Six dimensions of public, priced state is still why it
+loses to a constant.
+
+**Greeks are not a way out.** Delta, gamma, theta and vega are deterministic in
+spot, strike, time, rate and IV. Feeding them re-encodes inputs the model
+already has, and delta *is* the market's probability — accurate to inside one
+point across 525 strikes (section 118).
 
 ---
 
@@ -191,6 +219,8 @@ compare test AUC against 0.496.
 | `weekly_pick.py` | which vertical has the best drift-corrected EV |
 | `delta_calibration.py` | is market delta a well-calibrated probability |
 | `xgb_probability.py` | does a learned model beat it (no) |
+| `xgb_sentiment.py` | does adding sentiment beat the same model without it (no) |
+| `sentiment_signal_test.py` | does the graded verdict carry information at all, with a day-clustered interval |
 | `backfill_news_impact.py` | label stored headlines with what price did |
 | `macro_outcome.py --report` | did the macro verdict separate sessions, and what would a gate have cost |
 | `news_ev_backtest.py` | re-price an expired `weekly_shadow` cohort and ask whether the news overlay moved EV toward the outcome |

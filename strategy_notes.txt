@@ -7918,3 +7918,116 @@ predictive value remains unmeasured, and the first cohort with real outcomes
 went against it. Section 120's kill condition stands: score EVadj against
 outcomes at several settings of w once a few hundred labelled days exist, and
 if none beat w = 0, the weights go to zero.
+
+
+125. SENTIMENT AS AN XGBOOST FEATURE, MEASURED: IT MAKES THE MODEL WORSE
+     (2026-09-07)
+--------------------------------------------------------------------------------
+
+A PREMISE THAT NEEDED CORRECTING FIRST. The retest was asked for on the basis
+that a broken timestamp had leaked into the XGBoost run and produced the
+insignificant AUC. It had not. xgb_probability.py trains on eleven daily
+TECHNICAL columns and has never had a news feature; its 0.496 came from
+technicals failing to predict four-day direction. The timestamp bug broke the
+news window and the sentiment grading, which that model never touched. So this
+is not a re-run of a leaky experiment -- it is the first run with sentiment in
+it at all. The QQQ macro-terms fix (ticker matching -> MACRO_TERMS) is real and
+did land; it changes what QQQ's feature looks like, not what the old run was.
+
+THE DATASET IS THE WHOLE STORY. market_news_vectors holds 2,499 headlines but
+only 24 calendar days, and the usable contiguous block is 2026-08-25 to
+2026-09-07. Counting symbol-days that carry at least one headline in the
+session window: 150, across fourteen names.
+
+    RSS FEEDS CANNOT BE BACKFILLED. They carry roughly two weeks. There is no
+    recovering 2025, so the sample accrues forward only and the clock starts
+    now. That is the binding constraint on every question in this section.
+
+163 verdicts were graded and stored (167 total). Distribution:
+
+    NEUTRAL 101   BEARISH 28   BULLISH 26   VERY_BULLISH 11   VERY_BEARISH 1
+
+SENTIMENT ALONE, AS A SCORE, WITH A DAY-CLUSTERED BOOTSTRAP. Resampling by ROW
+would treat fourteen tech names on one session as fourteen independent
+observations. They share the tape. Clustering on the day is what makes the
+interval honest, and it is why it is this wide:
+
+    horizon 1d   114 rows, 14 sessions   AUC 0.546   95% CI [0.441, 0.634]
+    horizon 4d    88 rows, 11 sessions   AUC 0.532   95% CI [0.405, 0.641]
+
+0.500 sits inside both. The one shape worth noting is that the signal, if any,
+is ONE-SIDED:
+
+    bullish reads   n=20  +0.88% fwd (1d)   n=14  +1.73% (4d)
+    neutral reads   n=68  +0.66%            n=54  +0.67%
+    bearish reads   n=26  +0.22%            n=20  +0.25%   up 50% either way
+
+Bullish beats neutral beats bearish in mean forward return on both horizons.
+But bearish reads went up half the time, which is exactly the base rate: the
+bearish half of the ladder carries nothing at all.
+
+XGBOOST WITH THE SENTIMENT COLUMNS ADDED. Identical rows, identical
+walk-forward split, four extra columns (ordinal, confidence, headline count,
+signed product). Expanding window -- train on every session before day k,
+score day k -- because a 70/30 split of 58 rows is a test set of four sessions:
+
+    horizon    technicals only    + sentiment    difference
+    4 sessions       0.493            0.462        -0.031
+    1 session        0.450            0.447        -0.004
+
+IT MADE THE MODEL WORSE ON BOTH HORIZONS. Not significantly -- nothing here is
+significant -- but there is no version of this result that supports wiring it
+into an EV probability. A tree cannot extract information that is not in the
+column, and the interval on the column contains a coin flip.
+
+THE QQQ MACRO READ HAS A STANDING BEARISH TILT. Graded over fourteen sessions:
+ten BEARISH, three NEUTRAL, one BULLISH. Next-session direction: 5 of 10.
+
+    2026-08-18 .. 08-24   BEARISH x5, and QQQ was genuinely down each day
+    2026-08-28 .. 09-04   BEARISH x5, and QQQ was +0.22 +0.04 +0.30 -0.05
+
+The tilt survives the tape reversing, which is the signature of a prior rather
+than a reading. It is also the same failure that killed TRADING_MACRO_LLM_GATE
+on 2026-08-25 -- 55 refusals of 55 on a day QQQ rose $6.50 off its low -- and
+it is the reason that gate stays off. Feeding this into 0DTE EV would import a
+standing short bias, not information. The MACRO_TERMS vectors are doom-weighted
+by construction (Iran, sovereign debt, rate hikes, liquidity stress), so a
+classifier reading them will find something to worry about every day.
+
+SNDK ON FRIDAY, WHICH WAS THE SPECIFIC QUESTION. The stored verdict is BULLISH
+0.72 on 6 headlines and the same-day move was +9.71%. That is NOT a forecast:
+the verdict was graded from the full session, and under a 09:30 cutoff SNDK had
+ZERO headlines that morning. There was no pre-trade probability to improve.
+SNDK has five graded days in total and one directional call.
+
+FEATURE COLLINEARITY, SINCE IT WAS ASKED. Measured, not assumed:
+
+    atr_pct     rv20          +0.95      both are volatility level
+    rsi14       dist_sma20    +0.93      both are "how stretched from the mean"
+    rsi14       dist_sma50    +0.79
+    dist_vwap5  move_5d_atr   +0.71
+
+    principal components for 90% of the variance: 6 of 11
+
+    A TREE DOES NOT CARE. There is no matrix to invert, so no variance
+    inflation and no unstable coefficients, and predictive accuracy is
+    essentially unaffected. What collinearity DOES wreck is the importance
+    ranking -- correlated columns split the credit arbitrarily -- so the "top
+    features" table in section 119 should not be read as a ranking of causes.
+
+    Six dimensions is still six dimensions of PUBLIC, PRICED state. That, and
+    not the correlation, is why the model loses to a constant.
+
+AND ON FEEDING IT THE GREEKS. Delta, gamma, theta and vega are deterministic
+functions of spot, strike, time, rate and IV. Handing them to a model that
+already has price and IV re-encodes its own inputs. Worse, delta IS the
+market's probability and section 118 measured it accurate to inside one point
+across 525 strikes -- a model trained to predict what delta already says is
+learning to reproduce a number it was given.
+
+DECISION. Sentiment does NOT go into the EV probability. The overlay stays a
+bounded weight on the drift term where a wrong verdict cannot leave the
+interval between two numbers computed by other means (section 121), the guard
+stays because it needs no forecast (section 122), and the probability itself
+stays delta. Re-run this section when news_verdicts holds a few hundred
+sessions rather than eleven.

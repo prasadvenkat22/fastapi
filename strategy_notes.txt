@@ -7453,3 +7453,64 @@ APPLIED, WEEK OF 2026-09-08:
         RECORDING "NO TRADE" IS THE POINT OF THE LIST. Forcing a put here
         means taking the least bad of a negative set, which is how a checklist
         becomes decoration.
+
+--------------------------------------------------------------------------------
+118. DELTA IS ALREADY THE MODEL, AND TESTING THAT FOUND A BUG IN OUR OWN MATHS
+     (2026-09-07)
+--------------------------------------------------------------------------------
+
+Asked for a model that updates the success probability, anchored on market
+delta. The right first question is whether delta needs correcting at all, so
+scripts/delta_calibration.py compares, for every liquid strike on every tracked
+name, the delta-implied probability against the realised one from the name's
+own drift-removed forward moves.
+
+THE FIRST RUN LOOKED LIKE A FINDING AND WAS A BUG.
+
+    CALL side, 327 strikes    delta OVERSTATES by +4.0 to +6.6p in 0.10-0.60
+    PUT side,  198 strikes    delta UNDERSTATES by -3.2 to -4.9p in 0.40-0.90
+
+Opposite directions on the two sides. No market effect does that: a variance
+risk premium inflates the probability of moving ANYWHERE and would bias calls
+and puts the SAME way. What biases them oppositely is a distribution whose
+centre has moved, and ours had.
+
+    fwd = c[days:]/c[:-days] - 1;  dem = fwd - fwd.mean();  spot * (1 + dem)
+
+Demeaning SIMPLE returns sets the arithmetic mean to zero and leaves the MEDIAN
+below spot by roughly 0.5*sigma^2*t -- volatility drag. Delta's log-normal
+carries a -0.5*sigma^2*t term that centres the median. The two were never on
+the same footing. Demeaning LOG returns and exponentiating fixes it:
+
+                        before        after
+    call weighted bias  +1.8p         +0.6p
+    put  weighted bias  -2.0p         -0.7p
+
+DELTA IS WELL CALIBRATED AND THERE IS NO MODEL TO BUILD. Weighted bias is
+inside a point on both sides across 525 strikes and nine names. The residual
+bucket structure -- calls still +3.8 to +5.3p at 0.10-0.40 delta -- rests on
+37-47 strikes from nine names with overlapping windows, which is not
+independent enough to fit a curve to. Use delta as the probability; the
+correction is smaller than the noise in the estimate of the correction.
+
+WHAT THE BUG COST, because it was in weekly_pick.py too. Every EV quoted on
+2026-09-06 was pessimistic for calls and optimistic for puts:
+
+                        before        after
+    CRWV call 92/99     +25.8%        (superseded by 94/97 at +35.0%)
+    CRWV put  81/85     +39.2%        +28.3%
+    NVDA call 230/242   +12.7%        +15.2%
+    SNDK call 1750/1950  +9.6%        +16.0%
+
+The put side moved down and the call side up, exactly as the sign of the error
+predicts. Section 115's recorded candidates were produced with the bug and
+should be scored against the corrected figures, not the ones written there.
+
+WHY NOT XGBoost. The proposal was predict_proba over three regimes feeding the
+EV loop. That needs labelled outcomes; this book has 14 engine trades, 79
+weekly_shadow rows and zero days of per-symbol sentiment history. A boosted
+tree on that fits noise perfectly and reports a confident number for it, which
+is a worse failure than no model because it arrives with a probability
+attached. The blend PoP = 0.40*P_model + 0.60*Delta is also the wrong shape:
+delta IS the market's probability, and the measurement above says it is right
+to within a point, so a 40% weight on a 14-sample model is 40% noise.

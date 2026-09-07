@@ -126,7 +126,16 @@ def evaluate(sym, side):
     fwd_days = trading_days_to(exp)
     c = h["Close"].values
     fwd = c[fwd_days:] / c[:-fwd_days] - 1.0
-    dem = fwd - fwd.mean()
+    # DEMEAN LOG RETURNS, not simple ones. Setting the arithmetic mean of
+    # simple returns to zero and applying spot*(1+r) leaves the MEDIAN below
+    # spot by about 0.5*sigma^2*t -- volatility drag -- while delta's
+    # log-normal carries a -0.5*sigma^2*t term that centres it. The mismatch
+    # made every call EV pessimistic and every put EV optimistic. Caught
+    # 2026-09-07 by scripts/delta_calibration.py: the apparent bias against
+    # delta was +1.8 points on calls and -2.0 on puts, in OPPOSITE directions,
+    # which no market effect produces. Log-demeaning took both inside a point.
+    lr = np.log(c[fwd_days:] / c[:-fwd_days])
+    dem_prices_factor = np.exp(lr - lr.mean())
     mc = monte_carlo_terminal(spot, a14, fwd_days)
     chain = tk.option_chain(exp)
     calls = side == "call"
@@ -160,9 +169,9 @@ def evaluate(sym, side):
                 room = (spot - lo) / a14
             if cost <= 0.05 or cost >= w:
                 continue
-            prices = spot * (1 + dem)
+            prices = spot * dem_prices_factor
             dm = payoff(prices)
-            raw = payoff(spot * (1 + fwd))
+            raw = payoff(spot * (1 + fwd))   # raw KEEPS the drift, by design
             # THE DECOMPOSITION, explicitly. EV is not P(win) x reward +
             # P(lose) x risk -- a vertical has a THIRD outcome, finishing
             # between the strikes, and for a deep-ITM structure that middle
@@ -205,7 +214,7 @@ def evaluate(sym, side):
                 iv=atm_iv, exp=exp, days=fwd_days,
                 ev_dem=float(dm.mean()) * 100, ev_raw=float(raw.mean()) * 100,
                 pwin=float((dm > 0).mean()), need=cost / w,
-                rr=(w - cost) / cost, room=room, n=len(dem),
+                rr=(w - cost) / cost, room=room, n=len(lr),
                 p_max=p_max, p_mid=p_mid, p_min=p_min, mc_max=mc_max,
                 d_long=dl, d_short=dh, d_net=dl - dh,
                 # How deep the LONG leg sits, in the name's own ATR. THIS IS

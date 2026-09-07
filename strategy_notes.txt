@@ -7644,3 +7644,60 @@ spread needs +$210, which is 1.91 ATR, so a hundred-dollar day gets roughly
 halfway to the short strike and into the partial band rather than to the cap.
 Scaling a catalyst in ATR before sizing a trade on it is the same discipline
 section 102 applied to widths.
+
+--------------------------------------------------------------------------------
+121. WHAT THE OVERLAY IS AND IS NOT, IN THE USUAL VOCABULARY  (2026-09-07)
+--------------------------------------------------------------------------------
+
+An outside note framed section 120's bridge against three standard quant
+constructions. The framing is useful for describing the design to someone
+else and two parts of it are wrong, one of which corrects a claim made in this
+file.
+
+BLACK-LITTERMAN -- RIGHT SHAPE, DIFFERENT INSTRUMENT. BL anchors on market
+equilibrium, treats a view as a separate distribution, and weights the tilt by
+the view's confidence so that zero confidence collapses to the anchor. Ours
+does the same architecturally. It is not the same mathematics: BL blends
+DISTRIBUTIONS and returns a posterior covariance, and derives its omega from
+the view's variance. We interpolate two POINT estimates with a weight chosen
+by hand. BL's anchor is also the market's own implied view; EVdem is a
+historical resampling with the drift removed, which is not an equilibrium of
+anything.
+
+ARBITRAGE BOUNDS -- THE ANALOGY IS WRONG, AND SECTION 120 OVERSTATED THIS.
+Section 120 says "EVadj cannot leave the interval between two figures computed
+by other means", which is true, and then invites the reading that the interval
+CONTAINS the answer. It does not. A no-arbitrage bound is a hard constraint --
+a call cannot cost more than the underlying, and a violation is free money.
+EVdem and EVraw are two ESTIMATES under two assumptions about drift. Nothing
+prevents the truth sitting outside them: if a name's drift accelerates past
+its own historical average, realised EV exceeds EVraw.
+
+    The guarantee is CONTAINMENT OF THE ERROR, not correctness of the range.
+    A wrong verdict can only move the answer to a figure already calculated
+    by another route. That is worth having and it is smaller than a bound.
+
+BAYESIAN UPDATE -- RIGHT SHAPE, STATED WEIGHT. Prior + strength x innovation
+is the Kalman form and ours matches it. A real update DERIVES the weight from
+the prior's and the likelihood's variances; ours is a table of constants.
+Bayesian-shaped, not Bayesian-derived, which is exactly why section 120
+insists the weights are stated and must be scored against outcomes.
+
+A FACTUAL CORRECTION ON THE OTHER HALF. The note describes XGBoost failing by
+overfitting "text variance". Our model never saw text. It trained on eleven
+daily technical features and failed because daily technical state does not
+predict four-day direction -- test AUC 0.496 against a 0.500 coin flip,
+accuracy 50.7% against 59.7% for a constant (section 119). Right conclusion,
+different mechanism, and the difference matters: adding text features would
+not obviously repair it, because the failure was not a shortage of signal in
+the inputs but the absence of signal the market has not already priced.
+
+WHAT SURVIVES THE CORRECTIONS AND IS THE ACTUAL ARGUMENT.
+
+  ZERO NOISE FLOOR, exactly. A NEUTRAL read sets w = 0 and EVadj equals EVdem
+  to the cent. Verified 2026-09-07 on both CRWV wings. A mechanism that always
+  finds a reason to adjust is not a gate.
+
+  TRANSPARENCY, which is the point. "VERY_BULLISH -> 1.0" is a line in a table
+  that can be read, disagreed with, versioned and tested against realised
+  outcomes. A split on rsi14 < 43.2 is none of those.

@@ -366,6 +366,11 @@ CONFIDENCE, HONESTLY
 ARCHITECTURE AS OF 2026-09-07
 =======================================
 
+SUPERSEDED BY ARCHITECTURE.md, which is maintained as the single current-state
+document. What follows is kept because the deploy-specific detail below it --
+the mirror rule, the sweep invocation -- belongs with the deployment steps.
+For what feeds a decision in each book, read ARCHITECTURE.md.
+
 Three books share one engine, one database and one cron. They differ in what
 they trade and in how much of them is automated.
 

@@ -1,8 +1,9 @@
 # Fastapi
 
 Postgres-backed FastAPI service. Set the env file before calling the API endpoints.
-See deployment_notes.txt for the stack and the current architecture, and
-strategy_notes.txt for the trading engine's decision record.
+See ARCHITECTURE.md for what actually runs, deployment_notes.txt for the stack
+and deploy steps, and strategy_notes.txt for the decision record behind every
+number.
 
 Three books share the engine: an automated 0DTE QQQ strategy on a one-minute
 cron, an observational weekly single-name book with one live slice, and manual

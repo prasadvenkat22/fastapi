@@ -1,5 +1,12 @@
-"""Per-symbol news watcher: grade today's news, decide a structure, review
-what is already open.
+"""Per-symbol news watcher: grade the news that broke since the last close,
+decide a structure, review what is already open.
+
+THE WINDOW IS SINCE THE PREVIOUS SESSION'S CLOSE, not today's calendar date.
+Corrected 2026-09-07: a calendar filter asks for "headlines stamped today" and
+so throws away exactly the headlines that matter at 09:30 -- the after-hours
+and weekend catalysts the market has not traded on yet. SanDisk's S&P 100
+inclusion published Friday 22:11 ET was invisible to the old filter on Monday
+morning.
 
 RUNS ONCE, AT 09:30 ET. The verdict sets the day's structure and the day's
 structure is decided once; a weekly position is held four to five sessions and
@@ -38,7 +45,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import psycopg2
 
-from trading_engine.symbol_news import ALIASES, classify_day, same_day_headlines
+from trading_engine.symbol_news import (ALIASES, classify_day,
+                                        previous_session_close,
+                                        session_headlines)
 
 NY = ZoneInfo("America/New_York")
 
@@ -143,7 +152,7 @@ def main():
     print(f"NEWS WATCH  {datetime.now(NY):%Y-%m-%d %H:%M %Z}  trading day {day}\n")
     print(f"{'sym':6s} {'verdict':14s} {'conf':>5s} {'n':>3s} {'structure':20s} action")
     for sym in syms:
-        heads = same_day_headlines(sym, day)
+        heads = session_headlines(sym, day)
         d = digest(heads) if heads else None
 
         cur.execute("SELECT headline_digest, verdict, confidence, rationale "
@@ -151,7 +160,7 @@ def main():
         prev = cur.fetchone()
 
         if not heads:
-            print(f"{sym:6s} {'(no news today)':14s}")
+            print(f"{sym:6s} {'(no news)':14s}   nothing since the last close")
             continue
         if prev and prev[0] == d and not args.force:
             v, c = prev[1], prev[2]

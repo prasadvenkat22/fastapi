@@ -24,7 +24,7 @@ This file is the map.
 | time | job | what it does |
 |---|---|---|
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
-| 09:30 | `news_watch.py` | grades **today's** news per symbol, writes `news_verdicts`. Window guard 09:20–10:05 |
+| 09:30 | `news_watch.py` | grades everything published **since the previous close** per symbol, writes `news_verdicts`. Window guard 09:20–10:05 |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
 | 17:15 (21:15 UTC, both DST offsets land after the close) | `macro_outcome.py` | records the morning's macro read against the session that followed |
 
@@ -117,13 +117,21 @@ ingest   nodes._scrape_headlines()
 store    market_news_vectors — Voyage embeddings, deduped, with `source`
 tag      symbol_news.ALIASES — the engine holds SNDK, the wires write SanDisk
 grade    classify_day() → VERY_BULLISH..VERY_BEARISH, TRADING_NEWS_MODEL,
-         SAME TRADING DAY ONLY. Fires on a headline-set digest change.
+         SINCE THE PREVIOUS SESSION'S CLOSE. Fires on a digest change.
 label    news_symbol_impact — forward 1d/5d returns in percent AND in ATR
 ```
 
-**Same-day only is deliberate.** A catalyst is priced in the session it
-breaks; counting it again tomorrow double-counts a move the chart already
-contains.
+**The window is the previous close to now, not the calendar day** (corrected
+2026-09-07, section 123). A calendar filter is wrong twice: it drops the
+after-hours and weekend catalysts that are the only ones the market has not
+traded on yet — SanDisk's S&P 100 inclusion, stamped Friday 22:11, was
+invisible to a Monday "today only" read — and it leaks, because grading a
+session's open from headlines written at 14:00 that same session is reading the
+tape. `market_calendar` supplies both ends, so the window spans holidays and
+respects half-day closes. Backtests must pass an explicit 09:30 cutoff.
+
+A story that merely recaps the LAST session still grades NEUTRAL: that move is
+priced, and the classifier is told so.
 
 **Why per-symbol feeds are not optional.** Measured against the five events
 that moved this book's names on 2026-09-04:

@@ -987,6 +987,28 @@ def _write_macro_cache(verdict: str, confidence: float, risk_factor: str) -> Non
 # that is observational.
 _LAST_SOURCES: dict = {}
 
+# Headline -> its real publication time, from the feed's own `published`
+# field. Discarded until 2026-09-07, which made publication_date default to
+# now() -- the moment of the SCRAPE, not of the story. Everything backfilled
+# in one pass therefore landed on a single timestamp, and same-day filtering,
+# which is the whole design of the sentiment read, was filtering on when we
+# happened to look.
+_LAST_PUBLISHED: dict = {}
+
+
+def _entry_published(entry):
+    """Feed-supplied publication time as a tz-aware UTC datetime, or None."""
+    import calendar
+    from datetime import datetime as _dt, timezone as _tz
+    for attr in ("published_parsed", "updated_parsed"):
+        t = getattr(entry, attr, None)
+        if t:
+            try:
+                return _dt.fromtimestamp(calendar.timegm(t), tz=_tz.utc)
+            except Exception:
+                pass
+    return None
+
 
 # PER-SYMBOL FEEDS. The three general feeds above carry macro and mega-cap
 # news well -- Nvidia's Hugging Face acquisition produced NINE stored headlines
@@ -1535,6 +1557,7 @@ def rsi_agent(state: TradingState) -> dict:
 def _scrape_headlines() -> List[str]:
     headlines: List[str] = []
     _LAST_SOURCES.clear()
+    _LAST_PUBLISHED.clear()
     for url in RSS_FEEDS:
         try:
             feed = feedparser.parse(url)
@@ -1543,6 +1566,7 @@ def _scrape_headlines() -> List[str]:
                 if not title:
                     continue
                 headlines.append(title)
+                _LAST_PUBLISHED[title] = _entry_published(entry)
                 # WHICH FEED IT CAME FROM. Discarded until 2026-09-06, which
                 # made "weight a wire above a blog" unimplementable -- there
                 # was nothing to key a source weight on. Recorded now so the
@@ -1566,6 +1590,7 @@ def _scrape_headlines() -> List[str]:
                     if not title:
                         continue
                     headlines.append(title)
+                    _LAST_PUBLISHED[title] = _entry_published(entry)
                     _LAST_SOURCES[title] = f"{_feed_name(url)}:{sym}"
             except Exception as e:
                 logger.warning("Failed to parse %s feed for %s: %s",

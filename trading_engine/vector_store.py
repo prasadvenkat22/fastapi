@@ -36,6 +36,21 @@ def _source_for(headline: str) -> "str | None":
         return None
 
 
+def _published_for(headline: str):
+    """The feed's own publication time, or None to fall back to now().
+
+    Without this the store records when the SCRAPE ran, so the session window
+    -- the entire basis of the sentiment read -- selects on when we looked
+    rather than on when the story broke. It also makes "published after the
+    close" unrepresentable, which is the news that matters most at an open.
+    """
+    try:
+        from .nodes import _LAST_PUBLISHED
+        return _LAST_PUBLISHED.get(headline)
+    except Exception:
+        return None
+
+
 async def store_headlines(headlines: List[str], embeddings: VoyageEmbeddings) -> None:
     """Embed and store any headline not already held.
 
@@ -71,13 +86,15 @@ async def store_headlines(headlines: List[str], embeddings: VoyageEmbeddings) ->
         vectors = embeddings.embed_documents(fresh)
         await conn.executemany(
             """
-            INSERT INTO market_news_vectors (id, headline_text, text_embedding, source)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO market_news_vectors
+                (id, headline_text, text_embedding, source, publication_date)
+            VALUES ($1, $2, $3, $4, COALESCE($5, now()))
             """,
             # source is looked up per headline from the scrape that produced
             # it. Absent before 2026-09-06, which left no way to weight a wire
             # above a blog -- see nodes._LAST_SOURCES.
-            [(str(uuid.uuid4()), headline, vector, _source_for(headline))
+            [(str(uuid.uuid4()), headline, vector, _source_for(headline),
+              _published_for(headline))
              for headline, vector in zip(fresh, vectors)],
         )
     finally:

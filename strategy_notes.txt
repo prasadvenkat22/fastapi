@@ -7752,3 +7752,80 @@ EVERY CANDIDATE CONFLICTS, WHICH IS CORRECT. 28 of 28 fired because the
 conflict is with the NAME's catalyst, not with a strike. No arrangement of
 strikes makes buying puts into an index inclusion sensible, and a guard that
 found a "safe" strike here would be wrong.
+
+
+123. THE NEWS WINDOW WAS THE CALENDAR DAY, AND THAT IS TWO BUGS
+     (2026-09-07)
+--------------------------------------------------------------------------------
+
+The question that found it: "SNDK's good news was on Friday MORNING -- it
+should have warned me off a short on Friday morning itself." Chasing that
+produced a better answer than expected, because the answer was no, and the
+reason was not the one being looked for.
+
+THE FILTER ASKED FOR HEADLINES STAMPED WITH TODAY'S CALENDAR DATE. That is
+wrong in both directions at once.
+
+    IT SKIPPED THE NEWS THAT MATTERS. A catalyst that breaks after the bell or
+    over a weekend is the ONLY news the market has not yet traded on when the
+    next session opens. A "today only" filter throws away precisely that set.
+    SanDisk's S&P 100 inclusion is stamped 2026-09-04 22:11 ET; on Monday
+    morning the filter asked for headlines stamped Monday and never saw it.
+
+    IT LEAKED. Grading Friday's open from headlines written at 14:00 on Friday
+    is reading the tape and calling it a forecast. That is why the SAME-DAY
+    column always looked so convincing -- the headlines were reporting the
+    move the column was scoring.
+
+CORRECTED WINDOW: from the PREVIOUS SESSION'S CLOSE to the moment of the read.
+market_calendar supplies both ends -- it knows the holidays, so Monday's window
+reaches back to Friday, and it knows the half days, so the three extra hours
+after a 13:00 close belong to the next session, not to that one. Backtests pass
+an explicit 09:30 cutoff; without one, the this-session column is not a forecast.
+
+WHAT FRIDAY ACTUALLY LOOKED LIKE. Under the corrected window, SNDK had NOTHING
+in the pre-open window on 2026-09-04. Its first headline that day was 10:00,
+the move was already running at 12:06, and the inclusion story landed at 22:11.
+
+    So the guard could not have warned at Friday's open, and no version of this
+    system could have. The news did not exist yet. That is a real limit and it
+    should be stated as one rather than engineered around.
+
+WHAT IT DOES CATCH IS THE NEXT SESSION. Run for the open of 2026-09-08 -- window
+2026-09-04 16:00 through 09:30 Monday, which is where Friday night's story
+actually lives:
+
+    SNDK   VERY_BULLISH  0.85  13 headlines   SHORT = conflict
+           S&P 100 inclusion, displacing Nike after 18 years
+    NVDA   BULLISH       0.72  18 headlines   SHORT = conflict
+    QQQ    BEARISH       0.72   4 headlines   LONG  = conflict
+    MU     NEUTRAL       0.85  12 headlines   -- correctly: all of it is
+           commentary on a 6% move that already happened
+    CRWV   NEUTRAL       0.85   3 headlines
+
+Under the old filter every one of those thirteen SNDK headlines was invisible
+at Monday's open. That is the whole of the fix, and it is mistake 2 from the
+list -- "SNDK short is a bad idea" -- caught one session later than hoped but
+caught, whereas before it was not catchable at all.
+
+THE FORWARD TEST SO FAR IS 0 FOR 3, AND IT WAS MEASURED UNDER THE BROKEN
+WINDOW. Recorded because it is the honest number and because the next run will
+not be comparable to it:
+
+    QQQ  2026-09-03  BULLISH       -> next session  -0.05%
+    NVDA 2026-09-04  VERY_BULLISH  -> next session  -0.32%
+    MU   2026-09-03  NEUTRAL       -> next session  +4.66%   (a NEUTRAL read
+         the day before the largest single-name move in the sample)
+
+Three days is an anecdote and proves nothing either way. It is here so that it
+accumulates rather than being remembered selectively, which is the same reason
+section 120 has a kill condition written into it.
+
+THE DATA CANNOT BACKTEST ITSELF YET. market_news_vectors carried
+publication_date = now() until 2026-09-06, so for older days the stamp is when
+the row was INSERTED, not when the story was published. Rows from 09-03 sit
+between 09:00 and 15:58 -- market hours, the engine's own scrape schedule --
+which is the signature of an insert time, not of a wire. Only from 2026-09-06
+forward is the timestamp real, so the window fix can be demonstrated forward
+and not backward. That is a consequence of the bug in section 122's neighbour,
+and it costs about two weeks before the guard can be scored on history.

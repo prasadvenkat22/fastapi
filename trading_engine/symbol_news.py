@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, time as dtime, timedelta
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -234,9 +234,46 @@ class NewsSentiment(BaseModel):
     rationale: str = Field(description="One sentence, citing the headline that decided it.")
 
 
-def same_day_headlines(symbol: str, day: Optional[date] = None) -> List[str]:
-    """Headlines for this symbol published on `day` (New York), newest first."""
+def previous_session_close(day: date) -> datetime:
+    """16:00 ET on the trading day before `day`, holidays included."""
+    try:
+        from .market_calendar import close_time_for, is_trading_day
+    except Exception:
+        def is_trading_day(d):
+            return d.weekday() < 5
+
+        def close_time_for(d):
+            return dtime(16, 0)
+    d = day - timedelta(days=1)
+    for _ in range(10):
+        if is_trading_day(d):
+            break
+        d -= timedelta(days=1)
+    # close_time_for knows the half days: the Friday after Thanksgiving ends at
+    # 13:00, and three extra hours of wire copy belong to the NEXT session.
+    return datetime.combine(d, close_time_for(d), tzinfo=NY)
+
+
+def session_headlines(symbol: str, day: Optional[date] = None,
+                      cutoff: Optional[dtime] = None) -> List[str]:
+    """Headlines for this symbol SINCE THE PREVIOUS SESSION'S CLOSE.
+
+    NOT the calendar day, which was the original filter and was wrong. A
+    catalyst that breaks after the bell or over a weekend is unpriced when the
+    next session opens, and a same-calendar-day filter skips it: SanDisk's S&P
+    100 inclusion was published 2026-09-04 at 22:11 ET, so a Monday morning
+    read asking for "today's headlines" would have missed the single largest
+    catalyst on the book.
+
+    The window is [previous session close, end of `day`], or up to `cutoff` on
+    `day` when one is given. Backtests MUST pass a cutoff -- reading a whole
+    session's headlines to grade its open is lookahead, and it is the reason
+    same-day agreement looked so good: the headlines were reporting the move.
+    """
     day = day or datetime.now(NY).date()
+    start = previous_session_close(day)
+    end = (datetime.combine(day, cutoff, tzinfo=NY) if cutoff
+           else datetime.combine(day, dtime(23, 59, 59), tzinfo=NY))
     pats = patterns_for(symbol)
     if not pats:
         return []
@@ -247,19 +284,22 @@ def same_day_headlines(symbol: str, day: Optional[date] = None) -> List[str]:
         sql = (
             "SELECT headline_text FROM market_news_vectors "
             f"WHERE ({clause}) "
-            "AND (publication_date AT TIME ZONE 'America/New_York')::date = %s "
+            "AND publication_date > %s AND publication_date <= %s "
             "ORDER BY publication_date DESC LIMIT %s"
         )
         with psycopg2.connect(_dsn()) as conn, conn.cursor() as cur:
-            cur.execute(sql, [f"%{p}%" for p in pats] + [day, MAX_HEADLINES])
+            cur.execute(sql, [f"%{p}%" for p in pats] + [start, end, MAX_HEADLINES])
             return [r[0] for r in cur.fetchall()]
     except Exception:
-        logger.warning("Same-day news lookup failed for %s.", symbol, exc_info=True)
+        logger.warning("Session news lookup failed for %s.", symbol, exc_info=True)
         return []
 
 
-def classify_day(symbol: str, day: Optional[date] = None) -> dict:
-    """{verdict, confidence, rationale, headline_count} for today's news.
+def classify_day(symbol: str, day: Optional[date] = None,
+                 cutoff: Optional[dtime] = None) -> dict:
+    """{verdict, confidence, rationale, headline_count} for the news a trader
+    could have read at this session's open -- everything published since the
+    previous close, which is the set that is NOT yet in the price.
 
     Returns NEUTRAL/0.0 with a zero count when there is no news, and on ANY
     failure -- no headlines is a real answer and an outage must not read as a
@@ -267,7 +307,7 @@ def classify_day(symbol: str, day: Optional[date] = None) -> dict:
     three cycles at the open with seven positions live.
     """
     empty = {"verdict": "NEUTRAL", "confidence": 0.0, "rationale": None, "headline_count": 0}
-    heads = same_day_headlines(symbol, day)
+    heads = session_headlines(symbol, day, cutoff)
     if not heads:
         return empty
     try:
@@ -285,11 +325,16 @@ def classify_day(symbol: str, day: Optional[date] = None) -> dict:
             "round-up of movers is NEUTRAL. A headline describing an already-completed "
             "move is NEUTRAL -- the move is in the price. Reserve VERY_BULLISH and "
             "VERY_BEARISH for news that re-rates the business.\n\n"
+            "THESE HEADLINES WERE PUBLISHED SINCE THE PREVIOUS SESSION'S CLOSE, so "
+            "the market has not traded on them yet -- an after-hours or weekend "
+            "catalyst is the case this exists for. But a story that merely recaps "
+            "what the LAST session already did is still NEUTRAL: that move is "
+            "priced.\n\n"
             "WEIGH THE HEADLINES, DO NOT COUNT THEM. Ten repetitive 'Is X a Buy?' "
             "pieces are not a bullish signal; one credible report of a cancelled "
             "order, a guidance change or an SEC filing outranks all of them. "
             "Syndicated near-duplicates of the same story are ONE event, not many.\n\n"
-            f"Headlines published today about {symbol}:\n{listed}"
+            f"Headlines about {symbol} published since the previous close:\n{listed}"
         )
         return {
             "verdict": out.verdict,
@@ -300,3 +345,8 @@ def classify_day(symbol: str, day: Optional[date] = None) -> dict:
     except Exception:
         logger.warning("News classification failed for %s.", symbol, exc_info=True)
         return {**empty, "headline_count": len(heads)}
+
+
+# Retained so older callers keep working. The session window is the correct
+# one; this alias exists only so a stale import does not fail silently.
+same_day_headlines = session_headlines

@@ -277,8 +277,8 @@ def main():
     print(f"\n=== {args.side.upper()} DEBIT SPREADS — ranked by {label}, "
           f"priced at ask/bid ===")
     print(f"{'sym':6s} {'strikes':>14s} {'ITMatr':>7s} {'risk':>7s} {'reward':>7s} "
-          f"{'R:R':>7s} {'Pimp':>6s} {'Phist':>6s} {'Pmc':>6s} {'Pmid':>6s} "
-          f"{'Pmin':>6s} {'need':>6s} {'edge':>7s} {'EV%':>7s} {'EV$':>8s} "
+          f"{'R:R':>7s} {'Pimp':>6s} {'Phist':>6s} {'Pmc':>6s} {'Pwin':>6s} "
+          f"{'need':>6s} {'edge':>7s} {'EV%':>7s} {'EV$':>8s} "
           f"{'drift':>8s}")
     key = {"ev": lambda x: -x["ev_dem"], "evpct": lambda x: -x["ev_pct"],
            "prob": lambda x: -x["pwin"]}[args.by]
@@ -286,13 +286,18 @@ def main():
         print(f"{r['sym']:6s} {r['lo']:6.0f}/{r['hi']:<7.0f} {r['itm']:+7.2f} "
               f"{r['cost']*100:7.0f} {(r['w']-r['cost'])*100:7.0f} "
               f"1:{r['rr']:<5.2f} {r['d_short']*100:5.1f}% {r['p_max']*100:5.1f}% "
-              f"{r['mc_max']*100:5.1f}% {r['p_mid']*100:5.1f}% "
-              f"{r['p_min']*100:5.1f}% {r['need']*100:5.1f}% "
+              f"{r['mc_max']*100:5.1f}% {r['pwin']*100:5.1f}% "
+              f"{r['need']*100:5.1f}% "
               f"{(r['pwin']-r['need'])*100:+6.1f}p {r['ev_pct']:+6.1f}% "
               f"{r['ev_dem']:+8.1f} {r['ev_raw'] - r['ev_dem']:+8.1f}")
     print("\nrisk/reward are per CONTRACT. need = cost/width = the break-even "
           "win rate. R:R sizes the WIN and says nothing about the ODDS, which "
           "is why a 1:5.78 payoff can still lose money.")
+    print("Pimp/Phist/Pmc are P(MAX profit) -- finishing beyond the SHORT "
+          "strike. Pwin is P(ANY profit) -- beyond the BREAKEVEN -- and Pwin "
+          "is what `edge` subtracts `need` from. Printing P(max) beside a "
+          "need/edge computed from P(win) is why earlier tables could not be "
+          "reconciled by hand.")
     print("EVdem is the forecast: what the structure earns if drift is "
           "unpredictable, which over two to five days it is. P(win) is "
           "measured on that same drift-removed history.")

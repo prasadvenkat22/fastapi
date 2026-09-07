@@ -7514,3 +7514,67 @@ is a worse failure than no model because it arrives with a probability
 attached. The blend PoP = 0.40*P_model + 0.60*Delta is also the wrong shape:
 delta IS the market's probability, and the measurement above says it is right
 to within a point, so a 40% weight on a 14-sample model is 40% noise.
+
+--------------------------------------------------------------------------------
+119. THE XGBOOST MODEL, TRAINED AND MEASURED: IT LOSES TO A CONSTANT
+     (2026-09-07)
+--------------------------------------------------------------------------------
+
+Section 118 argued against a learned probability from the sample size. That was
+an argument. This is the measurement.
+
+scripts/xgb_probability.py trains an XGBClassifier on eleven daily technical
+features -- ATR%, RSI, realised vol and its 5/20 ratio, distance from SMA20,
+SMA50 and a 5-day VWAP in ATR units, 1- and 5-day moves in ATR, volume ratio,
+range in ATR -- to predict whether the close four sessions ahead is higher.
+Ten names, five years, 10,264 rows. Split TIME-ORDERED, never shuffled: rows
+four days apart share an outcome window, so a shuffled test set is full of
+near-duplicates of training rows and every model scores brilliantly.
+
+    train 7,184 rows  ->  test 3,080 rows
+                          TRAIN      TEST
+    accuracy              75.3%      50.7%
+    AUC                   0.847      0.496
+    Brier                0.1913     0.2683
+
+    BASELINES ON THE SAME TEST SET
+      always predict "up"           accuracy 59.7%
+      training base rate as the probability   Brier 0.2449
+
+IT LOSES TO EVERY BASELINE ON EVERY METRIC. Test AUC 0.496 is below a coin
+flip. Accuracy is nine points worse than a constant. The Brier score is worse
+than quoting the base rate, which means its PROBABILITIES are less useful than
+a number that ignores all eleven features. Train AUC 0.847 against test 0.496
+is memorisation, and the gap is the whole result.
+
+This is not a data-quantity problem. Five years across ten names is a real
+sample; daily technical state does not predict four-day direction, which is
+what an efficient-enough market implies. More features or more tuning would
+raise the train number and not the test one.
+
+WHAT IT WOULD HAVE DONE TO A LIVE DECISION. Asked for a current reading on
+2026-09-07 the model returns:
+
+    SNDK  P(up over 4 sessions) = 39.6%
+    CRWV                          39.1%
+    MU                            44.4%
+
+All three below 50%, i.e. a bearish lean -- on the same afternoon the news
+pipeline graded SNDK VERY_BULLISH at 0.85 confidence on an S&P 100 inclusion
+with forced index-fund buying, and MU BULLISH at 0.72. Blending a 40% weight
+of that into the probability would have dragged down the estimate on the one
+name in the book with a genuine re-rating catalyst.
+
+THE PROPOSED BLEND IS ALSO THE WRONG SHAPE. PoP = 0.40*P_model + 0.60*Delta
+mixes two different quantities: the model outputs P(any up move) and delta
+outputs P(finishing beyond a specific strike). They are not on the same scale
+and averaging them is not a probability of anything. Section 118 measured
+delta accurate to inside one point across 525 strikes; there is nothing here
+to improve on and a 40% weight of noise to avoid.
+
+WHAT WOULD CHANGE THE ANSWER. A feature the market cannot already see. Every
+input above is public and priced. news_verdicts began accumulating 2026-09-07
+and is the first candidate -- a graded same-day catalyst read is not in the
+daily bars. Re-run this script with sentiment as a feature once there are a
+few hundred labelled days, and compare the test AUC against 0.496. That is a
+measurement worth waiting for; the current model is not worth deploying.

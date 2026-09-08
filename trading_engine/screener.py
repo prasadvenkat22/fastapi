@@ -49,7 +49,7 @@ def flow_table(symbols, day: str = "", interval: str = "5min") -> list:
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
-    from flow import analyse
+    from flow import analyse, flow_label
 
     day = day or datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     out = []
@@ -63,12 +63,6 @@ def flow_table(symbols, day: str = "", interval: str = "5min") -> list:
         tot = r["up"] + r["dn"]
         up_pct = (r["up"] / tot * 100.0) if tot else 50.0
         vs = (r["last"] / r["vwap"] - 1.0) * 100.0
-        if vs > 0 and up_pct > 55:
-            label = "BUY"
-        elif vs < 0 and up_pct < 45:
-            label = "SELL"
-        else:
-            label = "MIXED"
         out.append({
             "symbol": sym, "vwap": round(r["vwap"], 4),
             "last": round(r["last"], 4), "vs_vwap_pct": round(vs, 4),
@@ -79,6 +73,7 @@ def flow_table(symbols, day: str = "", interval: str = "5min") -> list:
             "volume": int(r["vol"]),
             "volume_vs_adv": (round(r["vs_adv"], 4) if r.get("vs_adv") else None),
             "bars": r.get("bars"),
-            "label": label,
+            "label": flow_label(vs, up_pct, r.get("slope") or 0.0,
+                                r.get("above_pct") or 0.0),
         })
     return out

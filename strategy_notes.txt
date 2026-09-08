@@ -8405,3 +8405,45 @@ DEPLOY NOTE. Production runs uvicorn with --workers 1 and no --reload, so new
 routes need a container restart. Done during the session with the user's
 explicit go-ahead: container down ~20s, alembic checked head, one cycle missed,
 recovered on the next minute. No open engine positions at the time.
+
+     ADDENDUM (2026-09-08, same day): THE LABEL WAS TOO LOOSE AND WAS WRITTEN
+     TWICE.
+--------------------------------------------------------------------------------
+
+The first rule asked two things -- price on the right side of VWAP, and the
+up-volume share agreeing -- and it broke within the hour of shipping. SNDK
+printed BUY on +0.10% against VWAP, which is noise, while the session VWAP was
+SLOPING DOWN and only 50% of bars had closed above it.
+
+An instantaneous price reading is a snapshot. The slope and the bar share are
+what make it persistent, and without them the label was reporting a coin toss
+as a signal.
+
+FOUR CONDITIONS NOW, all of which must agree:
+
+    BUY    price above VWAP, VWAP RISING, >60% of bars above it, >55% up-volume
+    SELL   the mirror
+    MIXED  anything else, which is the honest answer and the common case
+
+Same board, same minute, before and after:
+
+    CRWV   +0.66%  slope +1.14%  above 92%  up 76%   BUY    (unchanged)
+    AVGO   +0.09%  slope +0.49%  above 92%  up 72%   BUY    (unchanged)
+    SNDK   +0.36%  slope -0.11%  above 54%  up 74%   BUY -> MIXED
+    NVDA   -1.00%  slope -1.25%  above  0%  up 14%   SELL   (unchanged)
+    MU     -0.13%  slope -0.66%  above  8%  up 42%   SELL   (unchanged)
+    QQQ    -0.03%  slope -0.37%  above  0%  up 31%   SELL   (unchanged)
+
+Only the ambiguous name moved, which is the point: a tightened rule that
+reclassified half the board would be a different signal, not a stricter one.
+
+AND IT LIVED IN TWO PLACES. weekly_pick.flow_read and screener.flow_table each
+carried their own copy of the thresholds -- the CLI and the API would have
+drifted the first time either was touched, silently, in the direction nobody
+was watching. It is now one function, flow.flow_label, with two importers, and
+the CLI prints the label so the two can be compared by eye.
+
+STATED, NOT FITTED. 60 and 55 are round numbers chosen to demand agreement.
+They were not tuned against returns, nothing here has been scored against
+outcomes, and section 127's rule stands: an A/B smaller than the re-run wobble
+is not a result.

@@ -47,6 +47,43 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NY = ZoneInfo("America/New_York")
 
 
+# THE LABEL RULE, IN ONE PLACE. It was written twice -- once in
+# weekly_pick.flow_read and once in screener.flow_table -- which is exactly how
+# two callers end up disagreeing about what BUY means. One function, two
+# importers.
+#
+# FOUR CONDITIONS, NOT TWO (tightened 2026-09-08). The original rule asked only
+# that price sit on the right side of VWAP and that the up-volume share agree,
+# and it was too loose in a way that showed up immediately: SNDK printed BUY on
+# +0.10% against VWAP -- noise -- with the session VWAP SLOPING DOWN and only
+# 50% of bars closing above it. An instantaneous price reading is a snapshot;
+# the slope and the bar share are what make it persistent.
+#
+#   BUY   price above VWAP, VWAP rising, >60% of bars above it, >55% up-volume
+#   SELL  the mirror
+#   MIXED anything else, which is the honest label for a disagreement
+#
+# STATED, NOT FITTED. 60/55 are round numbers chosen to demand agreement, not
+# tuned against returns -- nothing here has been scored, and section 127's
+# warning about reading differences smaller than the noise applies.
+BARS_ABOVE_MIN = 60.0
+BARS_ABOVE_MAX = 40.0
+UP_VOLUME_MIN = 55.0
+UP_VOLUME_MAX = 45.0
+
+
+def flow_label(vs_vwap: float, up_pct: float, slope: float,
+               bars_above: float) -> str:
+    """BUY / SELL / MIXED from the four session readings."""
+    if (vs_vwap > 0 and slope > 0
+            and bars_above > BARS_ABOVE_MIN and up_pct > UP_VOLUME_MIN):
+        return "BUY"
+    if (vs_vwap < 0 and slope < 0
+            and bars_above < BARS_ABOVE_MAX and up_pct < UP_VOLUME_MAX):
+        return "SELL"
+    return "MIXED"
+
+
 def _base() -> str:
     env = os.getenv("TRADIER_ENV", "sandbox").lower()
     root = ("https://api.tradier.com/v1" if env == "production"
@@ -158,7 +195,8 @@ def main() -> None:
     print(f"INTRADAY FLOW  {day}  ({args.interval} bars, "
           f"{datetime.now(NY):%H:%M %Z})")
     print(f"{'sym':6s} {'vwap':>9s} {'last':>9s} {'vs vwap':>8s} {'slope':>7s} "
-          f"{'above':>6s} {'up%':>5s} {'net signed':>12s} {'vol/ADV':>8s}")
+          f"{'above':>6s} {'up%':>5s} {'net signed':>12s} {'vol/ADV':>8s} "
+          f"{'label':>6s}")
     for s in syms:
         if args.bars:
             print(f"\n{s}")
@@ -170,8 +208,13 @@ def main() -> None:
         print(f"{s:6s} {r['vwap']:9.2f} {r['last']:9.2f} "
               f"{(r['last']/r['vwap']-1)*100:+7.2f}% {r['slope']:+6.2f}% "
               f"{r['above_pct']:5.0f}% {upshare:4.0f}% {r['net']:+12.0f} "
-              f"{(r['vs_adv'] if r['vs_adv'] else float('nan')):7.2f}x")
+              f"{(r['vs_adv'] if r['vs_adv'] else float('nan')):7.2f}x "
+              f"{flow_label((r['last']/r['vwap']-1)*100, upshare, r['slope'], r['above_pct']):>6s}")
 
+    print("\nBUY and SELL need FOUR readings to agree: price on the right "
+          "side of VWAP, VWAP sloping that way, more than 60% of bars on "
+          "that side, and the up-volume share past 55%. MIXED is the "
+          "honest label when they do not, and it is the common case.")
     print("\nSIGNED VOLUME AND THE VWAP LINE HAVE TO AGREE. Positive net signed "
           "volume while price sits below a flat VWAP is buyers who are not "
           "winning -- a weaker picture than either number alone suggests. "

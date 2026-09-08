@@ -291,8 +291,12 @@ active and not winning, a far weaker picture than the signed number alone. On
 `weekly_pick.py` prints a `flow` column beside every candidate and a
 **FLOW CONFLICT** marker for a long structure into a tape being sold (or puts
 into one being bought), next to the existing NEWS CONFLICT. It changes nothing
-— not EV, not the probabilities, not the ordering. `BUY`/`SELL` require price
-vs VWAP *and* up-volume share to agree; anything else is `MIXED`. On its first
+— not EV, not the probabilities, not the ordering. `BUY`/`SELL` require **four** readings to agree — price on the right side
+of VWAP, VWAP sloping that way, >60% of bars on that side, and >55%
+up-volume; anything else is `MIXED`. Tightened 2026-09-08 after SNDK
+printed `BUY` on +0.10% vs VWAP with the slope *down* and 50% of bars
+above. One function, `flow.flow_label`, imported by both the CLI and the
+endpoint — it was written twice and would have drifted (section 131). On its first
 run it caught CRWV reading news `BEARISH` against a tape at `BUY 81%` — the two
 unscored signals contradicting each other, which is why neither sizes anything
 (section 130).

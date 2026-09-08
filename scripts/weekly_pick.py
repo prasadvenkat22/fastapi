@@ -188,17 +188,15 @@ def flow_read(sym: str) -> dict:
             vs = (r["last"] / r["vwap"] - 1.0) * 100.0
             tot = r["up"] + r["dn"]
             up = (r["up"] / tot * 100.0) if tot else 50.0
-            # BUY and SELL require BOTH halves to agree. Anything else is
-            # MIXED, which is the honest label for a disagreement and is the
-            # state SNDK was in when this was written.
-            if vs > 0 and up > 55:
-                label = "BUY"
-            elif vs < 0 and up < 45:
-                label = "SELL"
-            else:
-                label = "MIXED"
-            out = dict(label=label, vs_vwap=vs, up_pct=up,
-                       slope=r.get("slope") or 0.0)
+            # ONE rule, imported. It lived here AND in screener.flow_table
+            # until 2026-09-08, which is how two callers end up disagreeing
+            # about what BUY means.
+            from flow import flow_label
+
+            slope = r.get("slope") or 0.0
+            above = r.get("above_pct") or 0.0
+            out = dict(label=flow_label(vs, up, slope, above),
+                       vs_vwap=vs, up_pct=up, slope=slope, above_pct=above)
     except Exception:
         out = {}
     _FLOW_CACHE[sym] = out

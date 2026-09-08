@@ -8535,9 +8535,15 @@ ufw and not the container: the host times out too, while 443 connects fine.
     way -- mailer.send() returns False and logs. Worth knowing before anyone
     relies on a password reset.
 
-    Fixes, in order of effort: request SMTP unblocking from the provider; or
-    point the mailer at an HTTP mail API (Resend, Postmark, SendGrid), which
-    works because 443 is open; or use the webhook below.
+    FIXED THE SAME DAY, with SendGrid's HTTP API. helpers/mailer.py now tries
+    SENDGRID_API_KEY over 443 first and falls back to SMTP, so the password
+    reset flows work again the moment a key is set. api.sendgrid.com:443 was
+    confirmed reachable from the container before the code was written.
+
+    SendGrid returns 403, not a delivery failure, when MAIL_FROM is not a
+    verified Single Sender -- so that branch is named separately in the log
+    with SendGrid's own message, because the fix (verify the sender) is
+    nothing like the fix for a 401 (wrong key).
 
 SO DELIVERY IS A WEBHOOK. ALERT_WEBHOOK_URL takes any HTTPS endpoint that
 accepts a JSON POST. The payload carries `text` AND `content` so one URL field

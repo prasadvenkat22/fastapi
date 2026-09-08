@@ -1,11 +1,30 @@
-"""Outbound email over SMTP, and the rules that keep it from breaking requests.
+"""Outbound email, and the rules that keep it from breaking requests.
 
-Nothing in this codebase could send mail before this, which is why the only
-recovery path for a forgotten password was an admin issuing a temporary one
-by hand. Written against plain SMTP rather than a provider SDK so Gmail,
-SendGrid, Mailgun, SES and Postmark are all a change of environment variables
-rather than a change of code — and so it adds no dependency, since smtplib is
-in the standard library.
+TWO TRANSPORTS. SendGrid's HTTP API is tried first when SENDGRID_API_KEY is
+set; SMTP is the fallback. That order is not a preference, it is a necessity on
+this host:
+
+    ufw:  default allow (outgoing)
+    host -> smtp.gmail.com:587   TIMEOUT
+    host -> smtp.gmail.com:465   TIMEOUT
+    host -> api.sendgrid.com:443 OPEN
+
+The provider blocks SMTP egress, which DigitalOcean does by default, so every
+message this module has ever tried to send from production has failed --
+silently, by design, because send() returns False rather than raising. That
+included forgot-password and reset-password. An HTTP API on 443 is the only
+path off this box (section 133).
+
+SENDGRID NEEDS A VERIFIED SENDER. MAIL_FROM must be a verified Single Sender or
+sit on an authenticated domain, or the API returns 403 and nothing arrives. The
+error is logged with SendGrid's own message, which names the problem exactly.
+
+Nothing in this codebase could send mail before this module, which is why the
+only recovery path for a forgotten password was an admin issuing a temporary
+one by hand. The SMTP path is still written against plain smtplib rather than a
+provider SDK, so Gmail, Mailgun, SES and Postmark remain a change of
+environment variables; the SendGrid path uses httpx, which the project already
+depends on, so neither adds a dependency.
 
 Three rules, and the first two matter more than delivery does.
 
@@ -14,7 +33,7 @@ password that was successfully changed must not report failure because a mail
 server was briefly unreachable — the change already happened, and telling the
 user it did not is worse than a missing notification.
 
-UNCONFIGURED IS A SUPPORTED STATE, not an error. With no SMTP_HOST set,
+UNCONFIGURED IS A SUPPORTED STATE, not an error. With neither transport set,
 send() logs what it would have sent and returns False. The app runs, the
 endpoints work, and the absence is visible in the log rather than as a
 stack trace on a request nobody could have anticipated.
@@ -31,6 +50,11 @@ from email.message import EmailMessage
 from email.utils import formataddr
 
 logger = logging.getLogger(__name__)
+
+# HTTP transport, tried first. Port 443, so it survives an SMTP block.
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
+SENDGRID_URL = os.getenv("SENDGRID_URL", "https://api.sendgrid.com/v3/mail/send")
+SENDGRID_TIMEOUT = float(os.getenv("SENDGRID_TIMEOUT", "10"))
 
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
@@ -50,7 +74,53 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
 
 
 def is_configured() -> bool:
-    return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+    """Either transport counts."""
+    return bool(SENDGRID_API_KEY) or bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+
+
+def _send_sendgrid(to: str, subject: str, body: str) -> bool:
+    """POST one message to SendGrid. 202 Accepted is the success code.
+
+    Never raises and never logs `body` -- a reset link is a credential for the
+    thirty minutes it lives, and the same rule applies whichever transport
+    carries it.
+    """
+    try:
+        import httpx
+
+        r = httpx.post(
+            SENDGRID_URL,
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}",
+                     "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": to}]}],
+                "from": {"email": MAIL_FROM, "name": MAIL_FROM_NAME},
+                "subject": subject,
+                "content": [{"type": "text/plain", "value": body}],
+            },
+            timeout=SENDGRID_TIMEOUT,
+        )
+    except Exception as exc:  # noqa: BLE001 — no mail failure may reach the caller
+        logger.error("Email to %s (%r) failed: %s: %s", to, subject,
+                     type(exc).__name__, exc)
+        return False
+
+    if r.status_code == 202:
+        logger.info("Email sent to %s (%r) via SendGrid.", to, subject)
+        return True
+    if r.status_code in (401, 403):
+        # The two failures worth naming, because the fix differs and neither
+        # is visible from a generic status code.
+        logger.error(
+            "Email to %s rejected by SendGrid (%d). 401 means SENDGRID_API_KEY "
+            "is wrong; 403 almost always means MAIL_FROM (%s) is not a "
+            "verified Single Sender and its domain is not authenticated. "
+            "SendGrid said: %s", to, r.status_code, MAIL_FROM, r.text[:300],
+        )
+        return False
+    logger.error("Email to %s (%r) failed: SendGrid returned %d: %s",
+                 to, subject, r.status_code, r.text[:300])
+    return False
 
 
 def send(to: str, subject: str, body: str) -> bool:
@@ -61,10 +131,14 @@ def send(to: str, subject: str, body: str) -> bool:
     """
     if not is_configured():
         logger.warning(
-            "Email NOT sent to %s (%r): SMTP is not configured. Set SMTP_HOST, "
-            "SMTP_USER and SMTP_PASSWORD to turn this on.", to, subject,
+            "Email NOT sent to %s (%r): no transport configured. Set "
+            "SENDGRID_API_KEY (works on this host), or SMTP_HOST, SMTP_USER "
+            "and SMTP_PASSWORD (blocked by the provider here).", to, subject,
         )
         return False
+
+    if SENDGRID_API_KEY:
+        return _send_sendgrid(to, subject, body)
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -95,12 +169,22 @@ def send(to: str, subject: str, body: str) -> bool:
             "be created.", to,
         )
         return False
+    except OSError as exc:
+        # Errno 101 on this host: the provider blocks SMTP egress. Named
+        # because the generic branch below reads as a transient network blip
+        # and this one never recovers.
+        logger.error(
+            "Email to %s (%r) failed at the socket: %s. On this droplet ports "
+            "587 and 465 are blocked by the provider -- set SENDGRID_API_KEY "
+            "to send over 443 instead.", to, subject, exc,
+        )
+        return False
     except Exception as exc:  # noqa: BLE001 — no mail failure may reach the caller
         logger.error("Email to %s (%r) failed: %s: %s", to, subject,
                      type(exc).__name__, exc)
         return False
 
-    logger.info("Email sent to %s (%r).", to, subject)
+    logger.info("Email sent to %s (%r) via SMTP.", to, subject)
     return True
 
 

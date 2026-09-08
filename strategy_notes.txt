@@ -8324,3 +8324,38 @@ helps a structure that expires in three days.
 
 OBSERVATIONAL, both of them. Section 22's rule: recorded beside the decision,
 gating nothing.
+
+
+130. THE SCREENER NOW SHOWS THE TAPE, AND STILL DOES NOT USE IT  (2026-09-08)
+--------------------------------------------------------------------------------
+
+weekly_pick.py prints a `flow` column beside every candidate: the label and the
+up-volume share behind it. It changes NOTHING -- not EV, not the three
+probabilities, not the ordering, not the width chosen. Section 22's rule, the
+same one keeping crude out of the 0DTE gates and the macro verdict inert.
+
+    BUY and SELL require BOTH halves to agree -- price against VWAP AND the
+    up-volume share. Anything else is MIXED. That is not a formatting choice:
+    signed volume alone called SNDK bought on 2026-09-08 at 74% up-volume with
+    price BELOW a flat VWAP, and the pair is what separates that from 09-04
+    when VWAP rose 2.56% and no bar closed beneath it (section 129).
+
+FLOW CONFLICT, alongside the existing NEWS CONFLICT. A long call structure into
+a tape being sold, or puts into a tape being bought, gets marked. It is an
+observation about NOW, not a forecast: EV is a three-to-five day distribution
+and this is what is happening while you decide whether to pay the ask.
+
+It found a disagreement on its first run. CRWV on 2026-09-08:
+
+    news BEARISH   tape BUY 81%   -> every put candidate flagged FLOW CONFLICT
+
+The two unscored signals in the book contradict each other on that name. That
+is worth seeing, and it is precisely why neither is allowed to size anything.
+
+A SEPARATE OBSERVATION FROM THE SAME RUNS, WORTH RECORDING. Ranked by
+probability, every candidate on the board today has `need` between 88% and 100%
+and NEGATIVE EV -- AVGO 345/358 asks 1250 to make nothing at all, break-even
+100.0%. The screener is reaching for 1-3 DTE deep-ITM structures where the
+reward has already been spent. That is the mirror of the deep-OTM lottery
+tickets `--by evpct` surfaced in section 120: both ends of the ranking produce
+structures nobody should take, and the middle is where the trade is.

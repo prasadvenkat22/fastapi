@@ -36,6 +36,7 @@ import numpy as np
 import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from trading_engine.greeks import leg_greeks, spread_greeks
 
@@ -151,6 +152,76 @@ def news_verdict(symbol: str):
         return None
 
 
+
+
+# INTRADAY FLOW, SHOWN AND NOT USED. The screener prints today's tape reading
+# beside every candidate and lets it change NOTHING -- not the EV, not the
+# probabilities, not the ranking. Section 22's rule, the same one that keeps
+# crude and the macro verdict out of the 0DTE gates: a term nobody has scored
+# against outcomes is recorded next to the decision, never inside it.
+#
+# It earns its place on the page because it answers a question the EV columns
+# cannot: EV is a four-day distribution, and this is what the tape is doing
+# right now, while you are deciding whether to pay the ask.
+#
+# READ IT AS TWO NUMBERS THAT MUST AGREE. Signed volume alone called SNDK
+# bought on 2026-09-08 (74% up-volume, +1.28m net) with price BELOW a flat
+# VWAP -- buyers who were not winning. Only the pair separates that from
+# 2026-09-04, when VWAP rose 2.56% and no bar closed beneath it (section 129).
+_FLOW_CACHE: dict = {}
+
+
+def flow_read(sym: str) -> dict:
+    """{label, vs_vwap, up_pct} for today's tape, or {} when unavailable."""
+    if sym in _FLOW_CACHE:
+        return _FLOW_CACHE[sym]
+    out: dict = {}
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo
+
+        from flow import analyse
+
+        r = analyse(sym, _dt.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
+                    "5min", False)
+        if r and r.get("vwap"):
+            vs = (r["last"] / r["vwap"] - 1.0) * 100.0
+            tot = r["up"] + r["dn"]
+            up = (r["up"] / tot * 100.0) if tot else 50.0
+            # BUY and SELL require BOTH halves to agree. Anything else is
+            # MIXED, which is the honest label for a disagreement and is the
+            # state SNDK was in when this was written.
+            if vs > 0 and up > 55:
+                label = "BUY"
+            elif vs < 0 and up < 45:
+                label = "SELL"
+            else:
+                label = "MIXED"
+            out = dict(label=label, vs_vwap=vs, up_pct=up,
+                       slope=r.get("slope") or 0.0)
+    except Exception:
+        out = {}
+    _FLOW_CACHE[sym] = out
+    return out
+
+
+def flow_conflict(side: str, flow: dict) -> "str | None":
+    """A long structure into a tape being sold, or the reverse.
+
+    NOT a forecast and not a gate -- an observation that the thing you are
+    about to buy is being sold right now, which is worth seeing before you pay
+    the ask rather than after.
+    """
+    if not flow:
+        return None
+    lab = flow.get("label")
+    if side == "call" and lab == "SELL":
+        return "buying calls into a tape being sold"
+    if side == "put" and lab == "BUY":
+        return "buying puts into a tape being bought"
+    return None
+
+
 def monte_carlo_terminal(spot: float, atr: float, days: int, seed: int = 7):
     """Terminal prices from a driftless random walk calibrated to ATR.
 
@@ -220,6 +291,7 @@ def evaluate(sym, side):
         # above 1.0 from the model cannot extrapolate past EVraw.
         news_w = max(-1.0, min(1.0, NEWS_DRIFT_WEIGHT.get(nv[0], 0.0) * nv[1]))
 
+    fl = flow_read(sym)
     mc = monte_carlo_terminal(spot, a14, fwd_days)
     chain = tk.option_chain(exp)
     calls = side == "call"
@@ -298,6 +370,7 @@ def evaluate(sym, side):
                 iv=atm_iv, exp=exp, days=fwd_days,
                 news=(nv[0] if nv else None), news_w=news_w,
                 conflict=conflict_for(side, nv[0] if nv else None),
+                flow=fl, flow_conflict=flow_conflict(side, fl),
                 ev_dem=float(dm.mean()) * 100, ev_raw=float(raw.mean()) * 100,
                 ev_adj=(float(dm.mean()) + news_w * (float(raw.mean()) - float(dm.mean()))) * 100,
                 pwin=float((dm > 0).mean()), need=cost / w,
@@ -316,6 +389,16 @@ def evaluate(sym, side):
                 **g))
     return out, dict(spot=spot, atr=a14, rv=rv, iv=atm_iv, exp=exp, days=fwd_days,
                      strikes=len(ks))
+
+
+
+
+def _flow_cell(r: dict) -> str:
+    """Compact tape reading: the label and the up-volume share behind it."""
+    f = r.get("flow") or {}
+    if not f:
+        return "-"
+    return f"{f['label']} {f['up_pct']:.0f}%"
 
 
 def main():
@@ -374,7 +457,7 @@ def main():
     print(f"{'sym':6s} {'strikes':>14s} {'ITMatr':>7s} {'risk':>7s} {'reward':>7s} "
           f"{'R:R':>7s} {'Pimp':>6s} {'Phist':>6s} {'Pmc':>6s} {'Pwin':>6s} "
           f"{'need':>6s} {'edge':>7s} {'EV$':>8s} {'EVadj':>8s} {'news':>13s} "
-          f"{'drift':>8s}")
+          f"{'flow':>13s}")
     key = {"ev": lambda x: -x["ev_dem"], "evpct": lambda x: -x["ev_pct"],
            "prob": lambda x: -x["pwin"]}[args.by]
     for r in sorted(rows, key=key)[:args.top]:
@@ -386,7 +469,15 @@ def main():
               f"{(r['pwin']-r['need'])*100:+6.1f}p "
               f"{r['ev_dem']:+8.1f} {r['ev_adj']:+8.1f} "
               f"{(r['news'] or '-'):>13s}"
-              f"{'  <-- CONFLICT' if r.get('conflict') else ''}")
+              f"{_flow_cell(r):>13s}"
+              f"{'  <-- NEWS CONFLICT' if r.get('conflict') else ''}"
+              f"{'  <-- FLOW CONFLICT' if r.get('flow_conflict') else ''}")
+    print("\nflow is TODAY'S TAPE and changes nothing above it -- "
+          "not the EV, not the probabilities, not the order. BUY and SELL "
+          "require price-vs-VWAP and up-volume share to AGREE; MIXED means "
+          "they do not, which on 2026-09-08 was SNDK at 74% up-volume with "
+          "price below a flat VWAP. An unscored term goes beside the "
+          "decision, never inside it (sections 22, 129).")
     print("\nrisk/reward are per CONTRACT. need = cost/width = the break-even "
           "win rate. R:R sizes the WIN and says nothing about the ODDS, which "
           "is why a 1:5.78 payoff can still lose money.")

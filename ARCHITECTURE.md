@@ -288,6 +288,15 @@ active and not winning, a far weaker picture than the signed number alone. On
 2026-09-08. OI is published once daily, so `oi_flow.py` compares one snapshot
 **per date**.
 
+`weekly_pick.py` prints a `flow` column beside every candidate and a
+**FLOW CONFLICT** marker for a long structure into a tape being sold (or puts
+into one being bought), next to the existing NEWS CONFLICT. It changes nothing
+— not EV, not the probabilities, not the ordering. `BUY`/`SELL` require price
+vs VWAP *and* up-volume share to agree; anything else is `MIXED`. On its first
+run it caught CRWV reading news `BEARISH` against a tape at `BUY 81%` — the two
+unscored signals contradicting each other, which is why neither sizes anything
+(section 130).
+
 Out of reach, and worth not re-proposing: block and dark-pool prints (paid
 feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 
@@ -298,7 +307,7 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 | script | question |
 |---|---|
 | `iv_rv_screen.py` | where are options cheap vs realised vol |
-| `weekly_pick.py` | which vertical has the best drift-corrected EV |
+| `weekly_pick.py` | which vertical has the best drift-corrected EV; prints news and tape flow beside each candidate, using neither |
 | `delta_calibration.py` | is market delta a well-calibrated probability |
 | `xgb_probability.py` | does a learned model beat it (no) |
 | `xgb_sentiment.py` | does adding sentiment beat the same model without it (no) |

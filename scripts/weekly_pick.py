@@ -123,14 +123,35 @@ NEWS_DRIFT_WEIGHT = {
 # into mechanical buying is a bad structure. The guard fires on VERY_* only,
 # because an ordinary read against a position is noise at this sample size and
 # a flag that fires constantly stops being read (section 120).
-CONFLICT = {
-    ("call", "VERY_BEARISH"): "buying calls into a very bearish catalyst",
-    ("put", "VERY_BULLISH"): "buying puts into a very bullish catalyst",
-}
+# The old (side, verdict) table lived here until credit structures arrived and
+# made `side` the wrong key: a call CREDIT spread is bearish, and a table keyed
+# on the option type would have cleared it against very bullish news. See
+# direction() and conflict_for().
 
 
-def conflict_for(side: str, verdict: "str | None") -> "str | None":
-    return CONFLICT.get((side, verdict or "")) if verdict else None
+def direction(side: str, structure: str) -> str:
+    """Which way the STRUCTURE is exposed, which is not the option type.
+
+    A call DEBIT spread is bullish; a call CREDIT spread is bearish -- you
+    sold the upside. Every guard below keys on this rather than on `side`,
+    because keying on the option type would have flagged a bear call spread
+    for conflicting with bearish news, i.e. exactly backwards.
+    """
+    if structure == "credit":
+        return "bearish" if side == "call" else "bullish"
+    return "bullish" if side == "call" else "bearish"
+
+
+def conflict_for(side: str, verdict: "str | None",
+                 structure: str = "debit") -> "str | None":
+    if not verdict:
+        return None
+    d = direction(side, structure)
+    if d == "bullish" and verdict == "VERY_BEARISH":
+        return f"{structure} {side} spread is BULLISH, into a very bearish catalyst"
+    if d == "bearish" and verdict == "VERY_BULLISH":
+        return f"{structure} {side} spread is BEARISH, into a very bullish catalyst"
+    return None
 
 
 def news_verdict(symbol: str):
@@ -203,7 +224,7 @@ def flow_read(sym: str) -> dict:
     return out
 
 
-def flow_conflict(side: str, flow: dict) -> "str | None":
+def flow_conflict(side: str, flow: dict, structure: str = "debit") -> "str | None":
     """A long structure into a tape being sold, or the reverse.
 
     NOT a forecast and not a gate -- an observation that the thing you are
@@ -213,10 +234,11 @@ def flow_conflict(side: str, flow: dict) -> "str | None":
     if not flow:
         return None
     lab = flow.get("label")
-    if side == "call" and lab == "SELL":
-        return "buying calls into a tape being sold"
-    if side == "put" and lab == "BUY":
-        return "buying puts into a tape being bought"
+    d = direction(side, structure)
+    if d == "bullish" and lab == "SELL":
+        return "bullish structure into a tape being sold"
+    if d == "bearish" and lab == "BUY":
+        return "bearish structure into a tape being bought"
     return None
 
 
@@ -255,7 +277,7 @@ def usable(row):
     return b, a, mid, float(row.get("impliedVolatility") or 0)
 
 
-def evaluate(sym, side):
+def evaluate(sym, side, structure: str = "debit"):
     tk = yf.Ticker(sym)
     h = tk.history(period=HISTORY, interval="1d")
     if len(h) < 120:
@@ -311,7 +333,29 @@ def evaluate(sym, side):
             w = hi - lo
             if not (0.02 * spot <= w <= 0.12 * spot):
                 continue
-            if calls:                      # long lo, short hi -- buy ask, sell bid
+            # CREDIT AND DEBIT SHARE EVERY COLUMN BELOW because `cost` is set
+            # to the MAX RISK either way. For a debit that is what you paid;
+            # for a credit it is width minus the credit received. With that
+            # one substitution need = cost/w, rr = (w-cost)/cost and
+            # ev_pct = EV/cost all stay correct without a second code path,
+            # and `edge` -- Pwin minus the break-even win rate -- keeps its
+            # meaning across both. A credit spread's break-even win rate is
+            # 1 - credit/w, which is exactly (w - credit)/w.
+            if structure == "credit":
+                if calls:                  # BEAR CALL: short lo, long hi
+                    credit = q[lo][0] - q[hi][1]
+                    long_k, short_k, ivl, ivs_ = hi, lo, q[hi][3], q[lo][3]
+                    payoff = lambda p: credit - np.clip(p - lo, 0, w)
+                    room = (lo - spot) / a14     # cushion to the short strike
+                else:                      # BULL PUT: short hi, long lo
+                    credit = q[hi][0] - q[lo][1]
+                    long_k, short_k, ivl, ivs_ = lo, hi, q[lo][3], q[hi][3]
+                    payoff = lambda p: credit - np.clip(hi - p, 0, w)
+                    room = (spot - hi) / a14
+                if credit <= 0.05 or credit >= w:
+                    continue
+                cost = w - credit          # MAX RISK, the common denominator
+            elif calls:                    # long lo, short hi -- buy ask, sell bid
                 cost = q[lo][1] - q[hi][0]
                 long_k, short_k, ivl, ivs_ = lo, hi, q[lo][3], q[hi][3]
                 payoff = lambda p: np.clip(p - lo, 0, w) - cost
@@ -333,7 +377,15 @@ def evaluate(sym, side):
             # it overstates both tails. P comes from the name's own
             # drift-removed move distribution; the strikes decide where the
             # bands fall inside it, which is what ITM depth actually controls.
-            if calls:
+            # KEYED ON DIRECTION, NOT ON THE OPTION TYPE. A bull put credit
+            # spread makes its maximum ABOVE the short strike, exactly like a
+            # bull call debit spread does -- and a bear call credit spread
+            # makes its maximum below. Branching on `calls` here would have
+            # inverted every probability on the credit side while leaving the
+            # payoff correct, which reconciles to nothing and is the hardest
+            # class of bug to see in a table.
+            bullish = direction(side, structure) == "bullish"
+            if bullish:
                 p_max = float((prices >= hi).mean())
                 p_min = float((prices <= lo).mean())
             else:
@@ -342,7 +394,7 @@ def evaluate(sym, side):
             p_mid = max(0.0, 1.0 - p_max - p_min)
             if mc is None:
                 mc_max = float("nan")
-            elif calls:
+            elif bullish:
                 mc_max = float((mc >= hi).mean())
             else:
                 mc_max = float((mc <= lo).mean())
@@ -363,12 +415,22 @@ def evaluate(sym, side):
             # empirical numbers, not a replacement for them.
             dl = abs(leg_greeks(spot, long_k, fwd_days / 252.0, ivl, calls)["delta"])
             dh = abs(leg_greeks(spot, short_k, fwd_days / 252.0, ivs_, calls)["delta"])
+            # THE CHAIN'S OWN P(max profit). For a debit that is the short
+            # leg's delta -- the structure pays its maximum when that strike
+            # finishes in the money. For a CREDIT it is the complement: the
+            # maximum is kept when the short strike is NOT breached. Storing
+            # the probability rather than the raw delta keeps the Pimp column
+            # meaning one thing in both tables.
+            p_imp = (1.0 - dh) if structure == "credit" else dh
             out.append(dict(
                 sym=sym, lo=lo, hi=hi, w=w, cost=cost, spot=spot, atr=a14, rv=rv,
                 iv=atm_iv, exp=exp, days=fwd_days,
                 news=(nv[0] if nv else None), news_w=news_w,
-                conflict=conflict_for(side, nv[0] if nv else None),
-                flow=fl, flow_conflict=flow_conflict(side, fl),
+                structure=structure, direction=direction(side, structure),
+                credit=(w - cost) if structure == "credit" else None,
+                conflict=conflict_for(side, nv[0] if nv else None, structure),
+                flow=fl, flow_conflict=flow_conflict(side, fl, structure),
+                p_imp=p_imp,
                 ev_dem=float(dm.mean()) * 100, ev_raw=float(raw.mean()) * 100,
                 ev_adj=(float(dm.mean()) + news_w * (float(raw.mean()) - float(dm.mean()))) * 100,
                 pwin=float((dm > 0).mean()), need=cost / w,
@@ -380,7 +442,7 @@ def evaluate(sym, side):
                 # they move against each other along a frontier rather than
                 # one being simply better. In ATR, not dollars, so it means
                 # the same on a 1740 stock and a 230 one.
-                itm=((spot - lo) / a14) if calls else ((hi - spot) / a14),
+                itm=((spot - lo) / a14) if bullish else ((hi - spot) / a14),
                 # EV as a percent of capital at risk. A dollar EV is not
                 # comparable between a 258 risk and a 2090 one; this is.
                 ev_pct=(float(dm.mean()) / cost * 100.0),
@@ -421,7 +483,8 @@ SORT_LABEL = {
 
 
 def rank(symbols, side: str, by: str = "evpct", top: int = 10,
-         rr_min: float = 0.0, rr_max: float = 0.0) -> dict:
+         rr_min: float = 0.0, rr_max: float = 0.0,
+         structure: str = "debit", per_symbol: int = 0) -> dict:
     """The screener as a CALLABLE, so the CLI and the HTTP endpoint cannot
     drift apart. Returns {rows, meta, warnings} with the rows already filtered
     and sorted -- everything main() prints, minus the printing.
@@ -434,7 +497,7 @@ def rank(symbols, side: str, by: str = "evpct", top: int = 10,
     rows, meta, warnings = [], [], []
     for sym in [x.strip().upper() for x in symbols if str(x).strip()]:
         try:
-            r, m = evaluate(sym, side)
+            r, m = evaluate(sym, side, structure)
             if m:
                 m = dict(m, symbol=sym, candidates=len(r))
                 meta.append(m)
@@ -445,10 +508,26 @@ def rank(symbols, side: str, by: str = "evpct", top: int = 10,
         rows = [r for r in rows if r["rr"] >= rr_min]
     if rr_max > 0:
         rows = [r for r in rows if r["rr"] <= rr_max]
-    ranked = sorted(rows, key=SORT_KEY[by])[:top]
+    ordered = sorted(rows, key=SORT_KEY[by])
+    if per_symbol > 0:
+        # ONE NAME OTHERWISE TAKES THE WHOLE PAGE. Measured 2026-09-08: a
+        # screen over CRWV, AVGO and SNDK returned twelve CRWV rows and
+        # nothing else, because a single favourable IV/RV lifts every strike
+        # on that name above every strike on the others. A cross-name screen
+        # that cannot show the other names is not a cross-name screen.
+        seen: dict = {}
+        capped = []
+        for r in ordered:
+            n = seen.get(r["sym"], 0)
+            if n >= per_symbol:
+                continue
+            seen[r["sym"]] = n + 1
+            capped.append(r)
+        ordered = capped
+    ranked = ordered[:top]
     return {"rows": ranked, "meta": meta, "warnings": warnings,
             "sort": by, "sort_label": SORT_LABEL[by], "side": side,
-            "considered": len(rows)}
+            "structure": structure, "considered": len(rows)}
 
 
 def _flow_cell(r: dict) -> str:
@@ -463,6 +542,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbols", required=True)
     ap.add_argument("--side", choices=("call", "put"), required=True)
+    ap.add_argument("--structure", choices=("debit", "credit"), default="debit",
+                    help="debit = you BUY the spread, credit = you SELL it. "
+                         "The direction flips: a call CREDIT spread is "
+                         "bearish, a put CREDIT spread is bullish.")
+    ap.add_argument("--per-symbol", type=int, default=0,
+                    help="at most this many rows per name, so one symbol "
+                         "cannot take the whole page")
     ap.add_argument("--top", type=int, default=5)
     ap.add_argument("--rr-min", type=float, default=0.0,
                     help="only structures paying at least this reward per unit "
@@ -483,7 +569,7 @@ def main():
     rows = []
     for s in [x.strip().upper() for x in args.symbols.split(",") if x.strip()]:
         try:
-            r, meta = evaluate(s, args.side)
+            r, meta = evaluate(s, args.side, args.structure)
             if meta:
                 ivrv = meta["iv"] / meta["rv"] if meta["rv"] else float("nan")
                 print(f"{s:6s} spot {meta['spot']:8.2f}  ATR {meta['atr']:7.2f}  "
@@ -511,16 +597,28 @@ def main():
               "may still be worth it, but not by accident.")
 
     label = SORT_LABEL[args.by]
-    print(f"\n=== {args.side.upper()} DEBIT SPREADS — ranked by {label}, "
-          f"priced at ask/bid ===")
+    dirn = direction(args.side, args.structure).upper()
+    fills = ("bid/ask -- short leg at the BID, long leg at the ASK"
+             if args.structure == "credit" else "ask/bid")
+    print(f"\n=== {args.side.upper()} {args.structure.upper()} SPREADS "
+          f"({dirn}) — ranked by {label}, priced at {fills} ===")
     print(f"{'sym':6s} {'strikes':>14s} {'ITMatr':>7s} {'risk':>7s} {'reward':>7s} "
           f"{'R:R':>7s} {'Pimp':>6s} {'Phist':>6s} {'Pmc':>6s} {'Pwin':>6s} "
           f"{'need':>6s} {'edge':>7s} {'EV$':>8s} {'EVadj':>8s} {'news':>13s} "
           f"{'flow':>13s}")
-    for r in sorted(rows, key=SORT_KEY[args.by])[:args.top]:
+    ordered = sorted(rows, key=SORT_KEY[args.by])
+    if args.per_symbol > 0:
+        seen, capped = {}, []
+        for r in ordered:
+            if seen.get(r["sym"], 0) >= args.per_symbol:
+                continue
+            seen[r["sym"]] = seen.get(r["sym"], 0) + 1
+            capped.append(r)
+        ordered = capped
+    for r in ordered[:args.top]:
         print(f"{r['sym']:6s} {r['lo']:6.0f}/{r['hi']:<7.0f} {r['itm']:+7.2f} "
               f"{r['cost']*100:7.0f} {(r['w']-r['cost'])*100:7.0f} "
-              f"1:{r['rr']:<5.2f} {r['d_short']*100:5.1f}% {r['p_max']*100:5.1f}% "
+              f"1:{r['rr']:<5.2f} {r['p_imp']*100:5.1f}% {r['p_max']*100:5.1f}% "
               f"{r['mc_max']*100:5.1f}% {r['pwin']*100:5.1f}% "
               f"{r['need']*100:5.1f}% "
               f"{(r['pwin']-r['need'])*100:+6.1f}p "
@@ -535,6 +633,11 @@ def main():
           "they do not, which on 2026-09-08 was SNDK at 74% up-volume with "
           "price below a flat VWAP. An unscored term goes beside the "
           "decision, never inside it (sections 22, 129).")
+    if args.structure == "credit":
+        print("\nCREDIT: risk is width MINUS the credit, reward is the "
+              "credit itself, and need is 1 - credit/width. Those three "
+              "substitutions are why every other column means the same "
+              "thing in both tables, edge included.")
     print("\nrisk/reward are per CONTRACT. need = cost/width = the break-even "
           "win rate. R:R sizes the WIN and says nothing about the ODDS, which "
           "is why a 1:5.78 payoff can still lose money.")

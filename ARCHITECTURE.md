@@ -309,7 +309,7 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 ## HTTP: the screener is callable
 
 ```
-GET /trading/screener/verticals?symbols=CRWV,AVGO&side=call&by=edge&top=10
+GET /trading/screener/verticals?symbols=CRWV,AVGO&side=call&structure=debit&by=edge&per_symbol=2
 GET /trading/screener/flow?symbols=CRWV,AVGO,SNDK
 ```
 
@@ -317,7 +317,20 @@ Behind `require_trading`, both GET, neither trades. Capped at 12 symbols — eac
 costs a daily-bar, chain and intraday fetch against one production worker.
 
 `trading_engine/screener.py` is an **import shim** onto `scripts/weekly_pick.py`,
-so the API and CLI cannot drift. `by` accepts `edge|ev|evpct|prob` and
+so the API and CLI cannot drift. `structure=debit` is the **buy** list, `structure=credit` the **sell** list —
+one ranking across both, because `cost` is set to max risk either way
+(`width − credit` for a credit), so `need`, `rr` and `edge` keep their meaning.
+
+**The direction flips with the structure and this is the trap:** a call *debit*
+spread is bullish, a call *credit* spread is **bearish**. The news guard, the
+flow guard and the P(max) branch all keyed on `side` and would have been exactly
+inverted; they now key on `direction(side, structure)`, and every row carries an
+explicit `direction` field (section 132). `p_imp` is `1 − delta` for credits.
+
+`per_symbol` caps rows per name — without it a screen over CRWV, AVGO and SNDK
+returned twelve CRWV rows and nothing else.
+
+`by` accepts `edge|ev|evpct|prob` and
 **defaults to `edge`** (`Pwin − need`): the other three each top their own
 ranking with a structure nobody should take — `prob` finds deep-ITM verticals
 whose reward is spent (`need` 100%, EV −62.8), `evpct` finds 1:39 lottery

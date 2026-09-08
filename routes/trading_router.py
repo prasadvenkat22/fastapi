@@ -371,6 +371,13 @@ async def toggle_kill_switch(action: str = Query(..., pattern="^(ACTIVATE|DEACTI
 MAX_SCREEN_SYMBOLS = 12
 
 
+def _direction(side: str, structure: str) -> str:
+    """Mirrors weekly_pick.direction so the envelope states it once."""
+    if structure == "credit":
+        return "bearish" if side == "call" else "bullish"
+    return "bullish" if side == "call" else "bearish"
+
+
 def _symbols(raw: str) -> list:
     syms = [s.strip().upper() for s in raw.split(",") if s.strip()]
     if not syms:
@@ -387,12 +394,30 @@ def _symbols(raw: str) -> list:
 async def screen_verticals(
     symbols: str = Query(..., description="comma separated, e.g. SNDK,NVDA,CRWV"),
     side: str = Query("call", pattern="^(call|put)$"),
+    structure: str = Query("debit", pattern="^(debit|credit)$"),
     by: str = Query("edge", pattern="^(edge|ev|evpct|prob)$"),
     top: int = Query(10, ge=1, le=100),
+    per_symbol: int = Query(0, ge=0, le=50),
     rr_min: float = Query(0.0, ge=0.0),
     rr_max: float = Query(0.0, ge=0.0),
 ):
-    """Rank debit verticals. Same maths as scripts/weekly_pick.py, one import.
+    """Rank verticals, bought or sold. Same maths as weekly_pick.py, one import.
+
+    `structure=debit` is the BUY list, `structure=credit` the SELL list.
+    THE DIRECTION FLIPS WITH IT, which is the thing to get right in a UI: a
+    call DEBIT spread is bullish, a call CREDIT spread is bearish. Every row
+    carries an explicit `direction` field so a client never has to infer it
+    from `side`, and the news and flow conflict flags key on that field rather
+    than on the option type.
+
+    Credit rows report `risk` as width minus the credit and `reward` as the
+    credit, so `rr`, `need` and `edge` mean the same thing in both lists and
+    one sort works across them.
+
+    `per_symbol` caps rows per name. Without it one symbol takes the page: a
+    screen over CRWV, AVGO and SNDK on 2026-09-08 returned twelve CRWV rows
+    and nothing else, because a single favourable IV/RV lifts every strike on
+    that name above every strike on the others.
 
     `by` defaults to EDGE rather than the CLI's evpct, because a UI shows the
     first row hardest and the other three sorts each put a structure nobody
@@ -409,7 +434,8 @@ async def screen_verticals(
 
     try:
         out = rank(_symbols(symbols), side, by=by, top=top,
-                   rr_min=rr_min, rr_max=rr_max)
+                   rr_min=rr_min, rr_max=rr_max,
+                   structure=structure, per_symbol=per_symbol)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
@@ -419,13 +445,15 @@ async def screen_verticals(
     for r in out["rows"]:
         flow = r.get("flow") or {}
         rows.append({
-            "symbol": r["sym"], "long_strike": r["lo"], "short_strike": r["hi"],
+            "symbol": r["sym"], "lower_strike": r["lo"], "upper_strike": r["hi"],
+            "structure": r.get("structure"), "direction": r.get("direction"),
+            "credit": (round(r["credit"], 4) if r.get("credit") else None),
             "width": r["w"], "expiry": r["exp"], "days": r["days"],
             "itm_atr": round(r["itm"], 4),
             "risk": round(r["cost"] * 100, 2),
             "reward": round((r["w"] - r["cost"]) * 100, 2),
             "rr": round(r["rr"], 4),
-            "p_imp": round(r["d_short"], 4), "p_hist": round(r["p_max"], 4),
+            "p_imp": round(r["p_imp"], 4), "p_hist": round(r["p_max"], 4),
             "p_mc": round(r["mc_max"], 4), "p_win": round(r["pwin"], 4),
             "need": round(r["need"], 4),
             "edge": round(r["pwin"] - r["need"], 4),
@@ -438,10 +466,13 @@ async def screen_verticals(
             "flow_conflict": r.get("flow_conflict"),
         })
     return {
-        "side": out["side"], "sort": out["sort"],
+        "side": out["side"], "structure": out["structure"],
+        "direction": _direction(side, structure),
+        "sort": out["sort"],
         "sort_label": out["sort_label"],
         "considered": out["considered"], "returned": len(rows),
         "sorts_available": ["edge", "ev", "evpct", "prob"],
+        "structures_available": ["debit", "credit"],
         "underlyings": out["meta"], "warnings": out["warnings"],
         "rows": rows,
         "note": ("news and flow are shown, not used. Ranking is EV and "

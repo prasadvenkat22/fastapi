@@ -8447,3 +8447,57 @@ STATED, NOT FITTED. 60 and 55 are round numbers chosen to demand agreement.
 They were not tuned against returns, nothing here has been scored against
 outcomes, and section 127's rule stands: an A/B smaller than the re-run wobble
 is not a result.
+
+
+132. ONE ENDPOINT, BOTH LISTS: CREDIT SPREADS AND THE DIRECTION TRAP
+     (2026-09-08)
+--------------------------------------------------------------------------------
+
+    GET /trading/screener/verticals?symbols=..&side=call&structure=credit&by=edge
+
+structure=debit is the BUY list, structure=credit the SELL list, one ranking
+across both. Until today the screener could only price spreads you buy: `side`
+chose the option TYPE, not the direction of the trade, and the credit side
+existed nowhere except weekly_shadow.py's fixed 0.12-delta pick at 15:45.
+
+ONE SUBSTITUTION MAKES EVERY COLUMN WORK IN BOTH TABLES. `cost` is set to the
+MAX RISK either way -- what you paid for a debit, width minus the credit for a
+credit. With that:
+
+    need = cost / w            debit: cost/w      credit: 1 - credit/w
+    rr   = (w - cost) / cost   debit: reward/risk credit: credit/(w - credit)
+    edge = Pwin - need
+
+all keep their meaning, and `edge` sorts across both lists without a special
+case. A credit spread's break-even win rate IS (width - credit)/width.
+
+THE TRAP, AND IT IS THE WHOLE REASON THIS NEEDED CARE. A call DEBIT spread is
+bullish. A call CREDIT spread is BEARISH -- you sold the upside. Three things
+keyed on `side` and every one of them would have been backwards:
+
+    1. THE NEWS GUARD. Keyed on (side, verdict), it would have cleared a bear
+       call spread into VERY_BULLISH news and flagged it into bearish news --
+       precisely inverted, on the structure section 122 exists to protect.
+    2. THE FLOW GUARD. Same inversion.
+    3. THE PROBABILITIES. p_max branched on `calls`. A bull PUT credit spread
+       makes its maximum ABOVE the short strike, exactly as a bull call debit
+       spread does. Branching on the option type would have inverted every
+       probability on the credit side while leaving the PAYOFF correct, which
+       reconciles to nothing and is the hardest class of bug to see in a table.
+
+All three now key on direction(side, structure), and every row carries an
+explicit `direction` field so a UI never infers it from `side`.
+
+P(max) FROM THE CHAIN ALSO INVERTS. For a debit it is the short leg's delta;
+for a credit it is 1 - delta, because the maximum is KEPT when the short strike
+is not breached. Stored as p_imp rather than reusing d_short, so the Pimp
+column means one thing in both tables.
+
+IT FOUND A CONFLICT IMMEDIATELY. Every call credit candidate on 2026-09-08
+flagged: a bearish structure into a tape reading BUY on CRWV and AVGO. Correct,
+and it is the guard working on a structure that did not exist this morning.
+
+AND A PER-SYMBOL CAP, because the combined screen was unusable. Ranked by edge
+over CRWV, AVGO and SNDK it returned TWELVE CRWV ROWS AND NOTHING ELSE -- one
+favourable IV/RV lifts every strike on a name above every strike on the others.
+`per_symbol=2` gives a cross-name screen that actually shows the other names.

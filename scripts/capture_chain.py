@@ -6,6 +6,15 @@ carry `spot` and `expiries` at the top level. Lines written after carry a
 them apart by the presence of the "symbols" key; both are kept because the
 early lines are still valid QQQ observations.
 
+SCHEMA EXTENDED 2026-09-08. Strike rows gained two trailing fields, open
+interest and session volume, so a row is now
+
+    [strike, c|p, bid, ask, iv, delta, open_interest, volume]
+
+and rows written earlier have length 6. Appending rather than inserting keeps
+every existing reader correct on both. See scripts/oi_flow.py for what the new
+fields are for.
+
 Why this exists
 ---------------
 trading_engine/chain_pricer.py prices verticals off a fitted volatility
@@ -160,12 +169,26 @@ def capture(max_expiries: int = 6, symbols=None) -> dict:
                         continue
                     if not (MIN_ABS_DELTA <= abs(delta) <= MAX_ABS_DELTA):
                         continue
+                    # OPEN INTEREST AND VOLUME APPENDED 2026-09-08, at the END
+                    # of the row so every reader that indexes the first six
+                    # fields keeps working unchanged on old and new lines
+                    # alike. Lines written before that date have length 6.
+                    #
+                    # They are here because OI is the only positioning signal
+                    # reachable without a paid feed: differencing it day over
+                    # day at strikes above spot shows contracts being OPENED,
+                    # which is a fact rather than the urgency that VWAP and
+                    # signed volume infer. It could not be backfilled -- the
+                    # first 42 snapshots have no OI and no historical chain
+                    # feed exists to recover it -- so the series starts here.
                     rows.append([o["strike"], o["option_type"][0], round(float(bid), 3),
-                                 round(float(ask or 0.0), 3), round(iv, 5), round(delta, 5)])
+                                 round(float(ask or 0.0), 3), round(iv, 5), round(delta, 5),
+                                 int(o.get("open_interest") or 0),
+                                 int(o.get("volume") or 0)])
                 if rows:
                     per_sym["expiries"].append(
                         {"exp": exp, "minutes": round(minutes, 1), "n": len(rows),
-                         # [strike, c|p, bid, ask, iv, delta]
+                         # [strike, c|p, bid, ask, iv, delta, oi, volume]
                          "rows": rows})
             if per_sym["expiries"]:
                 snapshot["symbols"].append(per_sym)

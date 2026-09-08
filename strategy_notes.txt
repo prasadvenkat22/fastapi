@@ -8253,3 +8253,74 @@ OBSERVATIONAL. Section 22's rule holds: an unmeasured term is recorded beside
 the decision and gates nothing. These five columns start accumulating today and
 can be scored against forward returns when there are enough -- under section
 127's re-run discipline.
+
+
+129. TWO WAYS TO ASK WHO IS BUYING, AND THE DIFFERENCE BETWEEN THEM
+     (2026-09-08)
+--------------------------------------------------------------------------------
+
+scripts/flow.py -- URGENCY, from the tape, any symbol, immediately.
+scripts/oi_flow.py -- POSITIONING, from open interest, starting tomorrow.
+
+They are not the same question and the second is a better class of evidence.
+
+FLOW: NET SIGNED VOLUME AND VWAP, TOGETHER. Tradier /markets/timesales gives
+intraday bars with a real volume and a per-bar vwap, so the session figure is a
+volume-weighted mean of bars rather than a reconstruction. Volume on up-bars
+minus volume on down-bars is the tick rule at bar resolution.
+
+    THE PROPER CLASSIFICATION IS TRADE AGAINST QUOTE -- at the ask is a buy, at
+    the bid is a sell. Close against previous close is a cruder proxy that
+    misreads fast tape and cannot classify the first bar at all. Here the
+    opening bar is signed against its own OPEN, which is the least bad answer.
+
+READ THE TWO NUMBERS TOGETHER OR NOT AT ALL. The book on 2026-09-08 at 10:07:
+
+    sym      vwap     last  vs vwap   slope  above   up%   net signed
+    CRWV    95.00    95.68   +0.72%  +1.02%    88%   81%    +4,814,393
+    AVGO   366.77   368.13   +0.37%  +0.35%    88%   75%    +2,923,523
+    SNDK  1772.28  1770.17   -0.12%  -0.05%    62%   74%    +1,279,347
+    MU    1023.48  1021.38   -0.21%  -0.53%    12%   39%    -1,411,460
+    QQQ    718.28   716.89   -0.19%  -0.33%     0%   21%    -2,604,046
+    NVDA   230.69   228.94   -0.76%  -0.98%     0%   16%   -15,190,772
+
+CRWV and AVGO agree on every measure. NVDA disagrees on every measure. SNDK is
+the case that matters: 74% up-volume and net +1.28m shares, with price BELOW a
+flat VWAP and only 62% of bars above it. That is buyers who are active and not
+winning, and it is a materially weaker picture than the signed-volume number
+alone suggests. Compare SNDK on 09-04 -- VWAP rising 2.56%, 100% of bars above
+it -- which is what agreement looks like.
+
+    A single number here is a trap. Net signed volume without the VWAP line
+    would have read SNDK as bought on both days.
+
+OI: THE ONE THING IN REACH THAT IS NOT AN INFERENCE. Open interest counts
+contracts that EXIST. A strike whose OI rises by 4,000 had 4,000 contracts
+opened, and no amount of two-sided trading produces that without someone
+holding a position. It still does not say LONG or SHORT -- call OI building
+above spot fits a fund buying upside and a dealer selling it equally well --
+but it is a fact rather than a guess about intent.
+
+I SAID THIS WAS HALF BUILT ALREADY. IT WAS NOT. capture_chain.py had been
+storing [strike, c|p, bid, ask, iv, delta] for 42 snapshots since 2026-08-27
+and never captured open interest at all. The cadence and the plumbing existed;
+the field did not. Checking the row shape before claiming the data was there
+would have cost one command.
+
+    Rows now carry [.., open_interest, volume], APPENDED at the end so every
+    reader indexing the first six fields keeps working on old and new lines.
+    Nothing can be backfilled -- there is no historical option-chain feed --
+    so the series starts 2026-09-08 and the first comparison is tomorrow.
+
+AND OI IS AN END-OF-DAY FIGURE, published overnight. Every snapshot within a
+session carries the same number, so oi_flow.py keeps one snapshot PER DATE and
+compares day over day. Comparing 10:00 against 15:30 would have reported zero
+change on every strike and read as a quiet tape.
+
+WHAT IS STILL OUT OF REACH, and worth stating so it stops being proposed:
+block and dark-pool prints need a paid feed, 13F is quarterly with a 45-day
+lag, and Form 4 covers insiders rather than institutions. None of the three
+helps a structure that expires in three days.
+
+OBSERVATIONAL, both of them. Section 22's rule: recorded beside the decision,
+gating nothing.

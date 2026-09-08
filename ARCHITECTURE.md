@@ -269,6 +269,28 @@ Not built.
 
 Observational. Nothing gates on them.
 
+**Two ways to ask who is buying, and they are not the same question**
+(section 129):
+
+- `flow.py` — **urgency**, from the tape. Net signed volume (tick rule at bar
+  resolution) beside the VWAP line. Any symbol, works now.
+- `oi_flow.py` — **positioning**, from open interest. Counts contracts that
+  exist rather than inferring intent. Still cannot say long or short.
+
+**Read signed volume and VWAP together or not at all.** SNDK on 2026-09-08 ran
+74% up-volume and net +1.28M shares with price *below* a flat VWAP — buyers
+active and not winning, a far weaker picture than the signed number alone. On
+09-04 the two agreed: VWAP +2.56%, 100% of bars above it.
+
+`capture_chain.py` never captured open interest — 42 snapshots of
+`[strike, c|p, bid, ask, iv, delta]` and no OI field. Rows now append
+`open_interest, volume`; nothing is backfillable, so the series starts
+2026-09-08. OI is published once daily, so `oi_flow.py` compares one snapshot
+**per date**.
+
+Out of reach, and worth not re-proposing: block and dark-pool prints (paid
+feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
+
 ---
 
 ## Analysis scripts — none of them trade
@@ -285,6 +307,8 @@ Observational. Nothing gates on them.
 | `backfill_news_impact.py` | label stored headlines with what price did |
 | `macro_outcome.py --report` | did the macro verdict separate sessions, and what would a gate have cost |
 | `news_ev_backtest.py` | re-price an expired `weekly_shadow` cohort and ask whether the news overlay moved EV toward the outcome |
+| `flow.py` | net signed volume and VWAP for any symbol, from Tradier intraday bars |
+| `oi_flow.py` | which strikes gained open interest day over day |
 | `sweep.py` | 0DTE replay. **Read the RUN CONFIG banner** |
 
 ---

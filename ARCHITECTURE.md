@@ -26,6 +26,7 @@ This file is the map.
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
 | 09:30 | `news_watch.py` | **scrapes the wires, then** grades everything published since the previous close, writes `news_verdicts`. Window guard 09:20–10:05 |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
+| every 5 min, 09:30–16:00 | `price_alert.py` | level crossings, fires once per crossing, webhook delivery |
 | 17:15 (21:15 UTC, both DST offsets land after the close) | `macro_outcome.py` | records the morning's macro read against the session that followed |
 
 Cron is UTC and lists both DST offsets; the scripts reject the wrong one.
@@ -377,6 +378,25 @@ restart.
 | `trading_macro_verdicts` | append-only macro read history |
 | `trading_macro_readings` | VIX and 10Y per cycle |
 | `macro_session_outcomes` | one row per session: morning verdicts vs QQQ's move and the engine's P&L |
+
+---
+
+## Alerts
+
+`scripts/price_alert.py --rules "SNDK<1800"`, cron every 5 minutes in hours.
+Fires **once** per crossing; re-arms only when price recovers past the level by
+0.25%. Every firing is recorded in `data/price_alerts.json` **before** delivery
+is attempted.
+
+**The droplet cannot send email.** ufw allows outgoing, but the provider blocks
+SMTP egress — `smtp.gmail.com:587` and `:465` both time out from the *host*,
+while `:443` connects. This also means `helpers/mailer.py`, which the auth
+router uses for forgot-password and reset-password, **has never been able to
+deliver from this host** and fails silently (returns False, logs). Fix by
+requesting SMTP unblocking, pointing the mailer at an HTTP mail API, or using
+`ALERT_WEBHOOK_URL` (section 133).
+
+A trigger that must not be missed belongs at the **broker**, not here.
 
 ---
 

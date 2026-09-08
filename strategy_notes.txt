@@ -8501,3 +8501,54 @@ AND A PER-SYMBOL CAP, because the combined screen was unusable. Ranked by edge
 over CRWV, AVGO and SNDK it returned TWELVE CRWV ROWS AND NOTHING ELSE -- one
 favourable IV/RV lifts every strike on a name above every strike on the others.
 `per_symbol=2` gives a cross-name screen that actually shows the other names.
+
+
+133. PRICE ALERTS, AND THE DROPLET CANNOT SEND EMAIL  (2026-09-08)
+--------------------------------------------------------------------------------
+
+    */5 13-21 * * 1-5   scripts/price_alert.py --rules "SNDK<1800"
+
+THREE THINGS MAKE A NAIVE PRICE CRON USELESS, and the script exists for them:
+
+  1. IT SPAMS. A cron that mails whenever SNDK < 1800 mails every five minutes
+     for the rest of the session. State is per rule; a crossing fires once.
+  2. IT SPAMS ANYWAY, from noise. A level inside the bid-ask re-crosses
+     constantly. A rule RE-ARMS only when price recovers past it by
+     PRICE_ALERT_REARM_PCT (0.25%), so 1800.05 does not re-arm a 1800 alert
+     and 1804.50 does.
+  3. IT FIRES AT 04:00. The quote feed answers out of hours with stale prices.
+     Same market_calendar and clock guard every other job here uses.
+
+THE DROPLET CANNOT SEND EMAIL, AND THIS IS NOT FIXABLE IN CODE. Measured:
+
+    ufw:  default allow (outgoing)
+    host -> smtp.gmail.com:587   TIMEOUT
+    host -> smtp.gmail.com:465   TIMEOUT
+    host -> api.tradier.com:443  OPEN
+
+The provider blocks SMTP egress, which DigitalOcean does by default. It is not
+ufw and not the container: the host times out too, while 443 connects fine.
+
+    THIS AFFECTS MORE THAN ALERTS. helpers/mailer.py is wired into the auth
+    router's forgot-password and reset-password flows. Those have never been
+    able to deliver from this host, and would have failed silently the same
+    way -- mailer.send() returns False and logs. Worth knowing before anyone
+    relies on a password reset.
+
+    Fixes, in order of effort: request SMTP unblocking from the provider; or
+    point the mailer at an HTTP mail API (Resend, Postmark, SendGrid), which
+    works because 443 is open; or use the webhook below.
+
+SO DELIVERY IS A WEBHOOK. ALERT_WEBHOOK_URL takes any HTTPS endpoint that
+accepts a JSON POST. The payload carries `text` AND `content` so one URL field
+works for Slack or Discord without the caller declaring which.
+
+EVERY FIRING IS RECORDED BEFORE DELIVERY IS ATTEMPTED, in the state file. An
+alert that cannot be delivered must not also lose the fact that the level was
+crossed, and on the first live run that is exactly what happened -- no webhook
+configured, firing recorded, nothing sent, and the log said so plainly.
+
+AND THE HONEST LIMITATION. This depends on the droplet, its cron and its
+network. A trigger that must not be missed belongs at the BROKER, where it runs
+on their infrastructure whether or not this box is up. This is for "tell me so
+I can look", not for anything load-bearing.

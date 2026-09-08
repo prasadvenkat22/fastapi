@@ -393,6 +393,66 @@ def evaluate(sym, side):
 
 
 
+# THE FOUR SORTS, AND WHY `edge` WAS ADDED (2026-09-08).
+#
+# Both ends of the original three produce structures nobody should take, and
+# the runs on 2026-09-08 showed each failing in its own direction:
+#
+#   --by prob    reaches for deep-ITM verticals where the reward is already
+#                spent. AVGO 345/358 asked 1250 to make NOTHING: break-even
+#                win rate 100.0%, EV -62.8.
+#   --by evpct   reaches for the opposite trap, the OTM lottery ticket. SNDK
+#                2100/2200 at 1:39 on a 6.7% chance of any profit.
+#
+# `edge` is Pwin minus need -- the probability of profit minus the break-even
+# win rate the price demands. It is the only one of the four that asks whether
+# you are being PAID for the odds, which is the question both traps answer no
+# to while scoring top of their own sort.
+SORT_KEY = {
+    "ev": lambda x: -x["ev_dem"],
+    "evpct": lambda x: -x["ev_pct"],
+    "prob": lambda x: -x["pwin"],
+    "edge": lambda x: -(x["pwin"] - x["need"]),
+}
+SORT_LABEL = {
+    "ev": "DEMEANED EV ($)",
+    "evpct": "EV PER $ RISKED",
+    "prob": "PROBABILITY OF PROFIT",
+    "edge": "EDGE (Pwin - break-even win rate)",
+}
+
+
+def rank(symbols, side: str, by: str = "evpct", top: int = 10,
+         rr_min: float = 0.0, rr_max: float = 0.0) -> dict:
+    """The screener as a CALLABLE, so the CLI and the HTTP endpoint cannot
+    drift apart. Returns {rows, meta, warnings} with the rows already filtered
+    and sorted -- everything main() prints, minus the printing.
+
+    Errors on one symbol are collected into `warnings` rather than raised: a
+    screen over six names should return the five that worked.
+    """
+    if by not in SORT_KEY:
+        raise ValueError(f"unknown sort {by!r}; expected one of {sorted(SORT_KEY)}")
+    rows, meta, warnings = [], [], []
+    for sym in [x.strip().upper() for x in symbols if str(x).strip()]:
+        try:
+            r, m = evaluate(sym, side)
+            if m:
+                m = dict(m, symbol=sym, candidates=len(r))
+                meta.append(m)
+            rows += r
+        except Exception as exc:
+            warnings.append(f"{sym}: {exc}")
+    if rr_min > 0:
+        rows = [r for r in rows if r["rr"] >= rr_min]
+    if rr_max > 0:
+        rows = [r for r in rows if r["rr"] <= rr_max]
+    ranked = sorted(rows, key=SORT_KEY[by])[:top]
+    return {"rows": ranked, "meta": meta, "warnings": warnings,
+            "sort": by, "sort_label": SORT_LABEL[by], "side": side,
+            "considered": len(rows)}
+
+
 def _flow_cell(r: dict) -> str:
     """Compact tape reading: the label and the up-volume share behind it."""
     f = r.get("flow") or {}
@@ -415,9 +475,11 @@ def main():
                          "the moderate geometry, between the deep-ITM trap "
                          "(high probability, no payoff) and the OTM lottery "
                          "ticket (huge payoff, ~90% total loss).")
-    ap.add_argument("--by", choices=("ev", "evpct", "prob"), default="evpct",
+    ap.add_argument("--by", choices=("ev", "evpct", "prob", "edge"),
+                    default="evpct",
                     help="evpct = EV per dollar risked (default), prob = highest "
-                         "probability of profit, ev = raw dollar EV")
+                         "probability of profit, ev = raw dollar EV, edge = "
+                         "Pwin minus the break-even win rate")
     args = ap.parse_args()
 
     rows = []
@@ -450,17 +512,14 @@ def main():
               "leaves the decision with you; a structure that is cheap enough "
               "may still be worth it, but not by accident.")
 
-    label = {"ev": "DEMEANED EV ($)", "evpct": "EV PER $ RISKED",
-             "prob": "PROBABILITY OF PROFIT"}[args.by]
+    label = SORT_LABEL[args.by]
     print(f"\n=== {args.side.upper()} DEBIT SPREADS — ranked by {label}, "
           f"priced at ask/bid ===")
     print(f"{'sym':6s} {'strikes':>14s} {'ITMatr':>7s} {'risk':>7s} {'reward':>7s} "
           f"{'R:R':>7s} {'Pimp':>6s} {'Phist':>6s} {'Pmc':>6s} {'Pwin':>6s} "
           f"{'need':>6s} {'edge':>7s} {'EV$':>8s} {'EVadj':>8s} {'news':>13s} "
           f"{'flow':>13s}")
-    key = {"ev": lambda x: -x["ev_dem"], "evpct": lambda x: -x["ev_pct"],
-           "prob": lambda x: -x["pwin"]}[args.by]
-    for r in sorted(rows, key=key)[:args.top]:
+    for r in sorted(rows, key=SORT_KEY[args.by])[:args.top]:
         print(f"{r['sym']:6s} {r['lo']:6.0f}/{r['hi']:<7.0f} {r['itm']:+7.2f} "
               f"{r['cost']*100:7.0f} {(r['w']-r['cost'])*100:7.0f} "
               f"1:{r['rr']:<5.2f} {r['d_short']*100:5.1f}% {r['p_max']*100:5.1f}% "

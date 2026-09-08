@@ -8359,3 +8359,49 @@ and NEGATIVE EV -- AVGO 345/358 asks 1250 to make nothing at all, break-even
 reward has already been spent. That is the mirror of the deep-OTM lottery
 tickets `--by evpct` surfaced in section 120: both ends of the ranking produce
 structures nobody should take, and the middle is where the trade is.
+
+
+131. THE SCREENER AS AN ENDPOINT, AND A FOURTH SORT THAT IS THE ONLY GOOD ONE
+     (2026-09-08)
+--------------------------------------------------------------------------------
+
+    GET /trading/screener/verticals?symbols=CRWV,AVGO&side=call&by=edge&top=10
+    GET /trading/screener/flow?symbols=CRWV,AVGO,SNDK
+
+Both behind require_trading, both GET, neither trades. Capped at twelve symbols
+per call because each one costs a daily-bar fetch, a chain fetch and an
+intraday fetch -- a UI that let someone paste forty tickers would hang the
+single production worker and spend the data budget on one request.
+
+ONE IMPLEMENTATION, NOT TWO. trading_engine/screener.py is an import shim: it
+puts scripts/ on sys.path and re-exports weekly_pick's rank(). Copying the
+maths would have created a second copy of the three probability engines, the
+log-return demeaning and the news overlay whose sign error section 122 caught,
+and the first divergence between API and CLI would have been silent. The
+ugliness is one documented import instead of a duplicated model.
+
+`edge` IS THE NEW SORT AND THE ENDPOINT DEFAULTS TO IT. Pwin minus need -- the
+probability of profit minus the break-even win rate the price demands. The
+other three each put a structure nobody should take at the top of their own
+ranking, measured on the same board on 2026-09-08:
+
+    --by prob    AVGO 345/358   need 100.0%   EV  -62.8   asks 1250 to make 0
+    --by evpct   SNDK 2100/2200 1:39 payoff   Pwin 6.7%   (section 120)
+    --by edge    AVGO 368/390   need  19.3%   Pwin 36.4%  edge +0.171  EV +18.2
+                 CRWV  99/110   need  15.1%   Pwin 31.9%  edge +0.169  EV +89.3
+
+Both original ends are traps in opposite directions: deep ITM where the reward
+is already spent, and OTM where the odds are not there. Edge is the only one of
+the four that asks whether you are being PAID for the odds, which is the
+question both traps answer no to while topping their own sort. A UI shows the
+first row hardest, so the default matters more here than on a command line.
+
+NEWS AND FLOW ARE RETURNED, NOT RANKED ON. Both appear in every row, with their
+conflict flags, and neither touches the ordering or the EV. The response says
+so in a `note` field, because an API consumer cannot see the footnotes a CLI
+prints.
+
+DEPLOY NOTE. Production runs uvicorn with --workers 1 and no --reload, so new
+routes need a container restart. Done during the session with the user's
+explicit go-ahead: container down ~20s, alembic checked head, one cycle missed,
+recovered on the next minute. No open engine positions at the time.

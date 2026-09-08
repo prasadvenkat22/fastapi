@@ -356,3 +356,120 @@ async def toggle_kill_switch(action: str = Query(..., pattern="^(ACTIVATE|DEACTI
             os.remove(KILL_SWITCH_PATH)
 
     return KillSwitchResponse(kill_switch_active=os.path.exists(KILL_SWITCH_PATH))
+
+
+# ---------------------------------------------------------------------------
+# SCREENER. Read-only, and slow by the standards of this router: each call
+# fetches daily bars, an option chain and intraday bars per symbol, so a six
+# name screen takes seconds rather than milliseconds. That is why `symbols` is
+# capped -- a UI that lets someone paste forty tickers would hang the worker
+# and spend the data budget on one request.
+#
+# NOTHING HERE TRADES. It ranks and returns; every route below is a GET.
+# ---------------------------------------------------------------------------
+
+MAX_SCREEN_SYMBOLS = 12
+
+
+def _symbols(raw: str) -> list:
+    syms = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    if not syms:
+        raise HTTPException(status_code=422, detail="no symbols given")
+    if len(syms) > MAX_SCREEN_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"at most {MAX_SCREEN_SYMBOLS} symbols per call; "
+                   f"each one costs a chain fetch")
+    return syms
+
+
+@router.get("/screener/verticals")
+async def screen_verticals(
+    symbols: str = Query(..., description="comma separated, e.g. SNDK,NVDA,CRWV"),
+    side: str = Query("call", pattern="^(call|put)$"),
+    by: str = Query("edge", pattern="^(edge|ev|evpct|prob)$"),
+    top: int = Query(10, ge=1, le=100),
+    rr_min: float = Query(0.0, ge=0.0),
+    rr_max: float = Query(0.0, ge=0.0),
+):
+    """Rank debit verticals. Same maths as scripts/weekly_pick.py, one import.
+
+    `by` defaults to EDGE rather than the CLI's evpct, because a UI shows the
+    first row hardest and the other three sorts each put a structure nobody
+    should take at the top: `prob` finds deep-ITM verticals whose reward is
+    already spent (AVGO 345/358 asked 1250 to make nothing, break-even 100%),
+    `evpct` finds the OTM lottery ticket (SNDK 2100/2200 at 1:39 on a 6.7%
+    chance of any profit). Edge is Pwin minus the break-even win rate the
+    price demands -- whether you are PAID for the odds.
+
+    news and flow are RETURNED BUT NOT USED in the ranking. Neither has been
+    scored against outcomes; both sit beside the decision (sections 22, 130).
+    """
+    from trading_engine.screener import rank
+
+    try:
+        out = rank(_symbols(symbols), side, by=by, top=top,
+                   rr_min=rr_min, rr_max=rr_max)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"screen failed: {exc}")
+
+    rows = []
+    for r in out["rows"]:
+        flow = r.get("flow") or {}
+        rows.append({
+            "symbol": r["sym"], "long_strike": r["lo"], "short_strike": r["hi"],
+            "width": r["w"], "expiry": r["exp"], "days": r["days"],
+            "itm_atr": round(r["itm"], 4),
+            "risk": round(r["cost"] * 100, 2),
+            "reward": round((r["w"] - r["cost"]) * 100, 2),
+            "rr": round(r["rr"], 4),
+            "p_imp": round(r["d_short"], 4), "p_hist": round(r["p_max"], 4),
+            "p_mc": round(r["mc_max"], 4), "p_win": round(r["pwin"], 4),
+            "need": round(r["need"], 4),
+            "edge": round(r["pwin"] - r["need"], 4),
+            "ev": round(r["ev_dem"], 2), "ev_adj": round(r["ev_adj"], 2),
+            "ev_raw": round(r["ev_raw"], 2),
+            "news": r.get("news"),
+            "news_conflict": r.get("conflict"),
+            "flow": flow.get("label"),
+            "flow_up_pct": (round(flow["up_pct"], 2) if flow else None),
+            "flow_conflict": r.get("flow_conflict"),
+        })
+    return {
+        "side": out["side"], "sort": out["sort"],
+        "sort_label": out["sort_label"],
+        "considered": out["considered"], "returned": len(rows),
+        "sorts_available": ["edge", "ev", "evpct", "prob"],
+        "underlyings": out["meta"], "warnings": out["warnings"],
+        "rows": rows,
+        "note": ("news and flow are shown, not used. Ranking is EV and "
+                 "probability only."),
+    }
+
+
+@router.get("/screener/flow")
+async def screen_flow(
+    symbols: str = Query(..., description="comma separated"),
+    day: str = Query("", description="YYYY-MM-DD, default today (ET)"),
+    interval: str = Query("5min", pattern="^(1min|5min|15min)$"),
+):
+    """Net signed volume and VWAP per symbol -- the cross-section.
+
+    BUY and SELL require price-vs-VWAP AND the up-volume share to agree;
+    anything else is MIXED. Signed volume alone called SNDK bought on
+    2026-09-08 at 74% up-volume with price below a flat VWAP (section 129),
+    so a client showing one number without the other will mislead.
+    """
+    from trading_engine.screener import flow_table
+
+    try:
+        rows = flow_table(_symbols(symbols), day=day, interval=interval)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"flow failed: {exc}")
+    return {"day": day or "today", "interval": interval,
+            "returned": len(rows), "rows": rows,
+            "note": ("label requires price-vs-VWAP and up-volume share to "
+                     "agree; MIXED means they do not. Measures urgency, not "
+                     "institutional participation.")}

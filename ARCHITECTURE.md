@@ -302,6 +302,32 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 
 ---
 
+## HTTP: the screener is callable
+
+```
+GET /trading/screener/verticals?symbols=CRWV,AVGO&side=call&by=edge&top=10
+GET /trading/screener/flow?symbols=CRWV,AVGO,SNDK
+```
+
+Behind `require_trading`, both GET, neither trades. Capped at 12 symbols — each
+costs a daily-bar, chain and intraday fetch against one production worker.
+
+`trading_engine/screener.py` is an **import shim** onto `scripts/weekly_pick.py`,
+so the API and CLI cannot drift. `by` accepts `edge|ev|evpct|prob` and
+**defaults to `edge`** (`Pwin − need`): the other three each top their own
+ranking with a structure nobody should take — `prob` finds deep-ITM verticals
+whose reward is spent (`need` 100%, EV −62.8), `evpct` finds 1:39 lottery
+tickets at a 6.7% hit rate. Edge asks whether you are *paid for the odds*
+(section 131).
+
+news and flow are returned per row with their conflict flags, and neither
+touches the ordering or the EV.
+
+**Production runs `--workers 1`, no `--reload`** — new routes need a container
+restart.
+
+---
+
 ## Analysis scripts — none of them trade
 
 | script | question |

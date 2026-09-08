@@ -244,6 +244,33 @@ point across 525 strikes (section 118).
 
 ---
 
+## Was the session bought, or did it drift up
+
+Five hourly-bar columns on every `weekly_shadow` row (`sig_vwap_slope_pct`,
+`sig_bars_above_vwap`, `sig_ad_volume_ratio`, `sig_volume_vs_adv`,
+`sig_close_location`), section 128. A daily bar cannot tell a bought session
+from one that merely closed higher:
+
+| | ADV | VWAP slope | bars above | A/D |
+|---|---|---|---|---|
+| SNDK 09-03, price up | 0.68x | +0.76% | 85.7% | **-0.05** |
+| SNDK 09-04, price up | 1.16x | +2.56% | **100%** | **+0.66** |
+
+Same direction, opposite character. On 09-04 it separates SNDK and MU (real
+catalysts, accumulated) from NVDA and QQQ (sold from the open). Eight
+observations, so a demonstration and not evidence.
+
+**It does not measure institutional buying.** Every buyer has a seller and no
+public OHLCV feed distinguishes them; this measures *urgency*. Real
+participation needs closing-auction volume, block prints or 13Fs, none of them
+reachable. The route that is reachable: **differencing option open interest
+across the chain snapshots `capture_chain.py` already takes 4x a session.**
+Not built.
+
+Observational. Nothing gates on them.
+
+---
+
 ## Analysis scripts — none of them trade
 
 | script | question |
@@ -267,7 +294,7 @@ point across 525 strikes (section 118).
 | table | holds |
 |---|---|
 | `trading_open_positions` / `trading_history` | live positions and closed trades |
-| `weekly_shadow` | every weekly structure, with `sig_*` columns: ATR, VWAP, net greeks, RV/IV, news count |
+| `weekly_shadow` | every weekly structure, with `sig_*` columns: ATR, VWAP, net greeks, RV/IV, news count, intraday accumulation |
 | `market_news_vectors` | headlines + Voyage embeddings + source |
 | `news_symbol_impact` | headline × symbol × forward return in ATR |
 | `news_verdicts` | one graded verdict per symbol per trading day |

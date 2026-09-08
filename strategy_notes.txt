@@ -8174,3 +8174,82 @@ spread. A difference smaller than the re-run wobble is not a difference.
 STANDING DECISION UNCHANGED, AND NOW BETTER SUPPORTED. Sentiment does not enter
 the EV probability. Delta does. Section 125's kill condition holds, with one
 addition: the re-run spread goes into the test, or the test proves nothing.
+
+
+128. WAS THE SESSION BOUGHT, OR DID IT DRIFT UP  (2026-09-08)
+--------------------------------------------------------------------------------
+
+The question: is anything in the book measuring institutional buying? SNDK's
+VWAP rose all day Friday on good news, and nothing recorded it.
+
+FIRST, A CLAIM I MADE AND HAD TO WITHDRAW. Seeing sig_vwap_week, sig_vwap_side,
+sig_atr14, sig_atr_pct, sig_news_count_3d and sig_net_delta NULL on all 79
+weekly_shadow rows, I reported that the writer never populates them. That was
+wrong. weekly_shadow.py passes the signals dict straight into the model, and
+run live on 2026-09-08 entry_signals() returns every one of them populated:
+
+    sig_atr14 100.42   sig_atr_pct 5.705   sig_vwap_week 1765.37
+    sig_vwap_side AT   sig_news_count_3d 19   sig_net_delta 0.16513
+
+The columns are null because the LAST SHADOW ROW WAS WRITTEN FRIDAY 15:46 and
+the ATR, VWAP, news and greeks code shipped after it. ENTRY_TIME is 15:45, so
+the first row carrying them is today's. Nothing needed fixing.
+
+    The check that settles this is running the PRODUCER, not reading the
+    consumer. Counting nulls in a table describes what happened before the
+    deploy, which is a different claim from what the code does now.
+
+WHAT WAS ACTUALLY MISSING. Nothing distinguished a session that was BOUGHT from
+one that merely closed higher. In a daily bar they are identical:
+
+    SNDK 2026-09-03   price UP   0.68x ADV   VWAP slope +0.76%   A/D -0.052
+    SNDK 2026-09-04   price UP   1.16x ADV   VWAP slope +2.56%   A/D +0.664
+                                 100% of bars above VWAP, close at +0.99
+
+Thursday was drift. Friday was buyers lifting offers for six straight hours and
+closing on the high of the final bar, which is what index-inclusion demand looks
+like from outside. Same direction, opposite character.
+
+FIVE COLUMNS, ON HOURLY BARS (migration a3f7c04e91b8):
+
+    sig_vwap_slope_pct    session VWAP, first bar to last
+    sig_bars_above_vwap   share of bars closing above the RUNNING VWAP
+    sig_ad_volume_ratio   volume-weighted close location, -1 to +1
+    sig_volume_vs_adv     session volume over the 20-day average
+    sig_close_location    close location of the final bar, -1 to +1
+
+Measured across the book on those two sessions:
+
+    sym   session      slope   above      A/D   vol/ADV   close
+    SNDK  09-04       +2.56%  100.0%  +0.6638    1.16x   +0.99
+    MU    09-04       +0.73%  100.0%  +0.5229    1.21x   +0.63
+    NVDA  09-04       -0.48%   14.3%  +0.0989    0.94x   -0.02
+    QQQ   09-04       -0.20%   14.3%  -0.0719    1.04x   +0.54
+
+It separates the two names with real catalysts that day -- SNDK's S&P 100
+inclusion and Micron's HBM capacity story -- from NVDA, which carried the
+Hugging Face headline and was sold from the open anyway. That is the
+discrimination the columns exist for. Eight observations is a demonstration,
+not evidence.
+
+WHAT IT IS NOT, AND THIS IS THE PART THAT MATTERS. It does NOT measure
+institutional buying. Every buyer has a seller, and no public OHLCV feed tells
+them apart. It measures URGENCY -- whether buyers paid up or waited -- which is
+the trace an institution working a large order against a VWAP benchmark leaves
+behind, and is not a count of institutional shares.
+
+    Measuring participation properly needs closing-auction volume, block and
+    dark-pool prints, or 13F filings. The first is not in the current feed, the
+    second needs a paid one, the third is quarterly and useless for a four-day
+    structure.
+
+    THE ONE REACHABLE ROUTE IS ALREADY HALF BUILT. capture_chain.py has been
+    snapshotting the option chain four times a session since 2026-08-27.
+    Differencing OPEN INTEREST across days at strikes above spot is the closest
+    thing to a positioning signal in data this repository already owns, and it
+    needs no new feed. Not built.
+
+OBSERVATIONAL. Section 22's rule holds: an unmeasured term is recorded beside
+the decision and gates nothing. These five columns start accumulating today and
+can be scored against forward returns when there are enough -- under section
+127's re-run discipline.

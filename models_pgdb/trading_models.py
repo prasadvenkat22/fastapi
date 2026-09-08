@@ -311,6 +311,18 @@ class WeeklyShadow(Base):
     sig_news_count_3d = Column(Integer, nullable=True)
     sig_news_latest = Column(String, nullable=True)
 
+    # INTRADAY ACCUMULATION, from hourly bars. Measures urgency -- whether
+    # buyers paid up through the session -- NOT institutional participation,
+    # which no public OHLCV feed can distinguish. See
+    # weekly_signals.intraday_accumulation for why the two are not the same
+    # and for the SNDK session that shows them diverging on identical price
+    # direction. Observational: nothing gates on these.
+    sig_vwap_slope_pct = Column(Float, nullable=True)
+    sig_bars_above_vwap = Column(Float, nullable=True)
+    sig_ad_volume_ratio = Column(Float, nullable=True)
+    sig_volume_vs_adv = Column(Float, nullable=True)
+    sig_close_location = Column(Float, nullable=True)
+
     # The live order behind this row, when it was actually traded. NULL on
     # every observation-only row, which is all of them before 2026-09-01.
     # live_qty is what FILLED, not what was requested: Tradier clamps and

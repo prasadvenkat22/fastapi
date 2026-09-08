@@ -301,6 +301,111 @@ def _news(symbol: str) -> dict:
         return {}
 
 
+
+def intraday_accumulation(symbol: str, day=None) -> dict:
+    """Was the session bought or sold, measured on hourly bars.
+
+    WHAT THIS IS AND IS NOT. It does NOT measure institutional buying. Every
+    buyer has a seller, and nothing in a public OHLCV feed distinguishes one
+    from the other. What it measures is URGENCY -- whether buyers paid up
+    through the session or waited -- and urgency is what an institution
+    working a large order against a VWAP benchmark actually leaves behind.
+
+    The distinction matters because the two readings can diverge sharply on
+    the same direction of price. SNDK, measured 2026-09-08:
+
+        2026-09-03  price UP, 0.68x ADV, VWAP slope +0.76%, A/D volume -418k
+        2026-09-04  price UP, 1.28x ADV, VWAP slope +2.56%, A/D volume +9,900k
+                    and 100% of bars closed above VWAP
+
+    Same direction, opposite character. Thursday was drift; Friday was buyers
+    lifting offers all day and closing on the high of the final hour, which is
+    what index-inclusion demand looks like from outside.
+
+    Five columns, all observational -- section 22's rule applies here as it
+    does to crude and the macro verdict: a term nobody has measured against
+    outcomes is logged beside the decision and gates nothing.
+
+        sig_vwap_slope_pct    session VWAP first bar to last, in percent
+        sig_bars_above_vwap   share of bars closing above the running VWAP
+        sig_ad_volume_ratio   volume-weighted close location, in [-1, +1]
+        sig_volume_vs_adv     session volume over the 20-day average
+        sig_close_location    close location of the FINAL bar, in [-1, +1]
+
+    Returns {} on any failure. A data outage must not cost the observation
+    that the rest of the row exists to record.
+    """
+    empty: dict = {}
+    try:
+        import yfinance as yf
+
+        bars = yf.Ticker(symbol).history(period="1mo", interval="60m")
+        if bars is None or bars.empty:
+            return empty
+        try:
+            bars.index = bars.index.tz_convert("America/New_York")
+        except Exception:
+            pass
+        days = sorted({t.date() for t in bars.index})
+        if not days:
+            return empty
+        # `day` exists so this can be tested and backfilled against a session
+        # that has finished. The live caller runs at ENTRY_TIME 15:45, by which
+        # point the current session has six bars, so the default of "latest"
+        # is the right one in production and useless at 10:30.
+        target = day if day in days else days[-1]
+        sess = bars[[t.date() == target for t in bars.index]]
+        if len(sess) < 2:
+            # One bar is not a session. Better to record nothing than a slope
+            # computed from a single point, which is always zero and reads as
+            # a flat tape rather than as an absent measurement.
+            return empty
+
+        high = sess["High"].astype(float)
+        low = sess["Low"].astype(float)
+        close = sess["Close"].astype(float)
+        vol = sess["Volume"].astype(float)
+        rng = (high - low)
+
+        typical = (high + low + close) / 3.0
+        cum_v = vol.cumsum()
+        vwap = (typical * vol).cumsum() / cum_v.replace(0, float("nan"))
+
+        first, last = float(vwap.iloc[0]), float(vwap.iloc[-1])
+        slope = ((last / first - 1.0) * 100.0) if first else None
+
+        above = float(sum(1 for i in range(len(sess))
+                          if float(close.iloc[i]) > float(vwap.iloc[i])))
+        above_pct = round(above / len(sess) * 100.0, 2)
+
+        # Close Location Value weighted by volume, then normalised by total
+        # volume so the figure is comparable across names and session sizes.
+        # +1 means every bar closed on its high, -1 on its low.
+        clv = ((close - low) - (high - close)) / rng.replace(0, float("nan"))
+        clv = clv.fillna(0.0)
+        tot_v = float(vol.sum())
+        ad_ratio = round(float((clv * vol).sum()) / tot_v, 4) if tot_v else None
+
+        daily = _daily(symbol)
+        vs_adv = None
+        if daily is not None and len(daily) >= 21:
+            adv = float(daily["Volume"].astype(float).tail(20).mean())
+            if adv > 0:
+                vs_adv = round(tot_v / adv, 4)
+
+        return {
+            "sig_vwap_slope_pct": round(slope, 4) if slope is not None else None,
+            "sig_bars_above_vwap": above_pct,
+            "sig_ad_volume_ratio": ad_ratio,
+            "sig_volume_vs_adv": vs_adv,
+            "sig_close_location": round(float(clv.iloc[-1]), 4),
+        }
+    except Exception:
+        logger.warning("Intraday accumulation unavailable for %s.", symbol,
+                       exc_info=True)
+        return empty
+
+
 def entry_signals(symbol: str, short_iv: "float | None" = None,
                   day=None) -> dict:
     """Columns for one weekly_shadow row: the name's state and the index's.
@@ -342,6 +447,7 @@ def entry_signals(symbol: str, short_iv: "float | None" = None,
         # over 2 survives a shock. Null when no strike is supplied, because
         # the caller knows the strike and this function does not.
         **_news(symbol),
+        **intraday_accumulation(symbol),
         "sig_index_symbol": INDEX_SYMBOL,
         "sig_index_trend": idx.get("trend"),
         "sig_index_bb_zone": idx.get("bb_zone"),

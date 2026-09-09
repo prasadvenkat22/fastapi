@@ -84,12 +84,14 @@ MANAGE_ORPHANS = os.getenv("TRADING_MANAGE_ORPHANS", "false").lower() == "true"
 #
 # Falls back to TRADING_MANAGE_UNDERLYING when unset, so existing deployments
 # behave exactly as before.
-MANAGE_UNDERLYING = {
-    s.strip().upper()
-    for s in (os.getenv("TRADING_ORPHAN_UNDERLYING")
-              or os.getenv("TRADING_MANAGE_UNDERLYING", "QQQ")).split(",")
-    if s.strip()
-}
+# SET BUT EMPTY MEANS EVERY SYMBOL, which is different from unset.
+# `or` cannot express that -- an empty string is falsy and would silently fall
+# back to the news list, so "watch anything I open" would quietly become
+# "watch these eleven names". None means unset; "" means all.
+_orphan_syms = os.getenv("TRADING_ORPHAN_UNDERLYING")
+if _orphan_syms is None:
+    _orphan_syms = os.getenv("TRADING_MANAGE_UNDERLYING", "QQQ")
+MANAGE_UNDERLYING = {s.strip().upper() for s in _orphan_syms.split(",") if s.strip()}
 
 # The ladder. Same shape as the engine's own, same variables where they are
 # genuinely the same question.

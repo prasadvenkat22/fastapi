@@ -8705,3 +8705,69 @@ Set to 25, which reads as a quarter of an average day on the big position and
 0.15 on the small ones. STATED, NOT FITTED -- chosen so a stall means a real
 reversal, not measured against outcomes, and it should be scored before it is
 believed.
+
+
+137. PROTECT PROFITS, IGNORE LOSSES, WATCH EVERYTHING  (2026-09-09)
+--------------------------------------------------------------------------------
+
+The requirement, as stated: any position opened should be watched, action taken
+on PROFITS ONLY, the profit not given up at all, losses ignored.
+
+ONE SYSTEM, NOT TWO. The earlier plan was a second seller in profit_stall.py
+with an interlock to stop the two colliding. That is unnecessary. The engine
+already does every part of this, and a second order-placing system on one
+account is how a double-sell turns a long into a NAKED SHORT -- unbounded risk
+on a 1800-dollar underlying, to solve a problem configuration already solves.
+
+    profit_stall.py stays alert-only. Its value is that it measures
+    differently (percent of peak VALUE, not points of return on intrinsic), so
+    when the two disagree there is something to learn. On 2026-09-09 it fired
+    on CRWV at 18.7% while the engine held, which is exactly that.
+
+THE GUARANTEE THAT MAKES A TIGHT SETTING SAFE:
+
+    books_a_gain = (value - abs(entry)) > 0        value is the MARK
+    STALL_MUST_BOOK_A_GAIN = True
+
+The stall CANNOT sell at a loss. So the usual objection to a tight give-back --
+that it fires on noise -- changes character completely: the worst case is
+leaving a winner early with a small gain, never realising a loss. That is the
+trade the requirement explicitly asks for.
+
+CONFIGURED:
+
+    TRADING_ORPHAN_UNDERLYING=            (empty = EVERY symbol)
+    TRADING_ORPHAN_LATER_STALL_ARM=5      arm on any modest profit
+    TRADING_ORPHAN_LATER_STALL_GIVEBACK=5 give back 5 points of return
+    TRADING_ORPHAN_LATER_STALL_MINUTES=5  within 5 minutes of the last high
+    TRADING_ORPHAN_LATER_TARGET_PCT=0.75  take profit at 75% of width
+
+"EMPTY MEANS EVERY SYMBOL" NEEDED A CODE FIX. Section 135 split the orphan list
+from the news list with `os.getenv(A) or os.getenv(B)`, and an empty string is
+FALSY -- so "watch anything I open" would silently have become "watch these
+eleven names". None now means unset, "" means all.
+
+WHAT IT WOULD HAVE DONE TO TODAY'S CRWV:
+
+    95/99  x5%  peak +141.0% -> sells at +136.0% -> CRWV 98.92, a small gain
+    95/100 x5   peak  +64.5% -> would sell at CRWV 99.85, but the mark was
+                2.95 against a 3.04 entry, so books_a_gain held it. Correct:
+                that structure was never profitable.
+
+One structure taken for a profit, one correctly left alone, from the same rule.
+
+AND WHY IT WOULD STILL HAVE DONE NOTHING FOR SNDK. Measured on the session by
+scripts/stall_replay.py: SNDK's peak intrinsic was 102.10 against a 100.55
+entry -- at its very best the position was up 310 dollars. Every give-back
+after that was from a peak barely above water, so selling books a loss and the
+rule declines.
+
+    The roll is why. Before it, breakeven was 1762.26; after moving the shorts
+    1800 -> 1850 for about 3,500 dollars, breakeven was 1800.55. At SNDK 1802
+    the OLD structure was solidly profitable and the rolled one was up 310.
+    A profit-protection rule cannot protect a profit that was rolled away.
+
+scripts/stall_replay.py exists so the next threshold is measured before it is
+trusted. Two have already been set by reasoning alone on this account -- 3.3
+fired on the bid-ask breathing, 25 surrendered 64% of the profit band -- and
+neither error was visible until it was live.

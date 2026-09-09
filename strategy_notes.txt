@@ -8738,7 +8738,7 @@ CONFIGURED:
 
     TRADING_ORPHAN_UNDERLYING=            (empty = EVERY symbol)
     TRADING_ORPHAN_LATER_STALL_ARM=5      arm on any modest profit
-    TRADING_ORPHAN_LATER_STALL_GIVEBACK=5 give back 5 points of return
+    TRADING_ORPHAN_LATER_STALL_GIVEBACK=15 give back 15 points of return
     TRADING_ORPHAN_LATER_STALL_MINUTES=5  within 5 minutes of the last high
     TRADING_ORPHAN_LATER_TARGET_PCT=0.75  take profit at 75% of width
 
@@ -8771,3 +8771,31 @@ scripts/stall_replay.py exists so the next threshold is measured before it is
 trusted. Two have already been set by reasoning alone on this account -- 3.3
 fired on the bid-ask breathing, 25 surrendered 64% of the profit band -- and
 neither error was visible until it was live.
+
+
+     ADDENDUM (2026-09-09): 5 WAS SMALLER THAN ONE BAR, SO IT BECAME 15.
+--------------------------------------------------------------------------------
+
+The give-back was set to 5 points of return to mean "do not give up profit at
+all". Measured against the session it was written in, that is not what it meant:
+
+    CRWV  trigger 0.12  vs ATR 5.15    = 1/41 of a normal day
+          median 5-min MOVE 0.24, median 5-min RANGE 0.72
+          68% of the day's bars moved further than the whole trigger
+
+    SNDK  trigger 3.04  vs ATR 101.30  = 1/33 of a normal day
+          median 5-min MOVE 7.75, median 5-min RANGE 14.12
+          82% of the day's bars moved further than the whole trigger
+
+A trigger smaller than one ordinary bar does not detect a slip. It sells on the
+FIRST DOWN BAR after any high, whatever the high was worth. On SNDK, sitting on
+2,776 dollars of intrinsic gain, that hands back most of it by design.
+
+books_a_gain still makes it safe -- it cannot realise a loss -- so the cost is
+not measured in losses but in upside never collected, which is the harder kind
+to notice.
+
+SET TO 15, which is 1.6x a median CRWV bar and 1.2x a median SNDK bar: a
+give-back now has to exceed ordinary movement before it counts. STATED, NOT
+FITTED, and chosen against the session's own bar statistics rather than by
+picking a round number, which is the mistake 3.3 and 25 both were.

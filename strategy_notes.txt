@@ -8558,3 +8558,47 @@ AND THE HONEST LIMITATION. This depends on the droplet, its cron and its
 network. A trigger that must not be missed belongs at the BROKER, where it runs
 on their infrastructure whether or not this box is up. This is for "tell me so
 I can look", not for anything load-bearing.
+
+
+134. A STALL NEEDS A CLOCK, NOT JUST A DRAWDOWN  (2026-09-09)
+--------------------------------------------------------------------------------
+
+scripts/profit_stall.py watches broker positions for a WINNER THAT IS TURNING
+and emails. IT DOES NOT TRADE. Every self-firing exit stays in orphans.py.
+
+THE CASE. SNDK reached 1800 on 2026-09-08 and fell after 14:30 on war
+headlines, closing 1737.99. The position -- 2x 1700/1800 + 1x 1720/1800, cost
+16,610 -- went from 17,000 at the mark to 11,885. Nothing about it was wrong at
+14:30; the peak simply stopped being available.
+
+    A 5% giveback on INTRINSIC would have fired at SNDK 1795.30. Peak intrinsic
+    was 28,000 at spot >= 1800; 5% off is 26,600, which back-solves to 1795.30.
+
+THE FIRST VERSION WAS WRONG AND THE QUESTION FOUND IT. Asked "does it stall for
+how long, how many minutes", the answer was NO MINUTES AT ALL -- it fired on
+the first observation clearing the line, which one wide quote can produce on a
+six-legged structure. orphans.py had already solved this and the settings are
+measured, not guessed:
+
+    ORPHAN_LATER_STALL_MINUTES = 15   minutes since the LAST NEW HIGH
+    books_a_gain                      the exit must actually realise a gain
+
+QUIET IS THE IDEA, and it is subtler than a confirmation delay. The clock runs
+from when the peak was last SET, not from when the drawdown began. A position
+still printing new highs never trips, however it wiggles in between. Both are
+now in the watcher, with --quiet-minutes defaulting to 15.
+
+BOOKS_A_GAIN DIVIDES THE TWO RULES. Under water is a STOP's decision. A stall
+protects a gain that is bleeding away, and firing one below cost just renames a
+stop -- which is why SNDK reports "not a winner yet" this morning rather than
+alerting on a position already down 4,725.
+
+DECIDES ON INTRINSIC, PRINTS THE MARK. Same conclusion orphans.py reached: six
+legs at 1.30-1.90 wide is several hundred dollars of quote noise on a 17,000
+position, a large fraction of a 5% trigger. Intrinsic cannot be fooled by one
+quote. The mark is printed beside it every run so the two cannot diverge
+unnoticed.
+
+TWO LIMITS, STATED. Peaks start from first run -- nothing retroactive, so
+yesterday's high is not in the file. And on a 5-minute cron a 15-minute quiet
+window is three consecutive observations, which is the resolution available.

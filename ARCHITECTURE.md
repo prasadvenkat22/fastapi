@@ -26,7 +26,8 @@ This file is the map.
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
 | 09:30 | `news_watch.py` | **scrapes the wires, then** grades everything published since the previous close, writes `news_verdicts`. Window guard 09:20–10:05 |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
-| every 5 min, 09:30–16:00 | `price_alert.py` | level crossings, fires once per crossing, webhook delivery |
+| every 5 min, 09:30–16:00 | `price_alert.py` | level crossings, fires once per crossing. Live rules: `SNDK<1762`, `SNDK>1762`, `SNDK<1700`, `CRWV<95` |
+| every 5 min, 09:30–16:00 | `profit_stall.py` | a winner giving back 5% from peak, after 15 min quiet. Decides on intrinsic |
 | 17:15 (21:15 UTC, both DST offsets land after the close) | `macro_outcome.py` | records the morning's macro read against the session that followed |
 
 Cron is UTC and lists both DST offsets; the scripts reject the wrong one.
@@ -395,6 +396,13 @@ router uses for forgot-password and reset-password, **has never been able to
 deliver from this host** and fails silently (returns False, logs). Fix by
 requesting SMTP unblocking, pointing the mailer at an HTTP mail API, or using
 `ALERT_WEBHOOK_URL` (section 133).
+
+`profit_stall.py --giveback 5` watches broker positions for a **winner that is
+turning**: 5% below peak, but only after **15 minutes since the last new high**
+(`ORPHAN_LATER_STALL_MINUTES`) and only when the exit would `books_a_gain`.
+Under water is a stop's question, not a stall's. It decides on **intrinsic** and
+prints the mark — six legs at 1.30–1.90 wide is several hundred dollars of
+quote noise on a $17k position (section 134). **It alerts; it does not trade.**
 
 A trigger that must not be missed belongs at the **broker**, not here.
 

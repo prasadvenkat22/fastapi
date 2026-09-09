@@ -8602,3 +8602,46 @@ unnoticed.
 TWO LIMITS, STATED. Peaks start from first run -- nothing retroactive, so
 yesterday's high is not in the file. And on a 5-minute cron a 15-minute quiet
 window is three consecutive observations, which is the resolution available.
+
+
+135. THE SYMBOL LIST WAS DOING TWO JOBS  (2026-09-09)
+--------------------------------------------------------------------------------
+
+Asked to manage CRWV and stop managing SNDK, the obvious move -- take SNDK out
+of TRADING_MANAGE_UNDERLYING -- would have done something else as well.
+
+    orphans.py:76        reads it to decide what the engine may CLOSE
+    nodes.py:1043        reads it to decide which names get per-ticker news
+
+One variable, two questions, opposite consequences. Removing SNDK from engine
+management would silently have stopped SNDK NEWS SCRAPING -- the feed that
+sections 123 to 130 were built around, and the one carrying the S&P 100 story.
+Nobody asking for the first would guess they had done the second.
+
+TRADING_ORPHAN_UNDERLYING now names what the engine may close, falling back to
+TRADING_MANAGE_UNDERLYING when unset so existing deployments are unchanged.
+
+    engine MANAGES   CRWV
+    news TRACKS      AVGO CRWV DELL MRVL MU NVDA PANW QQQ SNDK STX WDC
+
+AND THE STALL IS NOW LIVE BEFORE EXPIRY, for CRWV alone:
+
+    TRADING_ORPHAN_ACT_EXPIRY_DAY_ONLY=false
+
+On a non-expiry day the only reason that can be produced is STALL_LATER --
+zero_dte gates the whole 0DTE ladder off, so the -25% stop, the 90% ceiling and
+the 15:45 flatten cannot fire on a Friday-dated position. What is unlocked is
+exactly the rule that was asked for: arm at a +10% peak, sell on a 3.3-point
+giveback, after 15 minutes with no new high.
+
+    THE GIVEBACK IS IN POINTS OF RETURN, NOT PERCENT OF VALUE. 3.3 means the
+    position's RETURN falls 3.3 percentage points below its peak return -- a
+    peak of +46% selling at +42.7%. That is a different and much tighter rule
+    than the 5%-of-peak-value the watcher uses, and the two will not agree.
+
+THE COST OF THIS, AND IT IS NOT SMALL. SNDK is now managed by NOBODY. Before
+this change the engine would have flattened it on expiry day; it no longer
+will. A spread whose long legs finish in the money auto-exercises, and on
+2026-09-09 the account holds 12,285 of equity against long calls that would
+assign into roughly 512,000 of stock if SNDK expires between 1720 and 1800.
+Closing that position before Friday's close is now entirely manual.

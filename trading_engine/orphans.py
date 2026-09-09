@@ -73,9 +73,21 @@ MANAGE_ORPHANS = os.getenv("TRADING_MANAGE_ORPHANS", "false").lower() == "true"
 # because the failure modes are asymmetric -- forgetting to add a symbol leaves
 # a position watched but unmanaged and visible in the log, while managing a
 # name by accident closes something the operator never offered up.
+#
+# TRADING_ORPHAN_UNDERLYING SPLITS THIS FROM THE NEWS LIST (2026-09-09).
+# TRADING_MANAGE_UNDERLYING is read in two places that want different answers:
+# here, to decide what the engine may CLOSE, and nodes._tracked_symbols(), to
+# decide which names get per-ticker news scraping. They were the same variable,
+# so taking a name out of engine management also silently stopped its news --
+# and the operator asking for the first would never guess they had done the
+# second.
+#
+# Falls back to TRADING_MANAGE_UNDERLYING when unset, so existing deployments
+# behave exactly as before.
 MANAGE_UNDERLYING = {
     s.strip().upper()
-    for s in os.getenv("TRADING_MANAGE_UNDERLYING", "QQQ").split(",")
+    for s in (os.getenv("TRADING_ORPHAN_UNDERLYING")
+              or os.getenv("TRADING_MANAGE_UNDERLYING", "QQQ")).split(",")
     if s.strip()
 }
 

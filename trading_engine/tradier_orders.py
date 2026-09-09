@@ -413,6 +413,24 @@ def filled_legs() -> dict:
     Returns {symbol: {"qty": net contracts, "price": weighted average}}, where
     opening fills add and closing fills subtract, so a leg opened and partly
     closed reports what is actually left.
+
+    FALLS BACK TO COST BASIS FOR LEGS THE ORDER LIST NO LONGER CARRIES.
+    /accounts/{id}/orders takes no date range and returns a short recent
+    window, so a leg opened yesterday and still held today can vanish from it
+    -- and it vanishes SOONER the more orders the account has placed, because
+    the window is a count and not a date.
+
+    Measured 2026-09-09: a SNDK 1700 call bought on 09-08 was already missing
+    while its 1850 short from the same morning was present, after the engine
+    had emitted 153 rejected orders against a phantom position. orphans.py
+    then refused the inferred pair -- correctly, it will not compute a return
+    from a guessed entry -- so the position was silently unmanaged, including
+    its expiry-day flatten. A held position dropping out of management because
+    of unrelated order volume is the kind of failure nobody looks for.
+
+    Anything the order list has forgotten is priced from the broker's own
+    cost basis instead -- see _merge_cost_basis_fills for why history, which
+    does take a date range, turned out not to work.
     """
     if not LIVE_ORDERS:
         return {}
@@ -452,10 +470,51 @@ def filled_legs() -> dict:
                     rec["qty"] = total
                 else:
                     rec["qty"] += signed
-        return {k: v for k, v in out.items() if v["qty"] > 0}
+        out = {k: v for k, v in out.items() if v["qty"] > 0}
+        return _merge_cost_basis_fills(out)
     except Exception:
         logger.exception("Could not read filled legs.")
         return {}
+
+
+def _merge_cost_basis_fills(out: dict) -> dict:
+    """Price legs the order list has forgotten, from the broker's cost basis.
+
+    ACCOUNT HISTORY WAS TRIED FIRST AND IS UNUSABLE FOR THIS. Its trade events
+    report `quantity` UNSIGNED -- a buy of 2 and a sell of 2 are both
+    "quantity": 2.0 -- so a leg that was opened and partly closed cannot be
+    netted from it without guessing direction. Measured 2026-09-09 on the SNDK
+    1700 call, which shows two positive events for what is a single held
+    position of 2.
+
+    cost_basis has neither problem. It is per CURRENTLY HELD position, already
+    averaged over every fill, and signed by the position itself. The orphan
+    module preferred per-leg fills because they are exact where an average can
+    blur a scaled-up entry -- but an average is enormously better than the
+    alternative here, which is the position being skipped entirely and going
+    unmanaged through its expiry (see filled_legs).
+
+    Only ADDS. Anything already priced from /orders keeps that price.
+    """
+    try:
+        missing = {}
+        for p in (open_positions() or []):
+            sym = p.get("symbol")
+            qty = float(p.get("quantity") or 0)
+            basis = float(p.get("cost_basis") or 0)
+            if not sym or sym in out or qty <= 0 or basis <= 0:
+                continue
+            missing[sym] = {"qty": int(qty), "price": round(basis / qty / 100.0, 4)}
+        for sym, rec in missing.items():
+            out[sym] = rec
+            logger.info(
+                "Priced %s from cost basis (%d @ %.4f) — the order list no "
+                "longer reaches its fill.", sym, rec["qty"], rec["price"])
+        return out
+    except Exception:
+        logger.warning("Cost-basis fill fallback failed; using orders only.",
+                       exc_info=True)
+        return out
 
 
 def opposing_leg(underlying: str, expiry, call_put: str, strike: float,

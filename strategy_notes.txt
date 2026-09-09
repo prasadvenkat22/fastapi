@@ -8645,3 +8645,63 @@ will. A spread whose long legs finish in the money auto-exercises, and on
 2026-09-09 the account holds 12,285 of equity against long calls that would
 assign into roughly 512,000 of stock if SNDK expires between 1720 and 1800.
 Closing that position before Friday's close is now entirely manual.
+
+
+136. A HELD POSITION FELL OUT OF MANAGEMENT AND NOTHING SAID SO  (2026-09-09)
+--------------------------------------------------------------------------------
+
+SNDK 1700/1850 was configured as managed, and was not. The only trace was one
+WARNING a minute:
+
+    ORPHAN inferred pair SNDK 1700/1850 has no fill price — skipped, since a
+    return without a true entry is not a number worth acting on.
+
+THE REFUSAL IS RIGHT. An inferred pair needs a real entry, and computing a
+return from a guess is worse than not acting. What was wrong is that the entry
+was recoverable and nobody looked for it in the second place it lives.
+
+WHY THE FILL WENT MISSING. filled_legs() reads /accounts/{id}/orders, which
+takes NO DATE RANGE and returns a short recent window measured in COUNT, not
+days. The SNDK 1700 call was bought 09-08 and was already unreachable on 09-09,
+while the 1850 short sold that same morning was present. The account had by
+then emitted 153 rejected orders against a phantom QQQ position, which is
+exactly the kind of unrelated volume that shortens a count-based window.
+
+    So an unrelated bug in one symbol silently un-managed a position in
+    another, including its expiry-day flatten, on a position with real
+    assignment exposure. Nobody would look for that.
+
+ACCOUNT HISTORY WAS TRIED FIRST AND DOES NOT WORK. /accounts/{id}/history does
+take a date range, but its trade events report `quantity` UNSIGNED -- a buy of
+2 and a sell of 2 are both "quantity": 2.0. A leg opened and partly closed
+cannot be netted without guessing direction, and guessing direction is the same
+sin the original refusal avoided. Measured on the SNDK 1700 call, which shows
+two positive events for a single held position of 2.
+
+COST BASIS DOES WORK, and was there all along. It is per CURRENTLY HELD
+position, already averaged over every fill, and signed by the position itself:
+23194 / 2 = 115.97, the exact fill. The orphan module preferred per-leg fills
+because an average blurs a scaled-up entry -- a fair preference, but the
+alternative here was the position being skipped entirely, and an averaged entry
+beats no management at all.
+
+    filled_legs() now falls back to cost basis for anything /orders no longer
+    reaches. SNDK immediately became a structure: entry 100.55, inferred=True.
+
+AND THE GIVEBACK WAS WRONG FOR EVERY POSITION IN THE ACCOUNT. It is measured in
+POINTS OF RETURN against the entry, so the absolute trigger shrinks as the
+entry price grows. At the inherited 3.3:
+
+    SNDK 1700/1850  entry 100.55  ->  3.32 of stock  =  0.03 ATR
+    CRWV 95/100     entry   3.04  ->  0.10 of stock  =  0.02 ATR
+    CRWV 95/99      entry   1.66  ->  0.05 of stock  =  0.01 ATR
+
+Three percent of an average day is not a stall, it is the bid-ask breathing.
+SNDK moved 6.95 points between two commands while this was being measured.
+3.3 was set for 0DTE QQQ spreads costing a dollar or two; on a 100-dollar
+spread it is thirty times tighter in absolute terms.
+
+Set to 25, which reads as a quarter of an average day on the big position and
+0.15 on the small ones. STATED, NOT FITTED -- chosen so a stall means a real
+reversal, not measured against outcomes, and it should be scored before it is
+believed.

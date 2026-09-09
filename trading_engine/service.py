@@ -57,6 +57,51 @@ def _classify_close_reason(exit_reason: str, return_pct: float) -> str:
 
 
 
+def _broker_holds(underlying: str, long_strike, short_strike) -> bool:
+    """Does the broker actually hold either leg of this spread?
+
+    WHY A CLOSE NEEDS THIS AND AN OPEN DOES NOT. The engine's own row is
+    authoritative for opens; for CLOSES the broker is, and when the two
+    disagree the broker wins by definition -- you cannot sell what is not
+    there. Without the check the engine re-submits every cycle and Tradier
+    rejects every one:
+
+        "Sell order cannot be placed unless you are closing a long position"
+
+    Measured 2026-09-09: a QQQ 715/719 row whose opening order never filled
+    produced 937 rejected orders in one session. That is not merely noise. The
+    orders endpoint returns a window measured in COUNT, so the flood pushed
+    real fills out of it, and filled_legs() then could not price a held SNDK
+    leg -- which silently un-managed a different position entirely
+    (section 136). One phantom row cost management of a real position.
+
+    Fails OPEN. If the broker cannot be read we return True and let the order
+    go, because refusing to close a position that IS held is far worse than
+    sending one that gets rejected.
+    """
+    try:
+        import re
+
+        legs = tradier_orders.open_positions() or []
+        if not legs:
+            return False
+        want = {float(long_strike), float(short_strike)}
+        pat = re.compile(r"^([A-Z]+)\d{6}[CP](\d{8})$")
+        for p in legs:
+            m = pat.match(str(p.get("symbol", "")).upper())
+            if not m:
+                continue
+            root, strike = m.groups()
+            if root == str(underlying).upper() and int(strike) / 1000.0 in want:
+                return True
+        return False
+    except Exception:
+        logger.warning("Could not verify broker holdings before a close — "
+                       "letting the order through.", exc_info=True)
+        return True
+
+
+
 def _route_order(position_like, quantity: int, opening: bool, limit_price: float,
                  label: str) -> "dict | None":
     """Send the order the engine's decision implies, and log what came back.
@@ -77,9 +122,21 @@ def _route_order(position_like, quantity: int, opening: bool, limit_price: float
     """
     if not tradier_orders.LIVE_ORDERS:
         return None
+    underlying = (position_like.underlying
+                  if hasattr(position_like, "underlying") else "QQQ")
+    if not opening and not _broker_holds(underlying, position_like.long_strike,
+                                         position_like.short_strike):
+        logger.warning(
+            "Order [%s] CLOSE SKIPPED: the broker holds neither leg of %s "
+            "%s/%s. The engine's row says open and the account says otherwise "
+            "— reconcile the row rather than re-sending. Not submitting.",
+            label, underlying, position_like.long_strike,
+            position_like.short_strike,
+        )
+        return None
     try:
         result = tradier_orders.submit_vertical(
-            position_like.underlying if hasattr(position_like, "underlying") else "QQQ",
+            underlying,
             today_expiry(),
             option_type_for(position_like.strategy),
             long_strike=position_like.long_strike,

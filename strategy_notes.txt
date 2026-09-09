@@ -8799,3 +8799,44 @@ SET TO 15, which is 1.6x a median CRWV bar and 1.2x a median SNDK bar: a
 give-back now has to exceed ordinary movement before it counts. STATED, NOT
 FITTED, and chosen against the session's own bar statistics rather than by
 picking a round number, which is the mistake 3.3 and 25 both were.
+
+
+138. 937 REJECTED ORDERS FROM ONE ROW, AND WHAT IT COST  (2026-09-09)
+--------------------------------------------------------------------------------
+
+A QQQ 715/719 row whose opening order never filled sat in trading_open_positions
+and the engine tried to close it every cycle. Tradier refused every one:
+
+    "Sell order cannot be placed unless you are closing a long position"
+
+937 rejected orders in a single session.
+
+THE NOISE WAS NOT THE DAMAGE. /accounts/{id}/orders returns a window measured in
+COUNT, not days. The flood pushed real fills out of it, so filled_legs() could
+not price a held SNDK 1700 leg bought the previous day, orphans.py refused the
+inferred pair for want of a true entry, and a REAL position went unmanaged --
+including its expiry-day flatten, with assignment exposure behind it
+(section 136).
+
+    One phantom row in one symbol silently removed management from a live
+    position in another symbol. Nothing in either log said so.
+
+THE FIX IS A GUARD ON CLOSES ONLY. service._broker_holds() checks the account
+actually holds a leg before submitting a close. The asymmetry is the point:
+
+    OPENS   the engine's row is authoritative, and a shadow row is a known
+            gap that shows up as a RECONCILE line.
+    CLOSES  the BROKER is authoritative by definition. You cannot sell what is
+            not there, and re-asking every cycle does not change the answer.
+
+It FAILS OPEN. If the account cannot be read the order goes through, because
+refusing to close a position that IS held is far worse than sending one that
+gets rejected.
+
+Deployed 15:24 ET. Last rejection 15:24:07, guard fired 15:24:08, none since.
+
+WHAT SHOULD STILL HAPPEN. The phantom row is still there and should be
+reconciled -- the guard stops the engine acting on it, not the row existing. A
+DELETE was refused twice by the permission classifier, correctly: it is a
+destructive write to live trading state. Backup:
+/opt/fastapi/data/phantom_qqq_backup_202609091416.txt

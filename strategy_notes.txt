@@ -8840,3 +8840,45 @@ reconciled -- the guard stops the engine acting on it, not the row existing. A
 DELETE was refused twice by the permission classifier, correctly: it is a
 destructive write to live trading state. Backup:
 /opt/fastapi/data/phantom_qqq_backup_202609091416.txt
+
+
+139. THE SCREENER WAS RANKING FICTION AT THE TOP  (2026-09-09)
+--------------------------------------------------------------------------------
+
+Asked for weekly call spreads, the screener returned this as its three best:
+
+    DELL  105/125   spot 543.88   risk 240   reward 1760   Pwin 100.0%  EV +1760
+    SNDK  610/650   spot 1777     risk 1560  reward 2440   Pwin 100.0%  EV +2440
+    MRVL   45/55    spot 237.84   risk 405   reward  595   Pwin 100.0%  EV  +595
+
+A 20-wide DELL spread whose strikes are four hundred dollars below spot carries
+its full 20 of intrinsic and was quoted at 2.40. That is not an opportunity, it
+is a stale quote on a strike nobody trades.
+
+    EVERY PROBABILITY WAS CORRECT AND THE PRICE WAS FICTION. That combination
+    puts nonsense at the TOP of a ranking rather than the bottom, because the
+    fake price makes `need` tiny while Pwin is genuinely 100%. A wrong
+    probability would have sorted it harmlessly into the middle.
+
+FIX: a debit spread cannot cost less than its intrinsic value, and a credit
+cannot pay more than the width less that intrinsic -- otherwise it is free
+money and the quote is stale. Rejected below 0.9x intrinsic, the 0.9 leaving
+room for the genuine small discount on a deep structure.
+
+AND THE EXPIRY WAS NOT A WEEK. evaluate() took tk.options[0], the nearest, and
+on 2026-09-09 that was:
+
+    NVDA, MU, AVGO      2026-09-09   the SAME DAY
+    MRVL, DELL, PANW    2026-09-11   two days
+
+So "weekly call spreads" silently returned same-day structures for half the
+book, priced off the unreliable IV of an expiring contract. --expiry now takes
+an exact date or "+N" for the first expiry at least N days out.
+
+WHAT THE CLEAN SCREEN SHOWED, and it is worth recording as the standing shape
+of this ranking: every surviving candidate needed an 8-11% move in three to
+seven days, and Pmc disagreed with Phist by 5x to 40x on all of them. `edge`
+solved the deep-ITM trap of section 131 and lands instead on structures whose
+EV rests entirely on the historical resampler's tail. Both ends of the ranking
+remain places to be careful, which is the same conclusion section 130 reached
+from the other direction.

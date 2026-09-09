@@ -277,13 +277,37 @@ def usable(row):
     return b, a, mid, float(row.get("impliedVolatility") or 0)
 
 
-def evaluate(sym, side, structure: str = "debit"):
+def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
     tk = yf.Ticker(sym)
     h = tk.history(period=HISTORY, interval="1d")
     if len(h) < 120:
         return [], None
     spot, a14, rv = float(h["Close"].iloc[-1]), atr14(h), rv20(h)
-    exp = tk.options[0]
+    # NEAREST BY DEFAULT, WHICH IS NOT ALWAYS A WEEK. Measured 2026-09-09:
+    # NVDA, MU and AVGO listed 09-09 as options[0] -- the SAME DAY -- while
+    # MRVL, DELL and PANW listed 09-11. A screen asking for "weekly call
+    # spreads" silently returned same-day structures for half the book, and
+    # the IV on an expiring contract is unreliable enough that the EV built on
+    # it is not a number worth ranking.
+    #
+    # `expiry` takes an exact date, or a MINIMUM number of calendar days with
+    # a leading "+": "+5" picks the first expiry at least five days out.
+    exps = list(tk.options)
+    if not exps:
+        return [], None
+    exp = exps[0]
+    if expiry.startswith("+"):
+        from datetime import date as _d, timedelta as _td
+
+        floor = _d.today() + _td(days=int(expiry[1:]))
+        later = [e for e in exps
+                 if _d(*(int(x) for x in e.split("-"))) >= floor]
+        if later:
+            exp = later[0]
+    elif expiry:
+        if expiry not in exps:
+            raise ValueError(f"{sym} has no {expiry} expiry; has {exps[:5]}")
+        exp = expiry
     fwd_days = trading_days_to(exp)
     c = h["Close"].values
     fwd = c[fwd_days:] / c[:-fwd_days] - 1.0
@@ -366,6 +390,30 @@ def evaluate(sym, side, structure: str = "debit"):
                 payoff = lambda p: np.clip(hi - p, 0, w) - cost
                 room = (spot - lo) / a14
             if cost <= 0.05 or cost >= w:
+                continue
+            # A DEBIT SPREAD CANNOT COST LESS THAN ITS INTRINSIC VALUE, and a
+            # credit cannot pay more than the width less that intrinsic. When
+            # the quote says otherwise the quote is stale, not the market
+            # generous -- deep-in-the-money strikes barely trade and their
+            # bid/ask can sit untouched for days.
+            #
+            # Measured 2026-09-09: ranked by edge, the top three rows were
+            # DELL 105/125 with DELL at 543.88, SNDK 610/650 with SNDK at
+            # 1777, and MRVL 45/55 with MRVL at 237. Each showed Pwin 100.0%,
+            # an edge near +88 points and EV over a thousand dollars, because
+            # a 20-dollar-wide spread carrying its full 20 of intrinsic was
+            # quoted at 2.40. Every probability was right and the price was
+            # fiction, which is the combination that puts nonsense at the TOP
+            # of a ranking rather than the bottom.
+            #
+            # 0.9 rather than 1.0 leaves room for the small legitimate
+            # discount on a deep structure with rate and dividend effects.
+            intrinsic_now = (min(max(spot - lo, 0.0), w) if calls
+                             else min(max(hi - spot, 0.0), w))
+            if structure == "credit":
+                if (w - cost) > (w - intrinsic_now * 0.9):
+                    continue
+            elif cost < intrinsic_now * 0.9:
                 continue
             prices = spot * dem_prices_factor
             dm = payoff(prices)
@@ -484,7 +532,8 @@ SORT_LABEL = {
 
 def rank(symbols, side: str, by: str = "evpct", top: int = 10,
          rr_min: float = 0.0, rr_max: float = 0.0,
-         structure: str = "debit", per_symbol: int = 0) -> dict:
+         structure: str = "debit", per_symbol: int = 0,
+         expiry: str = "") -> dict:
     """The screener as a CALLABLE, so the CLI and the HTTP endpoint cannot
     drift apart. Returns {rows, meta, warnings} with the rows already filtered
     and sorted -- everything main() prints, minus the printing.
@@ -497,7 +546,7 @@ def rank(symbols, side: str, by: str = "evpct", top: int = 10,
     rows, meta, warnings = [], [], []
     for sym in [x.strip().upper() for x in symbols if str(x).strip()]:
         try:
-            r, m = evaluate(sym, side, structure)
+            r, m = evaluate(sym, side, structure, expiry)
             if m:
                 m = dict(m, symbol=sym, candidates=len(r))
                 meta.append(m)
@@ -546,6 +595,10 @@ def main():
                     help="debit = you BUY the spread, credit = you SELL it. "
                          "The direction flips: a call CREDIT spread is "
                          "bearish, a put CREDIT spread is bullish.")
+    ap.add_argument("--expiry", default="",
+                    help="exact date (2026-09-18), or \"+N\" for the first "
+                         "expiry at least N days out. Default is the NEAREST, "
+                         "which on some names is the same day.")
     ap.add_argument("--per-symbol", type=int, default=0,
                     help="at most this many rows per name, so one symbol "
                          "cannot take the whole page")
@@ -569,7 +622,7 @@ def main():
     rows = []
     for s in [x.strip().upper() for x in args.symbols.split(",") if x.strip()]:
         try:
-            r, meta = evaluate(s, args.side, args.structure)
+            r, meta = evaluate(s, args.side, args.structure, args.expiry)
             if meta:
                 ivrv = meta["iv"] / meta["rv"] if meta["rv"] else float("nan")
                 print(f"{s:6s} spot {meta['spot']:8.2f}  ATR {meta['atr']:7.2f}  "

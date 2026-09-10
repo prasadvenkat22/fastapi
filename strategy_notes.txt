@@ -8882,3 +8882,50 @@ solved the deep-ITM trap of section 131 and lands instead on structures whose
 EV rests entirely on the historical resampler's tail. Both ends of the ranking
 remain places to be careful, which is the same conclusion section 130 reached
 from the other direction.
+
+
+140. A FLATTEN ENDPOINT, AND WHY IT REFUSES TO TRUST THE PAIRING  (2026-09-10)
+--------------------------------------------------------------------------------
+
+    POST /trading/flatten?confirm=LIQUIDATE&preview=false[&underlying=SNDK]
+
+THE KILL SWITCH IS NOT THIS. KILL_SWITCH.txt halts algorithmic execution --
+the engine stops deciding -- and leaves every position exactly where it is.
+Right for "stop trading", wrong for "get me out", and the two were easy to
+confuse until they sat next to each other in one router.
+
+IT CLOSES STRUCTURES, NEVER LEGS. Each spread goes as ONE multileg order.
+Legging out is how a long becomes a NAKED SHORT: sell the long, have the short
+leg's close rejected, and an account that was risk-defined a second ago has
+unbounded loss. Tradier fills a multileg order as a package or not at all,
+which is the only property that matters here.
+
+AND IT DOES NOT TRUST open_structures(). That function pairs by expiry and
+right, and when several long strikes back one short strike it reports a
+quantity no single strike can fill. Measured the moment the endpoint was first
+dry-run:
+
+    legs held      1725 x2,  1750 x3,  1800 x-5
+    pairing said   SNDK 1750/1800 x5
+    reality        only THREE 1750s exist
+
+Selling five 1750s is rejected. A flatten that reports "submitted" while the
+position is still open is worse than no flatten, because the entire point is
+knowing you are out. Quantities are now clamped to the smaller of the two legs
+actually on hand, consumed so a second structure cannot claim the same
+contracts, and any shortfall is named in the response:
+
+    would_close            SNDK 1750/1800 x3, CRWV 92/100 x5, NVDA 220/228 x1
+    pairing_shortfalls     SNDK 1750/1800: pairing said 5, closable 3
+    unpaired_legs          1725 x2 and 1800 x-2 left open
+
+Those leftovers are themselves a matched 1725/1800 spread, so what remains is
+risk-defined rather than naked -- but it remains, and the response says so
+rather than implying the account is flat.
+
+CONFIRMED TWICE. confirm=LIQUIDATE and preview=false, POST not GET. A GET can
+be fired by a browser prefetch or a pasted link; this endpoint is the only one
+in the router that can lose money.
+
+LIMIT AT THE NATURAL, NEVER MARKET. This gets called exactly when the book is
+at its widest, which is the worst moment to send a two-leg market order.

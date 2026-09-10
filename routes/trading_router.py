@@ -504,3 +504,162 @@ async def screen_flow(
             "note": ("label requires price-vs-VWAP and up-volume share to "
                      "agree; MIXED means they do not. Measures urgency, not "
                      "institutional participation.")}
+
+
+# ---------------------------------------------------------------------------
+# FLATTEN. The panic button, and the only endpoint here that can lose money.
+# ---------------------------------------------------------------------------
+
+@router.post("/flatten")
+async def flatten_all(
+    confirm: str = Query(..., description='must be exactly "LIQUIDATE"'),
+    preview: bool = Query(True, description="true lists what it WOULD close"),
+    underlying: str = Query("", description="limit to one symbol, blank = all"),
+):
+    """Close every open spread at the broker. POST, and confirmed twice.
+
+    THE KILL SWITCH DOES NOT DO THIS. KILL_SWITCH.txt halts algorithmic
+    execution -- the engine stops deciding -- and leaves every position exactly
+    where it is. That is the right behaviour for "stop trading" and the wrong
+    one for "get me out", and the two were easy to confuse until they sat next
+    to each other.
+
+    IT CLOSES STRUCTURES, NOT LEGS. orphans.open_structures() supplies the
+    pairing and each spread goes as ONE multileg order, because legging out is
+    how a long turns into a naked short: sell the long, have the short leg's
+    close rejected or unfilled, and an account that was risk-defined a second
+    ago is now short a call with unbounded loss. Tradier fills a multileg order
+    as a package or not at all, which is the property that matters here.
+
+    ANY LEG THAT IS NOT PART OF A PAIR IS REPORTED AND NOT TRADED. A panic
+    button that leaves something open is bad; one that legs into a naked short
+    while panicking is far worse. The response names them so a human can act.
+
+    PRICED AT THE NATURAL, never market. A two-leg market order in a thin chain
+    is how a spread fills several dollars from its mid -- and this endpoint is
+    most likely to be called exactly when the book is at its widest.
+
+    preview=true by default. You have to ask for it twice: once with the
+    confirm string, once by turning preview off.
+    """
+    if confirm != "LIQUIDATE":
+        raise HTTPException(
+            status_code=400,
+            detail='refusing: pass confirm=LIQUIDATE to acknowledge this '
+                   'closes real positions')
+
+    from trading_engine.orphans import open_structures
+
+    want = underlying.strip().upper()
+    try:
+        structures = [st for st in (open_structures() or [])
+                      if not want or st["root"] == want]
+        legs = tradier_orders.open_positions() or []
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"cannot read account: {exc}")
+
+    def _iso(exp) -> str:
+        """Structures carry %y%m%d ("260911"); occ_symbol wants %Y-%m-%d.
+
+        Getting this wrong builds a symbol for a different contract, which is
+        the single most expensive mistake this endpoint could make.
+        """
+        e = str(exp)
+        return f"20{e[:2]}-{e[2:4]}-{e[4:6]}" if len(e) == 6 else e
+
+    # WHAT THE ACCOUNT ACTUALLY HOLDS, per contract symbol. open_structures()
+    # pairs by expiry and right, and when several long strikes back one short
+    # strike it can report a quantity no single strike can fill.
+    #
+    # Measured 2026-09-10: legs were 1725 x2, 1750 x3, 1800 x-5, and the
+    # pairing came back "SNDK 1750/1800 x5". Selling five 1750s when three are
+    # held is rejected by the broker -- and a flatten that reports "submitted"
+    # while the position is still open is worse than no flatten at all, since
+    # the whole point is knowing you are out.
+    held = {}
+    for p in legs:
+        try:
+            held[str(p.get("symbol"))] = abs(float(p.get("quantity") or 0))
+        except Exception:
+            continue
+
+    paired = set()
+    plan = []
+    short_fall = []
+    for st in structures:
+        root = st["root"]
+        lo, hi = st["long_strike"], st["short_strike"]
+        qty = int(st["qty"])
+        try:
+            q = tradier_orders.quotes([st["long"], st["short"]])
+            bid = float((q.get(st["long"]) or {}).get("bid") or 0)
+            ask = float((q.get(st["short"]) or {}).get("ask") or 0)
+            limit = round(bid - ask, 2)
+        except Exception:
+            limit = 0.0
+        # Clamp to the smaller of the two legs actually on hand, and consume
+        # it so a second structure cannot claim the same contracts.
+        avail = int(min(held.get(st["long"], 0), held.get(st["short"], 0), qty))
+        if avail < qty:
+            short_fall.append({
+                "underlying": root, "long_strike": lo, "short_strike": hi,
+                "pairing_said": qty, "actually_closable": avail,
+                "why": "the account does not hold that many at both strikes",
+            })
+        if avail <= 0:
+            continue
+        held[st["long"]] = held.get(st["long"], 0) - avail
+        held[st["short"]] = held.get(st["short"], 0) - avail
+        qty = avail
+        if held.get(st["long"], 0) <= 0:
+            paired.add(st["long"])
+        if held.get(st["short"], 0) <= 0:
+            paired.add(st["short"])
+        plan.append({
+            "underlying": root, "long_strike": lo, "short_strike": hi,
+            "quantity": qty, "expiry": _iso(st.get("expiry")),
+            "right": "put" if str(st.get("right", "C")).upper().startswith("P")
+                     else "call",
+            "is_credit": bool(st.get("credit")),
+            "entry": st.get("entry"),
+            "limit": limit,
+            "proceeds_estimate": round(limit * qty * 100, 2),
+        })
+
+    # Anything still on hand after the clamping above is genuinely unpaired.
+    orphan_legs = [
+        {"symbol": p.get("symbol"), "quantity": p.get("quantity"),
+         "remaining_after_plan": held.get(str(p.get("symbol")), 0),
+         "cost_basis": p.get("cost_basis")}
+        for p in legs
+        if held.get(str(p.get("symbol")), 0) > 0
+        and (not want or str(p.get("symbol", "")).upper().startswith(want))
+    ]
+
+    if preview:
+        return {
+            "preview": True, "would_close": plan,
+            "pairing_shortfalls": short_fall,
+            "unpaired_legs_NOT_closed": orphan_legs,
+            "note": ("nothing was sent. Repeat with preview=false to execute. "
+                     "Unpaired legs are never traded here — closing one leg of "
+                     "a spread can leave a naked short."),
+        }
+
+    sent, failed = [], []
+    for p in plan:
+        try:
+            res = tradier_orders.submit_vertical(
+                p["underlying"], p["expiry"], p["right"],
+                long_strike=p["long_strike"], short_strike=p["short_strike"],
+                quantity=p["quantity"], opening=False,
+                limit_price=abs(p["limit"]), is_credit=p["is_credit"],
+                preview=False)
+            sent.append({**p, "order": res})
+        except Exception as exc:
+            failed.append({**p, "error": str(exc)})
+    return {"preview": False, "submitted": sent, "failed": failed,
+            "pairing_shortfalls": short_fall,
+            "unpaired_legs_NOT_closed": orphan_legs,
+            "note": ("orders are LIMIT at the natural and may not fill. Check "
+                     "/trading/positions before assuming you are flat.")}

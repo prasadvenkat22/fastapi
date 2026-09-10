@@ -340,6 +340,27 @@ STALL_MUST_BOOK_A_GAIN = os.getenv(
 # multi-day position is allowed to pause without that meaning it is finished.
 ORPHAN_LATER_STALL_ARM_PCT = float(os.getenv("TRADING_ORPHAN_LATER_STALL_ARM", "10"))
 ORPHAN_LATER_STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_LATER_STALL_MINUTES", "15"))
+# GIVE-BACK IN ATR, WHICH MEANS THE SAME THING ON EVERY POSITION.
+#
+# The percent give-back below is measured against the ENTRY, so the absolute
+# trigger moves every time the entry price does. Measured across three SNDK
+# positions in two days at a constant setting of 30:
+#
+#     entry 26.20  ->  7.86 SNDK points  =  1.01x a typical 5-minute bar
+#     entry 21.05  ->  6.31 SNDK points  =  0.81x
+#     entry 18.00  ->  5.40 SNDK points  =  0.70x
+#
+# Same number, three different rules. Every roll silently re-tunes the stall,
+# and the operator has to re-derive it by hand to know what it now means.
+#
+# ATR does not move with the entry. 0.10 ATR is a tenth of an average day on
+# that underlying whatever the spread cost, so a setting made once holds
+# across rolls, across names, and across price levels.
+#
+# Set above 0 to use it; the percent below stays the fallback.
+ORPHAN_LATER_STALL_GIVEBACK_ATR = float(
+    os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR", "0") or 0)
+
 ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
     os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK", "3.3"))
 
@@ -643,6 +664,47 @@ def _parse(symbol: str) -> "tuple | None":
         return None
 
 
+_ATR_CACHE: dict = {}
+
+
+def _atr_for(root: str) -> "float | None":
+    """ATR14 for an underlying, cached per symbol per day.
+
+    Reuses weekly_signals, which already computes True Range with the gap
+    included -- the thing a stall is trying to survive. Returns None on any
+    failure so the caller falls back to the percent give-back rather than
+    losing the rule entirely.
+    """
+    key = (root, datetime.now(timezone.utc).date())
+    if key in _ATR_CACHE:
+        return _ATR_CACHE[key]
+    val = None
+    try:
+        from . import weekly_signals
+
+        val = (weekly_signals.read(root) or {}).get("atr14")
+        val = float(val) if val else None
+    except Exception:
+        logger.warning("ATR unavailable for %s — using the percent give-back.",
+                       root, exc_info=True)
+    _ATR_CACHE[key] = val
+    return val
+
+
+def _giveback_points(root: str, entry_abs: float) -> float:
+    """Points of RETURN that count as a give-back for this structure.
+
+    Converts the ATR setting into the same units the stall already compares
+    in, so one expression of the rule serves both configurations and the
+    comparison itself is untouched.
+    """
+    if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0 and entry_abs:
+        atr = _atr_for(root)
+        if atr:
+            return ORPHAN_LATER_STALL_GIVEBACK_ATR * atr / entry_abs * 100.0
+    return ORPHAN_LATER_STALL_GIVEBACK_PCT
+
+
 def open_structures(engine_symbols: "set | None" = None) -> list:
     """Reconstruct what is open, from the orders that opened it.
 
@@ -656,11 +718,29 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
     """
     engine_symbols = engine_symbols or set()
     orders = tradier_orders.filled_spread_orders()
-    held = {}
+    # None means UNREADABLE, {} means READ AND EMPTY. The difference is the
+    # whole of this fix.
+    #
+    # Both cross-checks below were written `not held or ...` and `if held and
+    # ...`, which fails open when the position list cannot be fetched -- right,
+    # because losing the broker for one cycle must not delete the book. But an
+    # empty dict also means the account is genuinely FLAT, and the same
+    # expression then skips the check and resurrects every structure the order
+    # history has ever seen.
+    #
+    # Observed 2026-09-10 on a flat account: six phantom structures reported as
+    # open, the oldest four days stale -- CRWV 95/99 from Monday, SNDK
+    # 1610/1710 from Tuesday, SNDK 1700/1850 from Wednesday. Every one was
+    # being tracked, armed and evaluated for a stall, and orphans.py places its
+    # own orders without going through service._broker_holds. A phantom that
+    # armed would have submitted a close for a position that does not exist.
+    held = None
     try:
+        held = {}
         for p in tradier_orders.open_positions():
             held[p.get("symbol")] = int(float(p.get("quantity") or 0))
     except Exception:
+        held = None
         logger.exception("Position cross-check unavailable — reporting from orders alone.")
 
     book = {}
@@ -726,7 +806,10 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
     # with no SINGLE warning either, because nothing was left over to warn
     # about.
     def _still_held(syms):
-        return not held or all(abs(held.get(x, 0)) > 0 for x in syms)
+        # held is None -> unreadable, keep everything. held is {} -> flat.
+        if held is None:
+            return True
+        return all(abs(held.get(x, 0)) > 0 for x in syms)
 
     consumed = {}
     for syms, rec in book.items():
@@ -735,7 +818,7 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
         for sym in syms:
             consumed[sym] = consumed.get(sym, 0) + rec["qty"]
     leftover = {}
-    for sym, n in held.items():
+    for sym, n in (held or {}).items():
         free = abs(n) - consumed.get(sym, 0)
         if free <= 0:
             continue
@@ -790,7 +873,7 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
         if rec["qty"] <= 0:
             continue
         # Still actually held? An expiry or assignment leaves no closing fill.
-        if held and not all(abs(held.get(s, 0)) > 0 for s in syms):
+        if held is not None and not all(abs(held.get(s, 0)) > 0 for s in syms):
             continue
         legs = [(_parse(s), s) for s in syms]
         if any(p is None for p, _ in legs):
@@ -1088,6 +1171,23 @@ def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
     and the next pass will see it again.
     """
     try:
+        # SAME CHECK service._broker_holds() MAKES, because this path never
+        # goes through service.py. On 2026-09-10 phantom structures from a
+        # flat-account bug submitted a rejected close every minute, and the
+        # guard added to the engine's exit that morning did nothing here.
+        try:
+            _held = {p.get("symbol") for p in (tradier_orders.open_positions() or [])}
+            if _held and not ({st["long"], st["short"]} & _held):
+                logger.warning(
+                    "ORPHAN %s %.0f/%.0f: the broker holds neither leg — not "
+                    "sending a close. Reconstruction says open, the account "
+                    "says otherwise.",
+                    st["root"], st["long_strike"], st["short_strike"])
+                return None
+        except Exception:
+            logger.warning("Could not verify holdings before an orphan close "
+                           "— letting it through.", exc_info=True)
+
         res = tradier_orders.submit_vertical(
             st["root"],
             f"20{st['expiry'][:2]}-{st['expiry'][2:4]}-{st['expiry'][4:6]}",
@@ -1501,7 +1601,8 @@ def review(engine_symbols: "set | None" = None) -> list:
             elif ((not zero_dte) and past_hold and ORPHAN_LATER_STALL_MINUTES > 0
                   and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
                   and quiet >= ORPHAN_LATER_STALL_MINUTES and books_a_gain
-                  and stall_pct <= rec["peak"] - ORPHAN_LATER_STALL_GIVEBACK_PCT):
+                  and stall_pct <= rec["peak"] - _giveback_points(
+                      st["root"], entry_abs)):
                 # Armed by a real profit, booked on a small giveback. See the
                 # knobs above for why arming is what makes the tight giveback
                 # safe on a position that has days left.
@@ -1562,8 +1663,22 @@ def review(engine_symbols: "set | None" = None) -> list:
                     if ORPHAN_FORCE_CLOSE:
                         parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)
                 elif ORPHAN_LATER_STALL_MINUTES > 0:
-                    parts.append("stall %.1fpts/%.0fmin %s" % (
-                        ORPHAN_LATER_STALL_GIVEBACK_PCT, ORPHAN_LATER_STALL_MINUTES,
+                    # REPORT THE EFFECTIVE GIVE-BACK, not the setting. Under
+                    # the ATR configuration the number that actually applies
+                    # is derived per structure, and a log line printing the
+                    # raw setting would describe a rule the engine is not
+                    # using -- exactly the class of quiet lie the verdict line
+                    # exists to prevent.
+                    _gb = _giveback_points(st["root"], entry_abs)
+                    _atr_note = ""
+                    if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0:
+                        _a = _atr_for(st["root"])
+                        if _a:
+                            _atr_note = " =%.2f%s@%.2fATR" % (
+                                ORPHAN_LATER_STALL_GIVEBACK_ATR * _a,
+                                st["root"], ORPHAN_LATER_STALL_GIVEBACK_ATR)
+                    parts.append("stall %.1fpts%s/%.0fmin %s" % (
+                        _gb, _atr_note, ORPHAN_LATER_STALL_MINUTES,
                         "ARMED" if rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
                         else "arms +%.0f%%" % ORPHAN_LATER_STALL_ARM_PCT))
                 verdict = "holding (%s)" % ", ".join(parts) if parts else "holding"

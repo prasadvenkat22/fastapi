@@ -9029,3 +9029,53 @@ AND THE WARNING NOW NAMES THE MISSING LEG. "has no fill price" meant guessing
 which of the two the lookup had dropped. It now says which symbol, and that a
 leg missing there is absent from BOTH the order window and cost basis -- a
 stranger problem than a short window, and one that should look different.
+
+
+142. A FLAT ACCOUNT RESURRECTED FOUR DAYS OF CLOSED POSITIONS  (2026-09-10)
+--------------------------------------------------------------------------------
+
+With the account genuinely flat, open_structures() reported SIX open
+structures, the oldest four days stale:
+
+    CRWV   95/99    x2  entry   1.66     Monday
+    SNDK 1610/1710  x1  entry  59.50     Tuesday
+    SNDK 1700/1850  x2  entry 100.55     Wednesday
+    SNDK 1720/1800  x1  entry  45.80
+    SNDK 1790/1850  x2  entry  13.70
+    CRWV   95/100   x5  entry   2.50
+
+Every one was tracked, armed and evaluated for a stall each cycle, and two of
+them were SUBMITTING REAL CLOSING ORDERS once a minute:
+
+    18:51:11  rejected  SNDK260911C01600000 sell_to_close | ...C01700000 buy_to_close
+    18:52:10  rejected  ... and every minute after
+
+THE CAUSE IS ONE EXPRESSION, WRITTEN TWICE:
+
+    def _still_held(syms):
+        return not held or all(abs(held.get(x, 0)) > 0 for x in syms)
+
+`not held` was meant to fail OPEN when the position list cannot be fetched --
+correct, because losing the broker for one cycle must not delete the book. But
+an empty dict is also what a FLAT ACCOUNT looks like, and the same expression
+then skips the check entirely.
+
+    "I could not read the account" and "I read it and you hold nothing" are
+    opposite facts that Python spells the same way. None now means unreadable
+    and {} means flat.
+
+WHY IT WAS NOT CAUGHT BY THIS MORNING'S GUARD. service._broker_holds() checks
+holdings before a close, and would have refused every one of these. But
+orphans.py calls tradier_orders.submit_vertical DIRECTLY (line 1078) and never
+passes through service.py. A guard on one exit path is not a guard.
+
+AND IT WAS INVISIBLE IN THE ORDINARY CASE. While any position is open the
+cross-check works perfectly; the bug only appears in the window between
+closing the last position and opening the next. On an account that is usually
+holding something, that window is minutes at a time -- long enough to submit
+orders, short enough that nobody looks.
+
+    The SNDK sale that prompted the investigation was NOT this bug: the stall
+    fired correctly at 18:50 and booked +814 on SNDK 1690/1740 x4. Two things
+    happening at once, one right and one wrong, and the right one is what got
+    reported.

@@ -77,6 +77,11 @@ def main() -> None:
                          "of the high that preceded it")
     ap.add_argument("--interval", default="5min",
                     choices=("1min", "5min", "15min"))
+    ap.add_argument("--giveback-atr", type=float, default=0.0,
+                    help="express the give-back as a fraction of ATR14 "
+                         "instead of a percent of max profit. 0.10 = a "
+                         "tenth of an average day, and it means the same "
+                         "thing on every position regardless of entry.")
     ap.add_argument("--profit-only", action="store_true",
                     help="ignore losing days entirely: only fire when the exit "
                          "would still book a gain against entry. This is the "
@@ -91,6 +96,16 @@ def main() -> None:
     width = abs(args.short - args.long)
     max_profit = width - args.entry
     trigger = max_profit * args.giveback / 100.0
+    atr = None
+    if args.giveback_atr > 0:
+        import yfinance as _yf
+
+        h = _yf.Ticker(args.symbol).history(period="3mo", interval="1d")
+        H, L, C = h["High"], h["Low"], h["Close"]
+        pc = C.shift(1)
+        tr = (H - L).combine((H - pc).abs(), max).combine((L - pc).abs(), max)
+        atr = float(tr.rolling(14).mean().iloc[-1])
+        trigger = args.giveback_atr * atr
     rows = bars(args.symbol, day, args.interval)
     if not rows:
         print("no bars")
@@ -101,6 +116,10 @@ def main() -> None:
     print(f"max profit {max_profit:.2f}/spread (${max_profit * args.qty * 100:,.0f})   "
           f"{args.giveback:.0f}% of it = {trigger:.2f} = "
           f"${trigger * args.qty * 100:,.0f} = {trigger:.2f} pts of {args.symbol}")
+    if atr:
+        print(f"ATR14 {atr:.2f}  ->  give-back {args.giveback_atr:.2f} ATR = "
+              f"{trigger:.2f} points of {args.symbol} = "
+              f"${trigger * args.qty * 100:,.0f} on this position")
     print(f"window {args.window:.0f} min, priced at intrinsic, {args.interval} bars\n")
 
     def iv(px: float) -> float:

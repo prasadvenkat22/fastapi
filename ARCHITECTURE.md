@@ -414,7 +414,7 @@ TRADING_ORPHAN_LATER_STALL_ARM=5    arm on any modest profit
 TRADING_ORPHAN_LATER_STALL_GIVEBACK=40
 TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR=0   off; see below
 TRADING_ORPHAN_LATER_STALL_MINUTES=5
-TRADING_ORPHAN_LATER_TARGET_PCT=0.75
+TRADING_ORPHAN_LATER_TARGET_PCT=0.90    raised; see the ordering note below
 ```
 
 **It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and
@@ -430,6 +430,27 @@ give-back. Peaks survive deploys.
 **0DTE positions use a different ladder.** `zero_dte` switches on the −40% stop
 and the 15:45 flatten and switches `STALL_LATER` off; the verdict line says
 which is live.
+
+Worked on 2026-09-10: `QQQ 707/710 x3` peaked at +31.3% at 15:10, drifted rather
+than turned, so no give-back window ever met the threshold — the **15:45 flatten**
+booked it at +$99 (+18.4%) and left nothing to be assigned into the close. On
+expiry day that backstop is the exit that matters; the stall is the one that
+does not fire.
+
+**The target must sit BELOW what the stall can reach, or the stall is dead
+code.** At `TARGET_PCT=0.75` on SNDK 1670/1730 the take-profit needed 1715 while
+the stall needed a peak near 1740 to have anything to give back — the target
+always fired first and the trail never ran. Raised to **0.90**, so the position
+has to climb far enough for the trail to arm before the target takes it. These
+two numbers are one setting, not two, and changing either alone re-orders them.
+
+**A successful close no longer logs at ERROR.** `_post_order` raises
+`OrderError` on every Tradier rejection, so the line after `submit_vertical`
+only runs when the order was accepted — it logged at ERROR anyway, which meant
+`grep ERROR` on the trading log returned mostly confirmations and buried the
+rejections worth finding. Now INFO, except `status: suppressed`, which is
+WARNING: nothing was sent, and the engine believes it closed a position that is
+still open at the broker.
 
 Worked, unattended, on 2026-09-10: `SNDK 1675/1725 x3` peaked at +89.2%, gave
 back past 15 points with 5 minutes since the last high, and booked **+$771**.

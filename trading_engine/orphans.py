@@ -1196,9 +1196,20 @@ def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
             quantity=st["qty"], opening=False,
             limit_price=abs(limit_price), is_credit=st["credit"],
         )
-        logger.error("ORPHAN %s: closing %s %.0f/%.0f x%d — %s",
-                     reason, st["root"], st["long_strike"], st["short_strike"],
-                     st["qty"], res)
+        # LEVEL BY OUTCOME, and reaching this line IS the good outcome:
+        # _post_order raises OrderError on every Tradier rejection, so a
+        # failure never gets here -- it goes to the logger.exception below.
+        # This logged at ERROR regardless, so `grep ERROR` returned mostly
+        # successful closes and the rejections worth finding sat in the same
+        # bucket as the fills. SUPPRESSED is the one case that is neither:
+        # nothing was sent because TRADING_LIVE_ORDERS is off, and a position
+        # the engine believes it closed is still open at the broker.
+        suppressed = str((res or {}).get("status") or "").lower() == "suppressed"
+        logger.log(
+            logging.WARNING if suppressed else logging.INFO,
+            "ORPHAN %s: %s %s %.0f/%.0f x%d — %s",
+            reason, "NOT closing (orders suppressed)" if suppressed else "closing",
+            st["root"], st["long_strike"], st["short_strike"], st["qty"], res)
         return _fill_value((res or {}).get("id"))
     except Exception:
         logger.exception("ORPHAN close failed for %s — position left open.", st["key"])

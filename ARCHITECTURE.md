@@ -1,6 +1,6 @@
 # Architecture — what actually runs
 
-Current as of 2026-09-07. Read from the deployed server, not from code
+Current as of 2026-09-10. Read from the deployed server, not from code
 defaults. Where this file and a docstring disagree, check
 `docker exec app env | grep '^TRADING_'` and believe that.
 
@@ -311,9 +311,29 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 ## HTTP: the screener is callable
 
 ```
-GET /trading/screener/verticals?symbols=CRWV,AVGO&side=call&structure=debit&by=edge&per_symbol=2
-GET /trading/screener/flow?symbols=CRWV,AVGO,SNDK
+GET  /trading/screener/verticals?symbols=CRWV,AVGO&side=call&structure=debit&by=edge&per_symbol=2
+GET  /trading/screener/flow?symbols=CRWV,AVGO,SNDK
+POST /trading/flatten?confirm=LIQUIDATE&preview=true
+POST /trading/flatten?confirm=LIQUIDATE&preview=false&plan_token=<from the preview>
 ```
+
+**`/flatten` closes MANUAL spreads only** — engine positions are excluded by
+passing their legs as `engine_symbols`, the same way `orphans.review()` does.
+Four guards, each from an incident (sections 140–141):
+
+| guard | why |
+|---|---|
+| structures, never legs | legging out turns a long into a **naked short** |
+| clamped to holdings | the pairing said `SNDK 1750/1800 x5` when three existed |
+| paired from holdings too | a spread whose opening order aged out of the count-limited window is **invisible**, not stale |
+| market hours + `plan_token` | the same plan previewed at **$15,297** at 09:20 and **$6,721** at 09:33; and a boolean was one character between looking and trading |
+
+The token fingerprints the plan, so execution can only follow a preview of
+*that* plan — if the market moves, it stops matching and you get a fresh
+preview instead of a surprise fill.
+
+**The kill switch is not this.** `KILL_SWITCH.txt` halts the engine from
+deciding and leaves every position open.
 
 Behind `require_trading`, both GET, neither trades. Capped at 12 symbols — each
 costs a daily-bar, chain and intraday fetch against one production worker.
@@ -379,6 +399,45 @@ restart.
 | `trading_macro_verdicts` | append-only macro read history |
 | `trading_macro_readings` | VIX and 10Y per cycle |
 | `macro_session_outcomes` | one row per session: morning verdicts vs QQQ's move and the engine's P&L |
+
+---
+
+## What manages an open position
+
+`orphans.py`, every cycle. Current settings:
+
+```
+TRADING_ORPHAN_UNDERLYING=          empty = EVERY symbol
+TRADING_ORPHAN_HOLD_UNTIL=09:30     acts from the opening bell
+TRADING_ORPHAN_ACT_EXPIRY_DAY_ONLY=false
+TRADING_ORPHAN_LATER_STALL_ARM=5    arm on any modest profit
+TRADING_ORPHAN_LATER_STALL_GIVEBACK=15
+TRADING_ORPHAN_LATER_STALL_MINUTES=5
+TRADING_ORPHAN_LATER_TARGET_PCT=0.75
+```
+
+**It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and
+`STALL_MUST_BOOK_A_GAIN` is on, which is what makes a tight give-back safe: the
+worst case is leaving a winner early, never a realised loss (section 137).
+
+**The peak trails and never ratchets down.** Each new high raises `peak_iv` and
+restarts the quiet clock, so a structure still making highs cannot trip. Stored
+in **dollars of intrinsic**, not return percent — a scaled-up entry once made an
+untouched 20.00 of intrinsic re-read 72.4% then 51.5%, a 20.9-point phantom
+give-back. Peaks survive deploys.
+
+**0DTE positions use a different ladder.** `zero_dte` switches on the −40% stop
+and the 15:45 flatten and switches `STALL_LATER` off; the verdict line says
+which is live.
+
+Worked, unattended, on 2026-09-10: `SNDK 1675/1725 x3` peaked at +89.2%, gave
+back past 15 points with 5 minutes since the last high, and booked **+$771**.
+
+**Fill prices come from cost basis, not order reconstruction** (section 141).
+`filled_legs()` signs quantity by open-vs-close, so a `sell_to_open` counts as a
+long open and blends its premium into genuine longs — a rolled strike returns a
+price belonging to neither position (`1725C 69.60 x1` against the account's
+`23.20 x3`). Where they disagree the account wins, and the override is logged.
 
 ---
 

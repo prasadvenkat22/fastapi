@@ -510,6 +510,99 @@ async def screen_flow(
 # FLATTEN. The panic button, and the only endpoint here that can lose money.
 # ---------------------------------------------------------------------------
 
+def _engine_legs() -> set:
+    """OCC symbols the ENGINE owns, so a manual flatten never touches them.
+
+    Built the same way service.py builds it for orphans.review(): the engine's
+    own rows, its two strikes, today's expiry. Anything not in this set was
+    opened by hand and is what /flatten is for.
+    """
+    out: set = set()
+    try:
+        from trading_engine.service import option_type_for, today_expiry
+
+        db = SessionLocal()
+        try:
+            for row in db.query(OpenPosition).all():
+                cp = option_type_for(row.strategy)
+                for k in (row.long_strike, row.short_strike):
+                    if k is None:
+                        continue
+                    out.add(tradier_orders.occ_symbol(
+                        row.underlying or "QQQ", today_expiry(), cp, float(k)))
+        finally:
+            db.close()
+    except Exception:
+        # Fail CLOSED: if the engine's rows cannot be read we return an empty
+        # set, which means flatten would include them. That is the wrong way
+        # round for safety, so say so loudly rather than silently.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Could not read engine positions — /flatten may include them.",
+            exc_info=True)
+    return out
+
+
+def _pair_leftovers(held: dict, want: str) -> list:
+    """Pair whatever is STILL held into closable spreads, from positions alone.
+
+    open_structures() reconstructs from ORDER HISTORY, and that endpoint
+    returns a window measured in count rather than days -- so a spread whose
+    opening order has aged out of it is not merely stale, it is INVISIBLE. A
+    flatten built only on that would silently leave a real position open while
+    reporting success, which is the one failure a panic button must not have.
+
+    This is the backstop, and it needs no order history at all: match remaining
+    longs to remaining shorts on the same root, expiry and right, lowest strike
+    first. `held` carries SIGNED quantities, positive long and negative short,
+    already decremented by whatever the structure pass claimed.
+    """
+    import re
+
+    occ = re.compile(r"^([A-Z]+)(\d{6})([CP])(\d{8})$")
+    longs: dict = {}
+    shorts: dict = {}
+    for sym, qty in held.items():
+        if not qty:
+            continue
+        m = occ.match(str(sym).upper())
+        if not m:
+            continue
+        root, ymd, cp, strike = m.groups()
+        if want and root != want:
+            continue
+        bucket = longs if qty > 0 else shorts
+        bucket.setdefault((root, ymd, cp), []).append(
+            [int(strike) / 1000.0, sym, abs(int(qty))])
+    out = []
+    for key in sorted(set(longs) | set(shorts)):
+        root, ymd, cp = key
+        ls = sorted(longs.get(key, []))
+        ss = sorted(shorts.get(key, []))
+        li = si = 0
+        while li < len(ls) and si < len(ss):
+            n = min(ls[li][2], ss[si][2])
+            if n <= 0:
+                break
+            out.append({
+                "underlying": root,
+                "expiry": f"20{ymd[:2]}-{ymd[2:4]}-{ymd[4:6]}",
+                "right": "put" if cp == "P" else "call",
+                "long_strike": ls[li][0], "short_strike": ss[si][0],
+                "quantity": n, "long": ls[li][1], "short": ss[si][1],
+                "source": "holdings",
+            })
+            ls[li][2] -= n
+            ss[si][2] -= n
+            held[ls[li][1]] = held.get(ls[li][1], 0) - n
+            held[ss[si][1]] = held.get(ss[si][1], 0) + n
+            if ls[li][2] == 0:
+                li += 1
+            if ss[si][2] == 0:
+                si += 1
+    return out
+
+
 @router.post("/flatten")
 async def flatten_all(
     confirm: str = Query(..., description='must be exactly "LIQUIDATE"'),
@@ -552,9 +645,11 @@ async def flatten_all(
 
     want = underlying.strip().upper()
     try:
-        structures = [st for st in (open_structures() or [])
+        engine_owned = _engine_legs()
+        structures = [st for st in (open_structures(engine_owned) or [])
                       if not want or st["root"] == want]
-        legs = tradier_orders.open_positions() or []
+        legs = [p for p in (tradier_orders.open_positions() or [])
+                if str(p.get("symbol")) not in engine_owned]
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"cannot read account: {exc}")
 
@@ -579,7 +674,7 @@ async def flatten_all(
     held = {}
     for p in legs:
         try:
-            held[str(p.get("symbol"))] = abs(float(p.get("quantity") or 0))
+            held[str(p.get("symbol"))] = int(float(p.get("quantity") or 0))
         except Exception:
             continue
 
@@ -599,7 +694,8 @@ async def flatten_all(
             limit = 0.0
         # Clamp to the smaller of the two legs actually on hand, and consume
         # it so a second structure cannot claim the same contracts.
-        avail = int(min(held.get(st["long"], 0), held.get(st["short"], 0), qty))
+        avail = int(min(abs(held.get(st["long"], 0)),
+                        abs(held.get(st["short"], 0)), qty))
         if avail < qty:
             short_fall.append({
                 "underlying": root, "long_strike": lo, "short_strike": hi,
@@ -608,13 +704,9 @@ async def flatten_all(
             })
         if avail <= 0:
             continue
-        held[st["long"]] = held.get(st["long"], 0) - avail
-        held[st["short"]] = held.get(st["short"], 0) - avail
+        held[st["long"]] = held.get(st["long"], 0) - avail     # long: toward 0
+        held[st["short"]] = held.get(st["short"], 0) + avail    # short: toward 0
         qty = avail
-        if held.get(st["long"], 0) <= 0:
-            paired.add(st["long"])
-        if held.get(st["short"], 0) <= 0:
-            paired.add(st["short"])
         plan.append({
             "underlying": root, "long_strike": lo, "short_strike": hi,
             "quantity": qty, "expiry": _iso(st.get("expiry")),
@@ -626,13 +718,35 @@ async def flatten_all(
             "proceeds_estimate": round(limit * qty * 100, 2),
         })
 
-    # Anything still on hand after the clamping above is genuinely unpaired.
+    # THE BACKSTOP. Anything the order history did not account for is paired
+    # here from holdings alone, so a spread whose opening order aged out of the
+    # window is still closed rather than silently left open.
+    for extra in _pair_leftovers(held, want):
+        try:
+            q2 = tradier_orders.quotes([extra["long"], extra["short"]])
+            bid = float((q2.get(extra["long"]) or {}).get("bid") or 0)
+            ask = float((q2.get(extra["short"]) or {}).get("ask") or 0)
+            lim = round(bid - ask, 2)
+        except Exception:
+            lim = 0.0
+        plan.append({
+            "underlying": extra["underlying"],
+            "long_strike": extra["long_strike"],
+            "short_strike": extra["short_strike"],
+            "quantity": extra["quantity"], "expiry": extra["expiry"],
+            "right": extra["right"], "is_credit": False, "entry": None,
+            "limit": lim,
+            "proceeds_estimate": round(lim * extra["quantity"] * 100, 2),
+            "source": "holdings (not in order history)",
+        })
+
+    # Anything still on hand after both passes is genuinely unpaired.
     orphan_legs = [
         {"symbol": p.get("symbol"), "quantity": p.get("quantity"),
          "remaining_after_plan": held.get(str(p.get("symbol")), 0),
          "cost_basis": p.get("cost_basis")}
         for p in legs
-        if held.get(str(p.get("symbol")), 0) > 0
+        if held.get(str(p.get("symbol")), 0) != 0
         and (not want or str(p.get("symbol", "")).upper().startswith(want))
     ]
 

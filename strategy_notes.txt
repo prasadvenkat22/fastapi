@@ -8929,3 +8929,46 @@ in the router that can lose money.
 
 LIMIT AT THE NATURAL, NEVER MARKET. This gets called exactly when the book is
 at its widest, which is the worst moment to send a two-leg market order.
+
+
+     ADDENDUM (2026-09-10): MANUAL ONLY, AND FROM HOLDINGS RATHER THAN HISTORY.
+--------------------------------------------------------------------------------
+
+Two changes, both from the same question: should /flatten close what the engine
+manages, or only what was opened by hand?
+
+ENGINE POSITIONS ARE NOW EXCLUDED. open_structures() already takes an
+engine_symbols set and skips any structure whose legs are in it -- that is how
+orphans.review() leaves the engine's own trades alone. The endpoint was calling
+it with no argument, so it swept up everything. It now builds the same set from
+trading_open_positions and passes it. /flatten is for manual spreads; the
+engine's own exits stay the engine's business.
+
+AND THE ORDER HISTORY IS NO LONGER THE ONLY SOURCE. open_structures()
+reconstructs from filled orders, and /accounts/{id}/orders returns a window
+measured in COUNT rather than days. A spread whose opening order has aged out
+of that window is not stale -- it is INVISIBLE. A panic button built only on
+order history would report success while leaving a real position open, which is
+the one failure it must not have.
+
+    _pair_leftovers() is the backstop: after the structure pass, whatever is
+    still held gets matched long-to-short on the same root, expiry and right,
+    from POSITIONS ALONE, needing no order history at all.
+
+It found something on the first run. The account held 1725 x2, 1750 x3,
+1800 x-5; the structure pass closed 1750/1800 x3 and left 1725 x2 against
+1800 x-2 open. The backstop paired them:
+
+    SNDK 1750/1800 x3   order history
+    CRWV   92/100  x5   order history
+    NVDA  220/228  x1   order history
+    SNDK 1725/1800 x2   holdings (not in order history)
+    LEFT OPEN: nothing
+
+A REGEX BUG HID IT FOR ONE ITERATION, and is worth recording because the
+failure was silent. The OCC pattern was written r"...(\d{6})..." -- in a RAW
+string that is a literal backslash repeated, not a digit class, so nothing ever
+matched and the backstop returned an empty list. It did not raise. It reported
+"LEFT OPEN: 1725 x2, 1800 x-2" and looked like correct behaviour, because
+leaving unpaired legs alone IS the documented rule. A guard that silently does
+nothing looks exactly like a guard that has nothing to do.

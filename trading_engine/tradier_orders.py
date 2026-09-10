@@ -478,7 +478,26 @@ def filled_legs() -> dict:
 
 
 def _merge_cost_basis_fills(out: dict) -> dict:
-    """Price legs the order list has forgotten, from the broker's cost basis.
+    """Price every HELD leg from the broker's cost basis, overriding orders.
+
+    THIS WAS A FALLBACK AND IS NOW AUTHORITATIVE, because the order
+    reconstruction was measured wrong on 2026-09-10:
+
+        broker cost basis   1675C 45.40   1725C 23.20  -> entry 22.20, correct
+        filled_legs()       1675C 45.40   1725C 69.60 x1 -> wrong
+
+    The cause is in the caller: it signs quantity by OPEN vs CLOSE --
+    `signed = n if "to_open" in side else -n` -- so a SELL_to_open counts as a
+    long open and its premium is averaged in with genuine longs. A strike used
+    first long and later short, which is exactly what a roll does, comes back
+    with a blended price belonging to neither position. That is also what made
+    a CRWV pair degrade from x5 to x1 between two previews.
+
+    cost_basis has none of that: per currently-held position, signed by the
+    position itself, already averaged over every fill that built it. The orphan
+    module preferred per-leg fills because an average can blur a scaled-up
+    entry -- a fair preference that assumed the reconstruction was correct.
+    Where the two disagree, the account is right by definition.
 
     ACCOUNT HISTORY WAS TRIED FIRST AND IS UNUSABLE FOR THIS. Its trade events
     report `quantity` UNSIGNED -- a buy of 2 and a sell of 2 are both
@@ -497,19 +516,24 @@ def _merge_cost_basis_fills(out: dict) -> dict:
     Only ADDS. Anything already priced from /orders keeps that price.
     """
     try:
-        missing = {}
         for p in (open_positions() or []):
             sym = p.get("symbol")
             qty = float(p.get("quantity") or 0)
             basis = float(p.get("cost_basis") or 0)
-            if not sym or sym in out or qty <= 0 or basis <= 0:
+            if not sym or not qty or not basis:
                 continue
-            missing[sym] = {"qty": int(qty), "price": round(basis / qty / 100.0, 4)}
-        for sym, rec in missing.items():
-            out[sym] = rec
-            logger.info(
-                "Priced %s from cost basis (%d @ %.4f) — the order list no "
-                "longer reaches its fill.", sym, rec["qty"], rec["price"])
+            # abs() on BOTH: a short leg carries a negative quantity and a
+            # negative basis, and their ratio is the per-contract premium
+            # either way.
+            price = round(abs(basis) / abs(qty) / 100.0, 4)
+            prior = out.get(sym)
+            if prior and abs(float(prior.get("price") or 0) - price) > 0.01:
+                logger.info(
+                    "Repricing %s from cost basis: order reconstruction said "
+                    "%.4f x%s, the account says %.4f x%d. Using the account.",
+                    sym, prior.get("price"), prior.get("qty"), price,
+                    int(abs(qty)))
+            out[sym] = {"qty": int(abs(qty)), "price": price}
         return out
     except Exception:
         logger.warning("Cost-basis fill fallback failed; using orders only.",

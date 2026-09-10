@@ -603,11 +603,49 @@ def _pair_leftovers(held: dict, want: str) -> list:
     return out
 
 
+def _in_market_hours() -> bool:
+    """Regular hours on a real trading day, holidays included."""
+    from datetime import time as _t
+    from zoneinfo import ZoneInfo
+
+    from trading_engine import market_calendar
+
+    now = datetime.now(ZoneInfo("America/New_York"))
+    if not market_calendar.is_trading_day(now.date()):
+        return False
+    return _t(9, 30) <= now.time() <= _t(16, 0)
+
+
+def _force_hours() -> bool:
+    return os.getenv("TRADING_FLATTEN_IGNORE_HOURS", "").lower() == "true"
+
+
+def _plan_token(plan: list) -> str:
+    """A fingerprint of THIS plan, so execution cannot follow a stale preview.
+
+    A boolean preview flag was not enough. On 2026-09-10 an instruction to
+    "see if it works" was read as authorisation and four spreads were closed
+    when a dry run was wanted -- one query parameter between looking and
+    trading, with nothing tying the second call to the first.
+    """
+    import hashlib
+    import json as _json
+
+    body = _json.dumps(
+        [[p["underlying"], p["long_strike"], p["short_strike"], p["quantity"],
+          p.get("right"), p.get("expiry")] for p in plan],
+        sort_keys=True)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
+
 @router.post("/flatten")
 async def flatten_all(
     confirm: str = Query(..., description='must be exactly "LIQUIDATE"'),
     preview: bool = Query(True, description="true lists what it WOULD close"),
     underlying: str = Query("", description="limit to one symbol, blank = all"),
+    plan_token: str = Query("", description="the token a preview returned; "
+                                            "required when preview=false"),
 ):
     """Close every open spread at the broker. POST, and confirmed twice.
 
@@ -640,6 +678,21 @@ async def flatten_all(
             status_code=400,
             detail='refusing: pass confirm=LIQUIDATE to acknowledge this '
                    'closes real positions')
+
+    # OUTSIDE MARKET HOURS THE QUOTES ARE FICTION AND SO IS THE PLAN.
+    #
+    # Measured 2026-09-10: the same four spreads previewed at $15,297 at 09:20
+    # and $6,721 at 09:33. The pre-open figure was built from stale marks that
+    # no longer existed by the opening print, and an operator reading it would
+    # have been deciding on a number more than twice the real one. Worse, the
+    # limits derived from it would have been sent into a book that had moved.
+    if not (_force_hours() or _in_market_hours()):
+        raise HTTPException(
+            status_code=409,
+            detail="refusing: outside regular trading hours. Quotes are stale "
+                   "and any plan built from them misprices the position — a "
+                   "preview at 09:20 read $15,297 for spreads worth $6,721 at "
+                   "09:33. Try again between 09:30 and 16:00 ET.")
 
     from trading_engine.orphans import open_structures
 
@@ -750,15 +803,34 @@ async def flatten_all(
         and (not want or str(p.get("symbol", "")).upper().startswith(want))
     ]
 
+    token = _plan_token(plan)
     if preview:
         return {
             "preview": True, "would_close": plan,
             "pairing_shortfalls": short_fall,
             "unpaired_legs_NOT_closed": orphan_legs,
-            "note": ("nothing was sent. Repeat with preview=false to execute. "
-                     "Unpaired legs are never traded here — closing one leg of "
-                     "a spread can leave a naked short."),
+            "plan_token": token,
+            "to_execute": (f"repeat with preview=false&plan_token={token}"
+                           if plan else "nothing to close"),
+            "note": ("NOTHING WAS SENT. Execution requires this exact token, "
+                     "so it can only follow a preview of this exact plan — if "
+                     "the market moves and the plan changes, the token stops "
+                     "matching and you get a fresh preview instead of a "
+                     "surprise fill. Unpaired legs are never traded here: "
+                     "closing one leg of a spread can leave a naked short."),
         }
+
+    if plan_token != token:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "plan_token missing or stale — nothing was sent",
+                "why": ("Execution must follow a preview of the SAME plan. "
+                        "Either you have not previewed, or the market moved "
+                        "and the plan is no longer what you looked at."),
+                "current_token": token,
+                "would_close": plan,
+            })
 
     sent, failed = [], []
     for p in plan:

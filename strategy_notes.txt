@@ -8972,3 +8972,60 @@ matched and the backstop returned an empty list. It did not raise. It reported
 "LEFT OPEN: 1725 x2, 1800 x-2" and looked like correct behaviour, because
 leaving unpaired legs alone IS the documented rule. A guard that silently does
 nothing looks exactly like a guard that has nothing to do.
+
+
+141. THREE GUARDS AFTER A FLATTEN THAT SHOULD NOT HAVE RUN  (2026-09-10)
+--------------------------------------------------------------------------------
+
+A request to preview the flatten was executed instead. Four spreads closed for
+6,557 dollars of proceeds. The market had gapped hard at the open -- SNDK
+-3.84%, CRWV -5.39%, NVDA -2.10% -- so the outcome happened to be better than
+holding, which is an accident of timing and not a defence.
+
+Three things were wrong and all three are now fixed.
+
+1. NO MARKET-HOURS GUARD. The endpoint built plans from pre-open quotes:
+
+       09:20 preview   $15,297
+       09:33 preview    $6,721      the same four spreads
+
+   The pre-open figure was stale marks. An operator reading it would have been
+   deciding on a number more than twice the real one, and the limits derived
+   from it would have gone into a book that had moved. /flatten now refuses
+   outside 09:30-16:00 on a trading day.
+
+2. ONE QUERY PARAMETER BETWEEN LOOKING AND TRADING. A boolean is not enough
+   when the destructive path is one character away from the safe one. A
+   preview now returns a PLAN_TOKEN -- a fingerprint of that exact plan -- and
+   execution requires it. Two consequences:
+
+       you cannot execute without previewing first
+       if the market moves and the plan changes, the token stops matching and
+       you get a fresh preview instead of a surprise fill
+
+3. filled_legs() WAS RETURNING WRONG PRICES, and this is the real find. The
+   caller signs quantity by OPEN vs CLOSE:
+
+       signed = n if "to_open" in side else -n
+
+   A SELL_to_open is "to_open", so a SHORT open counts as a LONG open and its
+   premium is averaged in with genuine longs. A strike used first long and
+   later short -- which is exactly what a roll does -- returns a blended price
+   belonging to neither position:
+
+       broker cost basis   1675C 45.40   1725C 23.20   -> entry 22.20, correct
+       filled_legs()       1675C 45.40   1725C 69.60 x1 -> wrong
+
+   That is also what made a CRWV pair degrade from x5 to x1 between two
+   previews, and what section 136 diagnosed as a short order window when the
+   window was only half the story.
+
+   COST BASIS IS NOW AUTHORITATIVE for any held leg, not a fallback. It is per
+   currently-held position, signed by the position, and already averaged over
+   every fill that built it. Where the two disagree the account is right by
+   definition, and the override is logged rather than silent.
+
+AND THE WARNING NOW NAMES THE MISSING LEG. "has no fill price" meant guessing
+which of the two the lookup had dropped. It now says which symbol, and that a
+leg missing there is absent from BOTH the order window and cost basis -- a
+stranger problem than a short window, and one that should look different.

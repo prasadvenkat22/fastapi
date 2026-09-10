@@ -757,9 +757,22 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             sp = (fills.get(ssym) or {}).get("price")
             if lp is None or sp is None:
                 logger.warning(
-                    "ORPHAN inferred pair %s %.0f/%.0f has no fill price — skipped, "
-                    "since a return without a true entry is not a number worth acting on.",
-                    root, lk, sk)
+                    # NAME THE MISSING LEG. The original message said only
+                    # that a price was absent, so diagnosing it meant guessing
+                    # which of the two the order window had dropped -- on
+                    # 2026-09-10 a CRWV pair degraded from x5 to x1 between two
+                    # previews with nothing in the log to say why.
+                    #
+                    # filled_legs() now falls back to cost basis, so a leg
+                    # missing HERE is absent from the order window AND the
+                    # position list, which is a stranger problem than a short
+                    # window and needs to be visible as such.
+                    "ORPHAN inferred pair %s %.0f/%.0f: no fill price for %s "
+                    "(absent from the order window AND from cost basis) — "
+                    "skipped, since a return without a true entry is not a "
+                    "number worth acting on.",
+                    root, lk, sk,
+                    [sym for sym, px in ((lsym, lp), (ssym, sp)) if px is None])
             else:
                 book[tuple(sorted((lsym, ssym)))] = {
                     "symbols": (lsym, ssym), "qty": n, "net": round(lp - sp, 4),

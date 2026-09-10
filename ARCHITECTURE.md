@@ -411,7 +411,8 @@ TRADING_ORPHAN_UNDERLYING=          empty = EVERY symbol
 TRADING_ORPHAN_HOLD_UNTIL=09:30     acts from the opening bell
 TRADING_ORPHAN_ACT_EXPIRY_DAY_ONLY=false
 TRADING_ORPHAN_LATER_STALL_ARM=5    arm on any modest profit
-TRADING_ORPHAN_LATER_STALL_GIVEBACK=15
+TRADING_ORPHAN_LATER_STALL_GIVEBACK=40
+TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR=0   off; see below
 TRADING_ORPHAN_LATER_STALL_MINUTES=5
 TRADING_ORPHAN_LATER_TARGET_PCT=0.75
 ```
@@ -432,6 +433,27 @@ which is live.
 
 Worked, unattended, on 2026-09-10: `SNDK 1675/1725 x3` peaked at +89.2%, gave
 back past 15 points with 5 minutes since the last high, and booked **+$771**.
+
+**The give-back is a percent of ENTRY, so it re-tunes itself on every roll.**
+Three SNDK positions in two days at a constant setting of 30 meant 7.86, 6.31
+and 5.40 points of the underlying — the same number, three different rules.
+`TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR` expresses it as a fraction of ATR14
+instead, which holds across rolls. **Off by default**: SNDK's 97-point ATR
+against a 50-wide spread makes any sensible fraction larger than the whole
+profit band, so it needs an instrument where the two are better matched.
+`stall_replay.py --giveback-atr` tests either before it goes live.
+
+**Two exit paths place orders, and both need the holdings check.**
+`service._broker_holds()` guards the engine's own exits; `orphans.py` calls
+`submit_vertical` **directly** and bypasses it entirely. A guard on one path is
+not a guard — both are now checked (section 142).
+
+**`None` means the account is unreadable, `{}` means it is flat.** Those are
+opposite facts and `not held` spelled them the same way, so a flat account
+resurrected six closed structures — the oldest four days stale — and two of
+them submitted real closing orders once a minute. The bug only lives in the
+window between closing one position and opening the next, which on an active
+account is minutes at a time (section 142).
 
 **Fill prices come from cost basis, not order reconstruction** (section 141).
 `filled_legs()` signs quantity by open-vs-close, so a `sell_to_open` counts as a

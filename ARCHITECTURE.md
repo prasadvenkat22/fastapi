@@ -455,6 +455,29 @@ still open at the broker.
 Worked, unattended, on 2026-09-10: `SNDK 1675/1725 x3` peaked at +89.2%, gave
 back past 15 points with 5 minutes since the last high, and booked **+$771**.
 
+**A weekly now CAN have a stop, and it is off by default.** Both original
+stops are gated on `zero_dte`, so `TRADING_ORPHAN_STOP_PCT=-10` did nothing to
+a 09/18 position until 09/18 itself -- and it could not be switched on with the
+existing flags, because `TRADING_ORPHAN_TODAY_ONLY=false` grants the stop and
+the 15:45 flatten together, which would close a five-day position on day one.
+`TRADING_ORPHAN_LATER_STOP_PCT` is its own gate, with three guards the 0DTE
+stop does not need:
+
+```
+debits only        -10% on a credit structure is absurd; credit keeps
+                   ORPHAN_CREDIT_STOP_PCT (-600, off) as on expiry day
+intrinsic wins     section 88's SNDK 1600/1700 sat at full intrinsic
+                   (+3,825 at expiry) marking -0.7% a week out
+must persist       TRADING_ORPHAN_LATER_STOP_MINUTES, default 15. A weekly's
+                   quote is wide and has no convergence pressure, so one print
+                   at -12% means nothing. The 0DTE stop confirms in 0 minutes
+                   because there the clock IS the risk; here it is free.
+```
+
+Default 0. Section 88 measured stops as a tax on multi-day positions and
+nothing since contradicts it -- every stop that fired on 2026-09-11 was on an
+expiry-day position.
+
 **Three bases for the give-back, and only one travels between positions.**
 Anchored to the ENTRY, one setting is several rules -- measured 2026-09-11:
 

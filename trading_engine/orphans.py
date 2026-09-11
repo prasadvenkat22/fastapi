@@ -530,6 +530,41 @@ ORPHAN_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_HOLD_UNTIL", "").strip()
 #
 # THAT EVIDENCE IS ONE TRADE. Five fires, four helped, one of them SLOW.
 ORPHAN_SLOW_STOP_PCT = float(os.getenv("TRADING_ORPHAN_SLOW_STOP_PCT", "0") or 0)
+
+# A STOP FOR A POSITION THAT IS NOT EXPIRING TODAY.
+#
+# Both stops above are gated on zero_dte, so until now a weekly had none at
+# any setting -- TRADING_ORPHAN_STOP_PCT=-10 did nothing to a position until
+# the Friday it expired. That was deliberate (section 88 measured stops as a
+# tax on multi-day positions, and a move that is terminal on expiry day is
+# survivable with five sessions left), and it cannot be switched on with the
+# existing flags either: TRADING_ORPHAN_TODAY_ONLY=false would give a weekly
+# the stop AND the 15:45 flatten, closing a five-day position on day one.
+# The two are welded to one flag, so this is its own.
+#
+# THREE GUARDS, because a stop with days to run is the easiest rule to get
+# wrong and the most expensive:
+#
+#   DEBITS ONLY. -10% on a credit structure is absurd -- the return is
+#   measured against the credit collected, and a credit spread routinely
+#   trades -100% intraday and expires worthless anyway. Credit keeps
+#   ORPHAN_CREDIT_STOP_PCT, which is -600 and off, exactly as on expiry day.
+#
+#   INTRINSIC STILL WINS. Section 88's case was a SNDK 1600/1700 at full
+#   intrinsic (+3,825 at expiry) marking -0.7% a week out. A stop that sells
+#   that is not managing risk, it is paying the spread to exit a winner.
+#
+#   AND IT MUST PERSIST. A weekly's quote is wider than a 0DTE's and has no
+#   convergence pressure, so a single print can show -12% and mean nothing.
+#   The 0DTE stop confirms in 0 minutes because there the clock is the risk;
+#   here there is no clock, so the confirmation is free.
+#
+# 0 disables it, which is the default: nothing measured on this account yet
+# says a multi-day stop earns its keep.
+ORPHAN_LATER_STOP_PCT = float(
+    os.getenv("TRADING_ORPHAN_LATER_STOP_PCT", "0") or 0)
+ORPHAN_LATER_STOP_MINUTES = float(
+    os.getenv("TRADING_ORPHAN_LATER_STOP_MINUTES", "15"))
 ORPHAN_SLOW_STOP_MINUTES = float(
     os.getenv("TRADING_ORPHAN_SLOW_STOP_MINUTES", "30") or 30)
 
@@ -1558,6 +1593,30 @@ def review(engine_symbols: "set | None" = None) -> list:
             else:
                 rec.pop("stop_since", None)
 
+            # The later-expiry stop. Guards live in the condition rather
+            # than the branch so the reason line below stays a plain elif.
+            later_stop_held = False
+            if (ORPHAN_LATER_STOP_PCT < 0 and not zero_dte and past_hold
+                    and not st["credit"] and not intrinsic_ok):
+                if ret_pct <= ORPHAN_LATER_STOP_PCT:
+                    rec.setdefault("later_stop_since", now.isoformat())
+                    _lheld = (now - datetime.fromisoformat(
+                        rec["later_stop_since"])).total_seconds() / 60.0
+                    later_stop_held = _lheld >= ORPHAN_LATER_STOP_MINUTES
+                    if not later_stop_held:
+                        logger.info(
+                            "ORPHAN %s %.0f/%.0f has been %+.1f%% for %.0f of the %.0f "
+                            "minutes the later-expiry stop needs — watching. It "
+                            "expires %s, so there is time for this to be noise.",
+                            st["root"], st["long_strike"], st["short_strike"],
+                            ret_pct, _lheld, ORPHAN_LATER_STOP_MINUTES,
+                            st.get("expiry"),
+                        )
+                else:
+                    rec.pop("later_stop_since", None)
+            else:
+                rec.pop("later_stop_since", None)
+
             slow_held = False
             if ORPHAN_SLOW_STOP_PCT < 0 and zero_dte and past_hold:
                 if ret_pct <= ORPHAN_SLOW_STOP_PCT:
@@ -1627,6 +1686,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # urgent than a gap, and if the fast stop also applies it
                 # should be the one that names the exit.
                 reason = "SLOW_STOP"
+            elif later_stop_held:
+                # Only reachable when zero_dte is false, so it can never race
+                # the expiry-day ladder above.
+                reason = "LATER_STOP"
             elif zero_dte and _past_force_close():
                 # Time beats everything. These settle in shares, not cash.
                 reason = "FORCE_CLOSE"
@@ -1717,25 +1780,35 @@ def review(engine_symbols: "set | None" = None) -> list:
                             "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
                     if ORPHAN_FORCE_CLOSE:
                         parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)
-                elif ORPHAN_LATER_STALL_MINUTES > 0:
-                    # REPORT THE EFFECTIVE GIVE-BACK, not the setting. Under
-                    # the ATR configuration the number that actually applies
-                    # is derived per structure, and a log line printing the
-                    # raw setting would describe a rule the engine is not
-                    # using -- exactly the class of quiet lie the verdict line
-                    # exists to prevent.
-                    _gb = _giveback_points(st["root"], entry_abs, rec["peak"])
-                    _atr_note = ""
-                    if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0:
-                        _a = _atr_for(st["root"])
-                        if _a:
-                            _atr_note = " =%.2f%s@%.2fATR" % (
-                                ORPHAN_LATER_STALL_GIVEBACK_ATR * _a,
-                                st["root"], ORPHAN_LATER_STALL_GIVEBACK_ATR)
-                    parts.append("stall %.1fpts%s/%.0fmin %s" % (
-                        _gb, _atr_note, ORPHAN_LATER_STALL_MINUTES,
-                        "ARMED" if rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
-                        else "arms +%.0f%%" % ORPHAN_LATER_STALL_ARM_PCT))
+                else:
+                    # A LATER EXPIRY NOW HAS A STOP TOO, so the line has to say
+                    # so. It printed only the stall, which was honest while a
+                    # weekly had no downside rule and becomes a lie the moment
+                    # one exists -- the same failure the zero_dte split above
+                    # was written to fix.
+                    if ORPHAN_LATER_STOP_PCT < 0 and not st["credit"]:
+                        parts.append("stop %+.0f%%/%.0fmin%s" % (
+                            ORPHAN_LATER_STOP_PCT, ORPHAN_LATER_STOP_MINUTES,
+                            "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
+                    if ORPHAN_LATER_STALL_MINUTES > 0:
+                        # REPORT THE EFFECTIVE GIVE-BACK, not the setting. Under
+                        # the ATR configuration the number that actually applies
+                        # is derived per structure, and a log line printing the
+                        # raw setting would describe a rule the engine is not
+                        # using -- exactly the class of quiet lie the verdict line
+                        # exists to prevent.
+                        _gb = _giveback_points(st["root"], entry_abs, rec["peak"])
+                        _atr_note = ""
+                        if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0:
+                            _a = _atr_for(st["root"])
+                            if _a:
+                                _atr_note = " =%.2f%s@%.2fATR" % (
+                                    ORPHAN_LATER_STALL_GIVEBACK_ATR * _a,
+                                    st["root"], ORPHAN_LATER_STALL_GIVEBACK_ATR)
+                        parts.append("stall %.1fpts%s/%.0fmin %s" % (
+                            _gb, _atr_note, ORPHAN_LATER_STALL_MINUTES,
+                            "ARMED" if rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
+                            else "arms +%.0f%%" % ORPHAN_LATER_STALL_ARM_PCT))
                 verdict = "holding (%s)" % ", ".join(parts) if parts else "holding"
                 verdict_scope = "" if zero_dte else "  [expires %s]" % st.get("expiry")
             iv_note = ""

@@ -361,6 +361,29 @@ ORPHAN_LATER_STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_LATER_STALL_MINUTES
 ORPHAN_LATER_STALL_GIVEBACK_ATR = float(
     os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR", "0") or 0)
 
+# A GIVE-BACK EXPRESSED AS A SHARE OF THE GAIN, WHICH IS THE ONLY BASIS THAT
+# MEANS THE SAME THING ON TWO DIFFERENT POSITIONS.
+#
+# Anchored to the ENTRY, one setting is several rules. Measured on 2026-09-11:
+#
+#   QQQ  714/717 x18 @ 2.04   max return  +47%   40 points = 85% of the band
+#   SNDK 1670/1730 x2 @ 32.27 max return  +86%   40 points = 47% of the band
+#
+# Same number, same units, and on the QQQ spread it surrendered $1,469 of a
+# $1,728 peak before the trail could act -- while on SNDK the day before it
+# booked +$771 from a +89% peak. Nothing about the setting changed; the
+# structure did, and an ITM debit spread whose cost is two thirds of its width
+# has almost no profit band for a fixed give-back to sit inside.
+#
+# As a fraction of the PEAK it is self-scaling, which is what the engine's own
+# trail has always done (TRADING_TRAIL_GIVEBACK=0.20 is 20% of the peak). 0.30
+# gives back a third of the run on any structure at any entry.
+#
+# Off by default: every give-back measurement on this account was taken on the
+# flat percent, and this changes what the number means, not just its value.
+ORPHAN_STALL_GIVEBACK_FRACTION = float(
+    os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_FRACTION", "0") or 0)
+
 ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
     os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK", "3.3"))
 
@@ -691,18 +714,33 @@ def _atr_for(root: str) -> "float | None":
     return val
 
 
-def _giveback_points(root: str, entry_abs: float) -> float:
+def _giveback_points(root: str, entry_abs: float, peak_pct: float = 0.0,
+                     flat: "float | None" = None) -> float:
     """Points of RETURN that count as a give-back for this structure.
 
-    Converts the ATR setting into the same units the stall already compares
-    in, so one expression of the rule serves both configurations and the
-    comparison itself is untouched.
+    THREE BASES, tried in the order of how well each travels between
+    positions. All three return the same units -- points of return against the
+    entry -- so the comparison at the call site never changes.
+
+    A SHARE OF THE PEAK GAIN travels everywhere: it is the same rule on a
+    3-wide QQQ spread and a 60-wide SNDK one. See the knob for the measurement.
+
+    ATR travels across ROLLS of one name, where the entry moves but the
+    instrument does not. It cannot travel between instruments whose ATR and
+    spread width are differently matched.
+
+    THE FLAT PERCENT travels nowhere, and is still the default, because every
+    give-back measurement on this account was taken at it. `flat` lets each
+    caller keep its own -- the 0DTE stall and the later stall read different
+    settings and always have.
     """
+    if ORPHAN_STALL_GIVEBACK_FRACTION > 0 and peak_pct > 0:
+        return peak_pct * ORPHAN_STALL_GIVEBACK_FRACTION
     if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0 and entry_abs:
         atr = _atr_for(root)
         if atr:
             return ORPHAN_LATER_STALL_GIVEBACK_ATR * atr / entry_abs * 100.0
-    return ORPHAN_LATER_STALL_GIVEBACK_PCT
+    return ORPHAN_LATER_STALL_GIVEBACK_PCT if flat is None else flat
 
 
 def open_structures(engine_symbols: "set | None" = None) -> list:
@@ -1604,7 +1642,8 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "GIVEBACK"
             elif (zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0
                   and quiet >= STALL_MINUTES and books_a_gain
-                  and stall_pct <= rec["peak"] - STALL_GIVEBACK_PCT):
+                  and stall_pct <= rec["peak"] - _giveback_points(
+                      st["root"], entry_abs, rec["peak"], STALL_GIVEBACK_PCT)):
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
@@ -1613,7 +1652,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                   and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
                   and quiet >= ORPHAN_LATER_STALL_MINUTES and books_a_gain
                   and stall_pct <= rec["peak"] - _giveback_points(
-                      st["root"], entry_abs)):
+                      st["root"], entry_abs, rec["peak"])):
                 # Armed by a real profit, booked on a small giveback. See the
                 # knobs above for why arming is what makes the tight giveback
                 # safe on a position that has days left.
@@ -1668,8 +1707,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                     parts.append("stop %+.0f%%%s" % (
                         stop_pct, "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
                     if STALL_MINUTES > 0:
-                            parts.append("stall %.1fpts/%.0fmin%s" % (
-                            STALL_GIVEBACK_PCT, STALL_MINUTES,
+                        # The effective number, not the setting -- under the
+                        # fraction basis it is derived per structure and the
+                        # raw setting would describe a rule not in force.
+                        parts.append("stall %.1fpts/%.0fmin%s" % (
+                            _giveback_points(st["root"], entry_abs,
+                                             rec["peak"], STALL_GIVEBACK_PCT),
+                            STALL_MINUTES,
                             "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
                     if ORPHAN_FORCE_CLOSE:
                         parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)
@@ -1680,7 +1724,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                     # raw setting would describe a rule the engine is not
                     # using -- exactly the class of quiet lie the verdict line
                     # exists to prevent.
-                    _gb = _giveback_points(st["root"], entry_abs)
+                    _gb = _giveback_points(st["root"], entry_abs, rec["peak"])
                     _atr_note = ""
                     if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0:
                         _a = _atr_for(st["root"])

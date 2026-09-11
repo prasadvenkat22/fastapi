@@ -455,6 +455,36 @@ still open at the broker.
 Worked, unattended, on 2026-09-10: `SNDK 1675/1725 x3` peaked at +89.2%, gave
 back past 15 points with 5 minutes since the last high, and booked **+$771**.
 
+**Three bases for the give-back, and only one travels between positions.**
+Anchored to the ENTRY, one setting is several rules -- measured 2026-09-11:
+
+```
+QQQ  714/717 x18 @ 2.04   max return +47%   40 pts = 85% of the profit band
+SNDK 1670/1730 x2 @ 32.27 max return +86%   40 pts = 47% of the profit band
+```
+
+On the QQQ spread that surrendered $1,469 of a $1,728 peak before the trail
+could act; the same 40 booked +$771 on SNDK the day before. An ITM debit spread
+whose cost is two thirds of its width has almost no band for a fixed give-back
+to sit inside. `TRADING_ORPHAN_STALL_GIVEBACK_FRACTION` expresses it as a share
+of the PEAK instead, which is self-scaling and is what the engine's own trail
+has always done (`TRADING_TRAIL_GIVEBACK=0.20` is 20% of the peak). At 0.30 a
++47% peak gives back 14.1 points and a +21% peak gives back 6.3. **Off by
+default**: every give-back measurement on this account was taken on the flat
+percent, and this changes what the number means, not only its value.
+
+**A fixed percent target only fires if it is below `(width - entry) / entry`.**
+Three positions in one session had an unreachable take-profit: 55% against a
++47% ceiling, then +25%, then +47% again. The rung silently does nothing and
+the 15:45 flatten becomes the exit. The same arithmetic is already written
+beside the engine's own `TAKE_PROFIT_PCT` -- *"a target that can't be hit isn't
+a target"* -- and it applies to the orphan path identically.
+
+**The stall decides on intrinsic and executes at the MARK.** On 2026-09-11 the
+QQQ spread carried a -0.45 quote discount, which is $810 on 18 lots -- larger
+than the difference between a 15-point and a 40-point give-back. Any trail exit
+before the quote converges gives that up on top of whatever the rule surrenders.
+
 **The give-back is a percent of ENTRY, so it re-tunes itself on every roll.**
 Three SNDK positions in two days at a constant setting of 30 meant 7.86, 6.31
 and 5.40 points of the underlying — the same number, three different rules.

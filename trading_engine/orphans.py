@@ -384,6 +384,29 @@ ORPHAN_LATER_STALL_GIVEBACK_ATR = float(
 ORPHAN_STALL_GIVEBACK_FRACTION = float(
     os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_FRACTION", "0") or 0)
 
+# THE SAME IDEA, DENOMINATED IN THE PROFIT BAND RATHER THAN THE PEAK.
+#
+# Share-of-peak self-scales, but the peak is an accident of how far a position
+# happened to run: the same setting is a different rule on a spread that
+# peaked +15% and one that peaked +47%. The BAND -- width minus entry -- is
+# fixed by the structure the moment it is opened, which is what makes two
+# positions comparable, and it is the unit stall_replay.py measures in, so a
+# number picked from a replay can be typed in here unconverted.
+#
+# 2026-09-11, first fire against holding, replayed on 1-minute bars:
+#
+#            714/717 @2.04        712/716 @3.20
+#   10%       +$594 (22 fires)     +$480          fires on noise
+#   20%       +$342                +$480          best on this tape
+#   30%       +$126                +$405
+#   40%       never                never          too wide to act
+#   holding   -$2,142              -$350          QQQ closed 714.85
+#
+# The flat 40 points in force that afternoon was 85% and 40% of those two
+# bands and fired on neither.
+ORPHAN_STALL_GIVEBACK_BAND = float(
+    os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_BAND", "0") or 0)
+
 ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
     os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK", "3.3"))
 
@@ -750,15 +773,19 @@ def _atr_for(root: str) -> "float | None":
 
 
 def _giveback_points(root: str, entry_abs: float, peak_pct: float = 0.0,
-                     flat: "float | None" = None) -> float:
+                     flat: "float | None" = None, width: float = 0.0) -> float:
     """Points of RETURN that count as a give-back for this structure.
 
     THREE BASES, tried in the order of how well each travels between
     positions. All three return the same units -- points of return against the
     entry -- so the comparison at the call site never changes.
 
-    A SHARE OF THE PEAK GAIN travels everywhere: it is the same rule on a
-    3-wide QQQ spread and a 60-wide SNDK one. See the knob for the measurement.
+    A SHARE OF THE BAND -- width minus entry -- is the best of them: fixed by
+    the structure at entry, so it does not drift with how far the position
+    happened to run, and it is the unit stall_replay.py measures in.
+
+    A SHARE OF THE PEAK GAIN also travels, but the peak is an accident of the
+    session; the same setting means different things at +15% and +47%.
 
     ATR travels across ROLLS of one name, where the entry moves but the
     instrument does not. It cannot travel between instruments whose ATR and
@@ -769,6 +796,8 @@ def _giveback_points(root: str, entry_abs: float, peak_pct: float = 0.0,
     caller keep its own -- the 0DTE stall and the later stall read different
     settings and always have.
     """
+    if ORPHAN_STALL_GIVEBACK_BAND > 0 and entry_abs and width > entry_abs:
+        return ORPHAN_STALL_GIVEBACK_BAND * (width - entry_abs) / entry_abs * 100.0
     if ORPHAN_STALL_GIVEBACK_FRACTION > 0 and peak_pct > 0:
         return peak_pct * ORPHAN_STALL_GIVEBACK_FRACTION
     if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0 and entry_abs:
@@ -1706,7 +1735,8 @@ def review(engine_symbols: "set | None" = None) -> list:
             elif (zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0
                   and quiet >= STALL_MINUTES and books_a_gain
                   and stall_pct <= rec["peak"] - _giveback_points(
-                      st["root"], entry_abs, rec["peak"], STALL_GIVEBACK_PCT)):
+                      st["root"], entry_abs, rec["peak"], STALL_GIVEBACK_PCT,
+                      abs(st["short_strike"] - st["long_strike"]))):
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
@@ -1715,7 +1745,8 @@ def review(engine_symbols: "set | None" = None) -> list:
                   and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
                   and quiet >= ORPHAN_LATER_STALL_MINUTES and books_a_gain
                   and stall_pct <= rec["peak"] - _giveback_points(
-                      st["root"], entry_abs, rec["peak"])):
+                      st["root"], entry_abs, rec["peak"], None,
+                      abs(st["short_strike"] - st["long_strike"]))):
                 # Armed by a real profit, booked on a small giveback. See the
                 # knobs above for why arming is what makes the tight giveback
                 # safe on a position that has days left.
@@ -1774,8 +1805,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                         # fraction basis it is derived per structure and the
                         # raw setting would describe a rule not in force.
                         parts.append("stall %.1fpts/%.0fmin%s" % (
-                            _giveback_points(st["root"], entry_abs,
-                                             rec["peak"], STALL_GIVEBACK_PCT),
+                            _giveback_points(
+                                st["root"], entry_abs, rec["peak"],
+                                STALL_GIVEBACK_PCT,
+                                abs(st["short_strike"] - st["long_strike"])),
                             STALL_MINUTES,
                             "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
                     if ORPHAN_FORCE_CLOSE:
@@ -1797,7 +1830,9 @@ def review(engine_symbols: "set | None" = None) -> list:
                         # raw setting would describe a rule the engine is not
                         # using -- exactly the class of quiet lie the verdict line
                         # exists to prevent.
-                        _gb = _giveback_points(st["root"], entry_abs, rec["peak"])
+                        _gb = _giveback_points(
+                            st["root"], entry_abs, rec["peak"], None,
+                            abs(st["short_strike"] - st["long_strike"]))
                         _atr_note = ""
                         if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0:
                             _a = _atr_for(st["root"])

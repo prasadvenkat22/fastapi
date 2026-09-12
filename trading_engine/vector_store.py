@@ -25,6 +25,25 @@ async def _init_db(conn: asyncpg.Connection) -> None:
             text_embedding VECTOR({EMBEDDING_DIM})
         )
     """)
+    # THE READ-THEN-WRITE DEDUP ABOVE IS NOT ENOUGH, AND 2026-09-11 PROVED IT.
+    #
+    # store_headlines SELECTs what is already known, filters the batch against
+    # it, then inserts. Two runs overlapping both see an empty `known` and both
+    # insert, and nothing in the schema refuses the second. That day 52 of 236
+    # rows were exact duplicates -- same text, same source, same second.
+    #
+    # It is not a tidiness problem. The novelty filter drops a headline when it
+    # sits within 0.83 cosine of prior coverage, and A DUPLICATE IS A PERFECT
+    # MATCH FOR ITSELF. SanDisk had three distinct headlines before 09:30 on
+    # 2026-09-11 and the model was handed two: the third was dropped as a
+    # re-report of its own copy. The read that graded SNDK NEUTRAL that morning
+    # was working from a corpus this bug had thinned.
+    #
+    # A unique index is the only fix that holds under a race, which is what
+    # this was.
+    await conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_market_news_headline "
+        "ON market_news_vectors (headline_text)")
 
 
 def _source_for(headline: str) -> "str | None":
@@ -89,6 +108,7 @@ async def store_headlines(headlines: List[str], embeddings: VoyageEmbeddings) ->
             INSERT INTO market_news_vectors
                 (id, headline_text, text_embedding, source, publication_date)
             VALUES ($1, $2, $3, $4, COALESCE($5, now()))
+            ON CONFLICT (headline_text) DO NOTHING
             """,
             # source is looked up per headline from the scrape that produced
             # it. Absent before 2026-09-06, which left no way to weight a wire

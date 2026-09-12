@@ -75,9 +75,20 @@ NY = ZoneInfo("America/New_York")
 
 POLYGON_KEY = os.getenv("POLYGON_API_KEY", "")
 POLYGON_NEWS = "https://api.polygon.io/v2/reference/news"
+# QQQ IS NOT HERE, AND NEITHER IS ANY INDEX TICKER. Polygon's news endpoint
+# does not carry macro journalism in any ticker form. Measured 2026-09-12:
+#
+#     ticker=QQQ    8 articles over 12 days, every one an ETF comparison
+#     I:NDX         0 articles      I:SPX   0        C:USD  0
+#     SPY, TLT      2 each, retail advice pieces, no macro content
+#
+# Index and currency identifiers belong to the aggregates API and are not
+# news-taggable at all. The macro tape comes from nodes.MACRO_FEEDS instead,
+# ingested at the end of this sweep. Querying QQQ here spent an API call and
+# 13 seconds of pacing to fetch fund comparisons.
 SYMBOLS = [s.strip().upper() for s in os.getenv(
     "TRADING_HOURLY_SYMBOLS",
-    "QQQ,NVDA,SNDK,MU,META,AVGO,ADBE,AMZN,GOOGL,MSFT,CRWV,WDC").split(",") if s.strip()]
+    "NVDA,SNDK,MU,META,AVGO,ADBE,AMZN,GOOGL,MSFT,CRWV,WDC").split(",") if s.strip()]
 
 # Seconds between Polygon calls. 5/minute measured, so 13s leaves headroom
 # without the burst that a "sleep after every fourth" pattern still produces.

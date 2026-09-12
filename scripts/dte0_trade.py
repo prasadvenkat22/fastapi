@@ -63,6 +63,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trading_engine import tradier_orders  # noqa: E402
+from trading_engine.data_feed import fetch_option_chain, fetch_spot  # noqa: E402
 from trading_engine.screener import rank  # noqa: E402
 
 logger = logging.getLogger("dte0_trade")
@@ -76,11 +77,53 @@ MAX_BUDGET = float(os.getenv("TRADING_DTE0_MAX_BUDGET", "1500"))
 # logging a RECONCILE error every minute because it tracks its position in its
 # own database rather than from the broker. Duplicating the one instrument the
 # engine already covers is the opposite of diversifying into single names.
-SYMBOLS = os.getenv("TRADING_DTE0_TRADE_SYMBOLS", "NVDA,MU,META")
+# Every name with Monday and Wednesday expiries, checked against the chain on
+# 2026-09-12. QQQ is excluded above; SNDK and CRWV list Fridays only.
+SYMBOLS = os.getenv("TRADING_DTE0_TRADE_SYMBOLS",
+                    "NVDA,MU,META,AMZN,GOOGL,MSFT,AVGO")
+
+# A WIDER UNIVERSE NEEDS THE LIQUIDITY GATE THAT dte0_shadow ALREADY HAS.
+#
+# Median near-ATM quote as a share of mid, Monday's chain:
+#
+#     NVDA 2.6%  MU 2.8%  QQQ 3.9%  META 6.3%
+#     AMZN 11.9%  GOOGL 13.3%  MSFT 17.0%  AVGO 21.2%
+#
+# A vertical crosses that twice, on two legs, in and out. Against a structure
+# whose maximum return is 30-50%, AVGO's quote eats the trade before direction
+# matters. EV penalises a wide quote indirectly -- the screener prices at
+# natural, so a bad chain raises `cost` and the break-even with it -- but
+# indirectly is not the same as refused, and a high enough EV would still let
+# it through.
+MAX_QUOTE_PCT = float(os.getenv("TRADING_DTE0_MAX_QUOTE_PCT", "15.0"))
 MIN_EW = float(os.getenv("TRADING_PICK_MIN_ENTRY_WIDTH", "0.30"))
 MAX_EW = float(os.getenv("TRADING_PICK_MAX_ENTRY_WIDTH", "0.65"))
 MAX_EXTRINSIC = float(os.getenv("TRADING_PICK_MAX_EXTRINSIC", "25.0"))
 MAX_TARGET_ATR = float(os.getenv("TRADING_PICK_MAX_TARGET_ATR", "0.30"))
+
+# HOW FAR OUT THE SHORT LEG MAY SIT, IN ATR.
+#
+# The fourth constraint, and the one EV is blindest to. Ranking on EV prefers
+# a wider structure because the paper reward is bigger, without noticing that
+# the strike it sold is unreachable and therefore worthless:
+#
+#     NVDA 218.29, ATR 7.67
+#       215 call  ask 3.85  delta 0.77   bought
+#       225 call  bid 0.11  delta 0.07   sold -- 6.71 out = 0.87 ATR
+#
+# Eleven cents against a $385 long call. That is 2.9% of the cost, in exchange
+# for capping every gain above 225. Move the short in to 222.5 and it earns
+# 0.30; to 220 and it earns 0.84, more than a fifth of the premium.
+#
+# The number comes from what these names can actually travel in one session:
+#
+#     NVDA   3-4   of ATR 7.67   = 0.46 ATR
+#     META   5-10  of ATR 21.32  = 0.35 ATR
+#     MU    10-15  of ATR 44.15  = 0.28 ATR
+#
+# A short strike beyond that is not a short leg, it is a decoration that costs
+# upside. 0.40 sits in the middle of the three.
+MAX_SHORT_ATR = float(os.getenv("TRADING_PICK_MAX_SHORT_ATR", "0.40"))
 TARGET_PCT = float(os.getenv("TRADING_ORPHAN_TARGET_RETURN_PCT", "30.0"))
 
 # THE MORNING'S NEWS READ, AS A VETO ON DIRECTION.
@@ -134,9 +177,39 @@ def _passes(r: dict) -> "str | None":
     move_atr = abs(tgt_spot - spot) / atr
     if move_atr > MAX_TARGET_ATR:
         return f"target needs {move_atr:.2f} ATR, above {MAX_TARGET_ATR:.2f}"
+    # The short leg has to be somewhere price can plausibly reach, or selling
+    # it earns nothing and only caps the upside.
+    short_k = float(r["hi"]) if long_k == float(r["lo"]) else float(r["lo"])
+    short_atr = abs(short_k - spot) / atr
+    if short_atr > MAX_SHORT_ATR:
+        return (f"short strike {short_atr:.2f} ATR out, above {MAX_SHORT_ATR:.2f} "
+                f"— it would fetch almost nothing and cap the upside for it")
+    r["_short_atr"] = short_atr
     r["_ew"], r["_ex_pct"], r["_move_atr"] = ew, ex_pct, move_atr
     r["_target_spot"], r["_long"] = tgt_spot, long_k
     return None
+
+
+def _quote_pct(symbol: str, expiry: str) -> "float | None":
+    """Median near-ATM bid-ask as a share of mid. The cost of participating."""
+    try:
+        spot = float(fetch_spot(symbol) or 0)
+        chain = fetch_option_chain(expiry, symbol)
+    except Exception:
+        return None
+    if not spot or not chain:
+        return None
+    pcts = []
+    for (kind, strike), q in chain.items():
+        if kind != "call" or abs(strike - spot) > spot * 0.03:
+            continue
+        if q.bid <= 0 or q.ask <= 0:
+            continue
+        mid = (q.bid + q.ask) / 2
+        if mid > 0:
+            pcts.append((q.ask - q.bid) / mid * 100.0)
+    pcts.sort()
+    return pcts[len(pcts) // 2] if pcts else None
 
 
 def _held_today(symbols: set, expiry: str) -> set:
@@ -187,6 +260,31 @@ def main() -> None:
     # top row was a 50-wide at $1,936 and the name vanished from the plan.
     per_trade_cap = budget / max(args.max_trades, 1)
 
+    # WHY NOTHING CLEARED IS AS IMPORTANT AS WHAT DID. Five filters run in
+    # series and a silent "nothing cleared" leaves you unable to tell a quiet
+    # market from a knob set wrong. Rejections are tallied by reason.
+    from collections import Counter
+    rejects: Counter = Counter()
+
+    # Liquidity first: a chain too wide to exit is not worth ranking.
+    tradeable = []
+    for sym in syms:
+        qp = _quote_pct(sym, exp)
+        if qp is None:
+            logger.info("%-5s no quote read — skipped.", sym)
+            continue
+        if qp > MAX_QUOTE_PCT:
+            logger.info("%-5s quote %.1f%% of mid, above the %.1f%% ceiling — "
+                        "skipped. It cannot pay for its own exit.",
+                        sym, qp, MAX_QUOTE_PCT)
+            continue
+        logger.info("%-5s quote %.1f%% of mid — tradeable.", sym, qp)
+        tradeable.append(sym)
+    if not tradeable:
+        logger.info("No chain was tight enough to trade today.")
+        return
+    syms = tradeable
+
     # Best surviving candidate per symbol per side.
     best: dict = {}
     for side in ("call", "put"):
@@ -198,15 +296,18 @@ def main() -> None:
         for r in res.get("rows", []):
             why = _passes(r)
             if why:
+                rejects[why.split(",")[0].split(" -- ")[0]] += 1
                 continue
             # A NEGATIVE EDGE IS NOT A TRADE. Ranking by EV alone happily
             # returned META at Pwin 50.1% against a 54.3% break-even -- the
             # best of a bad set is still bad, and "best available" is not a
             # reason to buy something the screener prices as losing.
             if r["ev_dem"] <= 0 or r["pwin"] <= r["need"]:
+                rejects["negative edge or EV"] += 1
                 continue
             # Affordability is a selection criterion, not a post-check.
             if float(r["cost"]) * 100 > per_trade_cap:
+                rejects["above the per-trade budget"] += 1
                 continue
             # The morning's news read, as a veto on direction.
             if NEWS_VETO:
@@ -228,7 +329,13 @@ def main() -> None:
                 best[key] = r
 
     if not best:
-        logger.info("Nothing cleared the constraints on %s. That is an answer.", exp)
+        logger.info("Nothing cleared the constraints on %s. That is an answer, "
+                    "but here is what it was:", exp)
+        for reason, n in rejects.most_common(8):
+            logger.info("   %4d  %s", n, reason)
+        if not rejects:
+            logger.info("   the screener returned no rows at all — check the "
+                        "expiry and that the chain is quoting")
         return
 
     chosen = sorted(best.values(), key=lambda r: -r["ev_dem"])[:args.max_trades]
@@ -250,11 +357,11 @@ def main() -> None:
         qty = min(int(per // (cost * 100)), tradier_orders.MAX_CONTRACTS)
         logger.info(
             "%-5s %-4s %.0f/%.0f w%.1f x%d @ %.2f = $%.0f | Pwin %.1f%% need %.1f%% "
-            "EV $%+.0f | entry %.0f%% of width, extr %.0f%%, target %s %.2f (%.2f ATR) "
-            "| news %s",
+            "EV $%+.0f | entry %.0f%% of width, extr %.0f%%, short %.2f ATR out, "
+            "target %s %.2f (%.2f ATR) | news %s",
             sym, side.upper(), long_k, short_k, w, qty, cost, cost * 100 * qty,
             r["pwin"] * 100, r["need"] * 100, r["ev_dem"], r["_ew"] * 100,
-            r["_ex_pct"], sym, r["_target_spot"], r["_move_atr"],
+            r["_ex_pct"], r["_short_atr"], sym, r["_target_spot"], r["_move_atr"],
             r.get("news") or "none")
         if qty < 1:
             logger.info("   costs $%.0f, above the $%.0f per-trade budget — skipped.",

@@ -113,8 +113,24 @@ def report(cur) -> None:
     if not rows:
         print("no rows yet")
         return
+    # THE VERDICT COLUMN THIS REPORT WANTED NEVER EXISTS.
+    #
+    # qqq_news_verdict is read from news_verdicts WHERE symbol='QQQ', and QQQ
+    # is not in the tracked symbol list -- the index is covered by the MACRO
+    # half of the pipeline, which lands in trading_macro_verdicts and is
+    # already recorded here as macro_gate_verdict. So this report printed "0
+    # with a QQQ news verdict" on every run since it was written, and the
+    # question it exists to answer has never once been asked (2026-09-11).
+    #
+    # Fall back to the gate verdict, and name which one is in use, because
+    # they are different reads: the news verdict grades headlines, the gate
+    # grades breadth, VIX and yields.
     graded = [r for r in rows if r[1]]
-    print(f"{len(rows)} sessions recorded, {len(graded)} with a QQQ news verdict\n")
+    source = "QQQ news verdict"
+    if not graded:
+        graded = [r for r in rows if r[3]]
+        source = "macro gate verdict"
+    print(f"{len(rows)} sessions recorded, {len(graded)} with a {source}\n")
 
     if not graded:
         print("NO GRADED SESSIONS YET. The outcome side is backfilled and the "
@@ -124,8 +140,12 @@ def report(cur) -> None:
         print("QUESTION 1 -- did the verdict separate the sessions?")
         print(f"  {'verdict':14s} {'n':>3s} {'mean QQQ%':>10s} {'mean ATR':>9s} "
               f"{'up days':>8s} {'engine P&L':>11s}")
-        for v in ("VERY_BULLISH", "BULLISH", "NEUTRAL", "BEARISH", "VERY_BEARISH"):
-            sel = [r for r in graded if r[1] == v]
+        # GOOD/BAD are the gate's vocabulary, VERY_BULLISH..VERY_BEARISH the
+        # news verdict's. Both are listed so the loop serves either source.
+        _col = 1 if source.startswith("QQQ") else 3
+        for v in ("VERY_BULLISH", "BULLISH", "NEUTRAL", "BEARISH",
+                  "VERY_BEARISH", "GOOD", "BAD"):
+            sel = [r for r in graded if r[_col] == v]
             if not sel:
                 continue
             rets = [r[4] for r in sel if r[4] is not None]

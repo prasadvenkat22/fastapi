@@ -197,6 +197,50 @@ SNDK rose 11.9% that day on an index inclusion the store had no record of.
 
 ---
 
+## Does the 09:30 verdict predict the day
+
+`news_verdict_outcomes`, one row per graded verdict, written by
+`scripts/verdict_outcome.py` after the close. **Advisory: nothing reads it at
+runtime.**
+
+It exists because the claim it replaces was narrower than it read. `news_watch`
+carried *"being in the news predicts nothing"* on the strength of
+`news_symbol_impact` -- 365 rows, all labelled 2026-09-06, with the
+**sentiment column empty on every one**. What that measured is whether a
+MENTION precedes a move (+0.086 ATR against a 1.178 sd: noise, as a mention
+should be). The graded verdict had never been joined to an outcome at all, and
+the whole set predates the 2026-09-07 window and macro-term fixes.
+
+First run, 165 verdicts over 19 sessions, open to close:
+
+```
+       verdict  rows     mean   right   sessions  mean/session
+  VERY_BULLISH     5  +1.110%    60%          4       +0.457%
+       BULLISH    18  +0.995%    61%         13       +0.506%
+       NEUTRAL   115  -0.011%      -         18       -0.115%
+       BEARISH    26  -0.378%    62%         14       +0.093%   <- sign flips
+```
+
+**THE SESSION COLUMN IS THE RESULT.** By row, BEARISH separates the sessions at
+62% accuracy. Averaged within a day first, it is +0.093% -- nothing. Fifteen
+correlated tech names reading bearish on one morning and falling together is
+one observation, and counting it as fifteen manufactured the entire effect.
+Only the bullish side survives clustering, at +0.506% over 13 sessions.
+
+**THE ERA SPLIT IS NOT COSMETIC.** Pre-fix rows came from a pipeline reading
+the wrong window, so they are never pooled with post-fix ones in the summary.
+Post-fix currently holds nine non-neutral verdicts across four sessions and
+points the other way -- too few to mean anything either direction.
+
+`macro_outcome.py` answers the same question for the index and had **never
+produced a graded row**: it reads `news_verdicts WHERE symbol='QQQ'`, and QQQ
+is not a tracked symbol -- the index is covered by the macro half, which lands
+in `trading_macro_verdicts` and was already being recorded beside the outcome
+as `macro_gate_verdict`. The report now falls back to it and names which read
+it used. That side needs sessions too: 28 of its 29 readings are BAD.
+
+---
+
 ## Machine learning — tested, measured, not deployed
 
 `scripts/xgb_probability.py` trains XGBoost on 11 daily technical features,

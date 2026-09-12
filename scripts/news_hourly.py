@@ -177,6 +177,7 @@ def _store_corpus(articles: list) -> None:
         # Polygon sends an ISO string; asyncpg wants a datetime, and the RSS
         # path fed it one. A string here fails the whole executemany batch.
         pub_at = a.get("published_utc")
+        # Polygon sends a string; the macro tape already gives a datetime.
         if isinstance(pub_at, str):
             try:
                 pub_at = datetime.fromisoformat(pub_at.replace("Z", "+00:00"))
@@ -230,6 +231,23 @@ def sweep(now: "datetime | None" = None) -> int:
             logger.info("%-5s %2d articles | %s", sym, len(titles),
                         "  ".join(f"{s}={l} {sc:+.2f}"
                                   for s, l, sc, _, _ in rows) or "no score")
+
+        # THE MACRO TAPE, which Polygon structurally cannot supply. Measured
+        # 2026-09-12: ticker=QQQ returns ETF comparisons over 12 days, and
+        # market-wide news matched 0 of the 114 MACRO_TERMS. QQQ's 09:30 read
+        # has nothing to match without this, and TRADING_NEWS_DIRECTION
+        # becomes a switch that is on and does nothing.
+        try:
+            from trading_engine import nodes as _n
+
+            macro = _n.macro_headlines()
+            for title, src, pub in macro:
+                corpus.append({"title": title, "published_utc": pub,
+                               "publisher": {"name": src}})
+            logger.info("macro tape: %d headlines", len(macro))
+        except Exception:
+            logger.warning("Macro tape unavailable — single-name news is "
+                           "unaffected.", exc_info=True)
 
         _store_corpus(corpus)
 

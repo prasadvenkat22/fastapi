@@ -1064,16 +1064,36 @@ _LAST_SOURCES: dict = {}
 _LAST_PUBLISHED: dict = {}
 
 
-# THE RSS MACHINERY IS GONE (2026-09-12): RSS_FEEDS, PER_SYMBOL_FEEDS,
-# _feed_name(), _entry_published(), _scrape_headlines() and the feedparser
-# import. scripts/news_hourly.py is the only fetcher, pulling ticker-tagged
-# articles from Polygon once an hour; the cycle reads what it stored.
+# TWO SOURCES, BECAUSE THEY DO DIFFERENT JOBS.
 #
-# Keeping a second source kept three bug classes alive: ALIASES["SNDK"] could
-# not see a sector story, SECTOR_TERMS matched 0 of 236 headlines, and
-# mw_marketpulse answered 200 for months while serving headlines a year old.
-# A dead feed and a quiet news day were indistinguishable here; a Polygon 429
-# is logged by name.
+# Polygon serves PER-TICKER news and cannot serve the macro tape. Measured
+# 2026-09-12, both ways:
+#
+#     ticker=QQQ, 12 days    8 articles, every one an ETF comparison --
+#                            "Should Schwab U.S. Large-Cap Growth ETF (SCHG)
+#                            Be on Your Investing Radar?"
+#     market-wide, 50 rows   0 matched any of the 114 MACRO_TERMS
+#
+# Which is the same finding symbol_news.py already records: QQQ is not a
+# company, a ticker feed returns fund-comparison articles for it, and what
+# moves it is rates, yields, oil, jobs and geopolitics. That is what
+# MACRO_TERMS was built to match and it needs a general wire to match against.
+#
+# So: Polygon for the eleven single names, and these two feeds for the macro
+# tape alone. No per-symbol RSS, no alias matching against a scrape -- those
+# were deleted and stay deleted. This is the narrowest source that closes the
+# gap, and without it TRADING_NEWS_DIRECTION is a switch that is on and does
+# nothing, which is the failure mode this whole evening was spent removing.
+#
+# CHECK A FEED'S DATES, NOT ITS STATUS CODE. mw_marketpulse answered 200 for
+# months while serving headlines a year old, so _feed_is_stale() below refuses
+# a feed whose newest item is older than a day and says so.
+MACRO_FEEDS = [
+    "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+]
+MACRO_FEED_ENTRIES = int(os.getenv("TRADING_MACRO_FEED_ENTRIES", "15"))
+MACRO_FEED_MAX_AGE_H = int(os.getenv("TRADING_MACRO_FEED_MAX_AGE_H", "48"))
 HEADLINE_LOOKBACK_HOURS = int(os.getenv("TRADING_HEADLINE_LOOKBACK_H", "24"))
 HEADLINE_LIMIT = int(os.getenv("TRADING_HEADLINE_LIMIT", "120"))
 
@@ -1568,6 +1588,65 @@ def rsi_agent(state: TradingState) -> dict:
 # ---------------------------------------------------------------------------
 # Market sentiment agent
 # ---------------------------------------------------------------------------
+
+
+def macro_headlines() -> list:
+    """The macro tape: (title, source, published) from the general wires.
+
+    CALLED BY news_hourly.py ONLY, never from the trading cycle. The cycle
+    reads the store; keeping network I/O out of the per-minute path is the
+    same constraint that made Polygon hourly, and section 55 records what an
+    unguarded call in that path cost: three cycles at the open with seven
+    positions live.
+
+    A STALE FEED IS REFUSED AND NAMED. mw_marketpulse answered 200, parsed
+    cleanly and served July-2025 headlines for months; nothing logged because
+    nothing errored. Freshness is the only check that would have caught it.
+    """
+    import calendar
+    from datetime import datetime as _dt, timezone as _tz
+
+    try:
+        import feedparser
+    except ImportError:
+        logger.warning("feedparser missing — no macro headlines this sweep.")
+        return []
+
+    def _published(entry):
+        for attr in ("published_parsed", "updated_parsed"):
+            t = getattr(entry, attr, None)
+            if t:
+                try:
+                    return _dt.fromtimestamp(calendar.timegm(t), tz=_tz.utc)
+                except Exception:
+                    pass
+        return None
+
+    out = []
+    for url in MACRO_FEEDS:
+        name = "MARKETWATCH" if "dowjones" in url else "CNBC"
+        try:
+            feed = feedparser.parse(url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s feed failed to parse: %s", name, exc)
+            continue
+        entries = list(feed.entries[:MACRO_FEED_ENTRIES])
+        if not entries:
+            logger.warning("%s returned no entries — treating as dead.", name)
+            continue
+        newest = max((p for p in (_published(e) for e in entries) if p), default=None)
+        if newest is not None:
+            age_h = (_dt.now(_tz.utc) - newest).total_seconds() / 3600.0
+            if age_h > MACRO_FEED_MAX_AGE_H:
+                logger.warning(
+                    "%s newest item is %.0f hours old — feed is STALE, skipping. "
+                    "This is the check mw_marketpulse needed.", name, age_h)
+                continue
+        for e in entries:
+            title = getattr(e, "title", None)
+            if title:
+                out.append((title, name, _published(e)))
+    return out
 
 
 def _stored_headlines() -> List[str]:

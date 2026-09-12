@@ -140,7 +140,29 @@ fetching rather than merely change source: Polygon's free tier allows five
 calls a minute across twelve tickers, so a single cycle would exhaust it. The
 same constraint removes network I/O from the hot path, which section 55
 records the cost of -- three cycles lost at the open with seven positions live.
-**The RSS code is deleted, not flagged off** -- `RSS_FEEDS`,
+**Two sources, because they do different jobs.** Polygon serves per-ticker
+news and **cannot serve the macro tape**. Measured 2026-09-12, both ways:
+
+```
+ticker=QQQ, 12 days   8 articles, every one an ETF comparison --
+                      "Should Schwab U.S. Large-Cap Growth ETF (SCHG)
+                       Be on Your Investing Radar?"
+market-wide, 50 rows  0 matched any of the 114 MACRO_TERMS
+```
+
+Which is the finding `symbol_news.py` already recorded: QQQ is not a company,
+a ticker feed returns fund-comparison articles for it, and what moves it is
+rates, yields, oil and geopolitics. So `MACRO_FEEDS` (MarketWatch top-stories
+and CNBC) supplies the macro tape and nothing else -- no per-symbol RSS, no
+alias matching against a scrape. Without it `TRADING_NEWS_DIRECTION` is a
+switch that is on and does nothing.
+
+**`macro_headlines()` refuses a stale feed and says so.** `mw_marketpulse`
+answered 200, parsed cleanly and served July-2025 headlines for months;
+freshness is the only check that would have caught it, so a feed whose newest
+item is over 48 hours old is skipped by name.
+
+**The per-symbol RSS code is deleted, not flagged off** -- `RSS_FEEDS`,
 `PER_SYMBOL_FEEDS`, `_feed_name()`, `_entry_published()`,
 `_scrape_headlines()` and the `feedparser` import, 124 lines in all. Two
 sources meant two failure modes and one of them was silent.

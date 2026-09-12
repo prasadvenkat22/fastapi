@@ -97,7 +97,17 @@ SYMBOLS = os.getenv("TRADING_DTE0_TRADE_SYMBOLS",
 # it through.
 MAX_QUOTE_PCT = float(os.getenv("TRADING_DTE0_MAX_QUOTE_PCT", "15.0"))
 MIN_EW = float(os.getenv("TRADING_PICK_MIN_ENTRY_WIDTH", "0.30"))
-MAX_EW = float(os.getenv("TRADING_PICK_MAX_ENTRY_WIDTH", "0.65"))
+# 0.75, NOT 0.65. The boundary is arithmetic: max return is (width-entry)/entry,
+# so a +30% target becomes unreachable at exactly e/w = 1/1.30 = 0.769. 0.65 was
+# margin chosen by feel, and backtested against 2026-09-11 it cost most of its
+# own benefit -- it rejected the three losing QQQ trades (e/w 0.814, 0.800,
+# 0.757, max returns 23%, 25%, 32%) AND the +$355 winner at 0.68 whose max
+# return was 47%. At 0.75 the same filter drops exactly the three losers:
+#
+#     as traded        +1,256.02
+#     band 0.30-0.65   +1,286.00   +30    three losers and one winner gone
+#     band 0.30-0.75   +1,641.02   +385   three losers gone, winners intact
+MAX_EW = float(os.getenv("TRADING_PICK_MAX_ENTRY_WIDTH", "0.75"))
 MAX_EXTRINSIC = float(os.getenv("TRADING_PICK_MAX_EXTRINSIC", "25.0"))
 MAX_TARGET_ATR = float(os.getenv("TRADING_PICK_MAX_TARGET_ATR", "0.30"))
 

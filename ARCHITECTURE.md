@@ -140,8 +140,15 @@ fetching rather than merely change source: Polygon's free tier allows five
 calls a minute across twelve tickers, so a single cycle would exhaust it. The
 same constraint removes network I/O from the hot path, which section 55
 records the cost of -- three cycles lost at the open with seven positions live.
-`TRADING_USE_RSS=true` rolls the old path back; the scrape function is left
-intact rather than deleted for exactly that reason.
+**The RSS code is deleted, not flagged off** -- `RSS_FEEDS`,
+`PER_SYMBOL_FEEDS`, `_feed_name()`, `_entry_published()`,
+`_scrape_headlines()` and the `feedparser` import, 124 lines in all. Two
+sources meant two failure modes and one of them was silent.
+
+`SECTOR_TERMS` and `SYMBOL_SECTORS` went with them. They were live code that
+did nothing: **0 additional matches across ten symbols on 236 headlines**,
+while correlating four memory names into a single verdict. `patterns_for()` is
+now the alias list, or `MACRO_TERMS` for QQQ, and nothing else.
 
 **Polygon replaces the RSS scrape because articles arrive TICKER-TAGGED**,
 which deletes the alias-matching layer and the three bug classes it produced

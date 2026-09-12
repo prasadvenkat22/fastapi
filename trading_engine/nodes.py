@@ -14,7 +14,6 @@ from datetime import datetime, time as dtime, timezone
 from typing import List
 from zoneinfo import ZoneInfo
 
-import feedparser
 import pandas as pd
 from langchain_anthropic import ChatAnthropic
 
@@ -1065,56 +1064,18 @@ _LAST_SOURCES: dict = {}
 _LAST_PUBLISHED: dict = {}
 
 
-def _entry_published(entry):
-    """Feed-supplied publication time as a tz-aware UTC datetime, or None."""
-    import calendar
-    from datetime import datetime as _dt, timezone as _tz
-    for attr in ("published_parsed", "updated_parsed"):
-        t = getattr(entry, attr, None)
-        if t:
-            try:
-                return _dt.fromtimestamp(calendar.timegm(t), tz=_tz.utc)
-            except Exception:
-                pass
-    return None
-
-
-# PER-SYMBOL FEEDS. The three general feeds above carry macro and mega-cap
-# news well -- Nvidia's Hugging Face acquisition produced NINE stored headlines
-# on 2026-09-03/04 -- and carry single-name catalysts not at all. Measured the
-# same weekend, against the five events that actually moved the book's names on
-# 09-04:
+# THE RSS MACHINERY IS GONE (2026-09-12): RSS_FEEDS, PER_SYMBOL_FEEDS,
+# _feed_name(), _entry_published(), _scrape_headlines() and the feedparser
+# import. scripts/news_hourly.py is the only fetcher, pulling ticker-tagged
+# articles from Polygon once an hour; the cycle reads what it stored.
 #
-#     Nvidia / Hugging Face $13B          9 headlines   captured
-#     SNDK added to the S&P 100           0             MISSED
-#     Micron HBM capacity doubling        0             MISSED
-#     Lynx Equity upgrade, PT $1,325      0             MISSED
-#     Dell's NAND scarcity commentary     0             MISSED
-#
-# SNDK rose 11.9% that session on an index inclusion the store had no record
-# of. A general feed front-pages Nvidia; SanDisk's index addition appears on
-# SanDisk's own feed. That is not a matching problem and no alias map fixes it.
-#
-# Verified before shipping: Yahoo's per-ticker feed carried "SanDisk (SNDK)
-# Soars on S&P 100 Inclusion", Seeking Alpha's carried CoreWeave commentary
-# from 09-04 on a name the store had NOTHING current for.
-PER_SYMBOL_FEEDS = (
-    "https://feeds.finance.yahoo.com/rss/2.0/headline?s={sym}&region=US&lang=en-US",
-    "https://seekingalpha.com/api/sa/combined/{sym}.xml",
-)
-
-# Entries to take per per-symbol feed. Lower than the general feeds' 10: these
-# are already filtered to one name, so depth buys repetition rather than
-# coverage, and store_headlines dedupes what repeats anyway.
-PER_SYMBOL_ENTRIES = int(os.getenv("TRADING_PER_SYMBOL_ENTRIES", "8"))
-
-# How much of the STORED corpus the cycle reads, now that news_hourly.py is
-# the only fetcher. The RSS lists above are dead and the scrape that used them
-# is kept only so a rollback is one flag away -- TRADING_USE_RSS=true restores
-# it. See _stored_headlines() for why fetching had to leave the hot path.
+# Keeping a second source kept three bug classes alive: ALIASES["SNDK"] could
+# not see a sector story, SECTOR_TERMS matched 0 of 236 headlines, and
+# mw_marketpulse answered 200 for months while serving headlines a year old.
+# A dead feed and a quiet news day were indistinguishable here; a Polygon 429
+# is logged by name.
 HEADLINE_LOOKBACK_HOURS = int(os.getenv("TRADING_HEADLINE_LOOKBACK_H", "24"))
 HEADLINE_LIMIT = int(os.getenv("TRADING_HEADLINE_LIMIT", "120"))
-USE_RSS = os.getenv("TRADING_USE_RSS", "false").lower() == "true"
 
 
 def _tracked_symbols() -> list:
@@ -1123,46 +1084,6 @@ def _tracked_symbols() -> list:
     raw = os.getenv("TRADING_MANAGE_UNDERLYING", "") or ""
     syms = [s.strip().upper() for s in raw.split(",") if s.strip()]
     return syms[:20]
-
-
-def _feed_name(url: str) -> str:
-    """A short, stable label for a feed URL."""
-    for frag, name in (("seekingalpha", "SEEKING_ALPHA"),
-                       ("yahoo", "YAHOO_FINANCE"), ("dowjones", "MARKETWATCH"),
-                       ("cnbc", "CNBC"), ("fool.com", "MOTLEY_FOOL"),
-                       ("prnewswire", "PR_NEWSWIRE"),
-                       ("businesswire", "BUSINESS_WIRE"), ("sec.gov", "SEC")):
-        if frag in url.lower():
-            return name
-    return "OTHER"
-
-
-# CHECK A FEED'S DATES, NOT ITS STATUS CODE. Measured 2026-09-12:
-#
-#     mw_marketpulse   200, 30 entries, newest Jul 2025   ABANDONED
-#     mw_realtime      200, 10 entries, newest Jun 2025   ABANDONED
-#     mw_topstories    200, 10 entries, newest today      live
-#     fool index       200, 50 entries, newest today      live
-#
-# marketpulse answered 200 and parsed cleanly every cycle for the life of this
-# pipeline while serving headlines over a year old -- "Consumer credit growth
-# soars in December" scraped in September. Nothing logged, because nothing was
-# wrong: the feed was reachable, the parse succeeded, and the ten stale titles
-# were stored once and filtered as known ever afterwards. A dead feed and a
-# quiet news day are indistinguishable from inside the scrape.
-#
-# The Motley Fool was never configured at all, which is why an article the
-# user cited on SanDisk's crash had no chance of being graded.
-RSS_FEEDS = [
-    "https://finance.yahoo.com/news/rssindex",
-    "https://feeds.content.dowjones.io/public/rss/mw_topstories",
-    "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
-    "https://www.fool.com/feeds/index.aspx",
-]
-
-# ---------------------------------------------------------------------------
-# Technical indicator agents
-# ---------------------------------------------------------------------------
 
 
 def macd_agent(state: TradingState) -> dict:
@@ -1649,50 +1570,6 @@ def rsi_agent(state: TradingState) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _scrape_headlines() -> List[str]:
-    headlines: List[str] = []
-    _LAST_SOURCES.clear()
-    _LAST_PUBLISHED.clear()
-    for url in RSS_FEEDS:
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:10]:
-                title = getattr(entry, "title", None)
-                if not title:
-                    continue
-                headlines.append(title)
-                _LAST_PUBLISHED[title] = _entry_published(entry)
-                # WHICH FEED IT CAME FROM. Discarded until 2026-09-06, which
-                # made "weight a wire above a blog" unimplementable -- there
-                # was nothing to key a source weight on. Recorded now so the
-                # idea can be TESTED against news_symbol_impact rather than
-                # asserted with hardcoded multipliers.
-                _LAST_SOURCES[title] = _feed_name(url)
-        except Exception as e:
-            logger.warning("Failed to parse RSS feed %s: %s", url, e)
-
-    # Then one pass per tracked symbol. Guarded individually so a single slow
-    # or dead ticker feed cannot cost the whole scrape -- this runs inside the
-    # trading cycle, and section 55 records what an unguarded network call in
-    # this agent cost: three cycles at the open with seven positions live.
-    for sym in _tracked_symbols():
-        for template in PER_SYMBOL_FEEDS:
-            url = template.format(sym=sym)
-            try:
-                feed = feedparser.parse(url)
-                for entry in feed.entries[:PER_SYMBOL_ENTRIES]:
-                    title = getattr(entry, "title", None)
-                    if not title:
-                        continue
-                    headlines.append(title)
-                    _LAST_PUBLISHED[title] = _entry_published(entry)
-                    _LAST_SOURCES[title] = f"{_feed_name(url)}:{sym}"
-            except Exception as e:
-                logger.warning("Failed to parse %s feed for %s: %s",
-                               _feed_name(url), sym, e)
-    return headlines
-
-
 def _stored_headlines() -> List[str]:
     """Recent headlines READ FROM THE STORE, with no network call.
 
@@ -1793,8 +1670,7 @@ async def market_signals_agent(state: TradingState) -> dict:
         # rests on breadth, VIX and yields, which is where the evidence in
         # this file says the signal actually lives.
         try:
-            # Polygon-only since 2026-09-12. TRADING_USE_RSS=true rolls back.
-            headlines = _scrape_headlines() if USE_RSS else _stored_headlines()
+            headlines = _stored_headlines()
             embeddings = VoyageEmbeddings()
             if headlines:
                 await store_headlines(headlines, embeddings)

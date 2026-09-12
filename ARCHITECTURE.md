@@ -128,6 +128,54 @@ re-run wobble is characterised**.
 
 ---
 
+## Hourly per-symbol sentiment, from Polygon
+
+`symbol_sentiment_hourly`, written by `scripts/news_hourly.py` every hour
+08:00-16:30 ET. **It scores. It does not gate.**
+
+**Polygon replaces the RSS scrape because articles arrive TICKER-TAGGED**,
+which deletes the alias-matching layer and the three bug classes it produced
+in a single evening: `ALIASES["SNDK"] = ["sandisk","sndk"]` could not see a
+sector story; `SECTOR_TERMS` matched 0 of 236 headlines; `mw_marketpulse`
+answered 200 for months while serving headlines a year old. **A dead RSS feed
+and a quiet news day are indistinguishable from inside a scrape. A Polygon 429
+is not**, and it is logged by name.
+
+**The rate limit is measured, not assumed.** The free tier refused the 6th call
+inside two seconds and returned 429 on eight of eight when hammered. Pacing is
+a delay BETWEEN EVERY CALL (13s), not a sleep after each fourth -- that pattern
+still bursts four calls into one second.
+
+**Polygon ships its own sentiment with reasoning**, free with the news call:
+
+```json
+{"ticker":"NKE","sentiment":"negative",
+ "sentiment_reasoning":"Stock at 12-year lows, declining revenue..."}
+```
+
+So three candidates are stored side by side and **none of them gates**:
+
+```
+polygon   ticker sentiment + reasoning     never scored against an outcome
+finbert   local classifier, same headlines 50-52% on this account's own data
+haiku     the 09:30 reasoned verdict       59-60%, lookahead removed
+```
+
+FinBERT's measurement is the reason for the caution: its "negative" symbol-days
+averaged **+0.061%** -- it does not find the direction it names, and a gate on
+it would refuse trades at random. First sweep already showed the two disagreeing
+outright: SNDK polygon +1.00 against finbert -0.81, GOOGL +0.75 against -0.20.
+`verdict_outcome` settles it in twenty sessions.
+
+**Retention is 10 days, matching `NOVELTY_LOOKBACK_DAYS` exactly.** That is the
+binding constraint: the novelty filter asks for prior coverage over 10 days, and
+cutting below its window turns every re-reported story into a fresh catalyst --
+the failure that gave the QQQ read its standing bearish tilt.
+`news_verdict_outcomes` is unaffected, storing the verdict and the session
+return rather than the headlines.
+
+---
+
 ## The news pipeline
 
 **A NEUTRAL ANCHOR BEATS AN ENUMERATED DIRECTION.** Vectors 1-6 of

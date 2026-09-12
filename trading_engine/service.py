@@ -189,11 +189,18 @@ def _open_rejected(order_result: "dict | None") -> bool:
     the worse failure -- that one leaves real contracts with nothing watching
     them, which is precisely what this whole section is about.
     """
-    return _close_rejected(order_result)
+    return _close_rejected(order_result, kind="Open")
 
 
-def _close_rejected(order_result: "dict | None") -> bool:
+def _close_rejected(order_result: "dict | None", kind: str = "Close") -> bool:
     """Did the broker REFUSE this close?
+
+    `kind` NAMES THE ORDER IN THE LOG AND NOTHING ELSE. _open_rejected
+    delegates here, so until 2026-09-12 every refused ENTRY reported itself as
+    "Close order ... came back rejected". On 2026-09-11 that sent a diagnosis
+    hunting through the exit path for a MORNING_DRIFT 715/725 entry the broker
+    had turned down -- the one line that said what happened described the
+    opposite half of the system.
 
     submit_vertical answering {'status': 'ok'} means "accepted for
     processing", not "filled", and the two came apart on 2026-08-27: an
@@ -219,18 +226,19 @@ def _close_rejected(order_result: "dict | None") -> bool:
         try:
             status = (tradier_orders.order_status(order_id).get("status") or "").lower()
         except Exception:
-            logger.exception("Could not read close order %s — treating it as standing.", order_id)
+            logger.exception("Could not read %s order %s — treating it as standing.",
+                             kind.lower(), order_id)
             return False
         if status in _DEAD_ORDER_STATES:
-            logger.error("Close order %s came back %s.", order_id, status)
+            logger.error("%s order %s came back %s.", kind, order_id, status)
             return True
         if status == "filled":
             return False
         if attempt < 5:
             time.sleep(1.5)
     logger.warning(
-        "Close order %s still %s after the poll — booking it and letting RECONCILE "
-        "catch it if it never fills.", order_id, status or "unknown")
+        "%s order %s still %s after the poll — booking it and letting RECONCILE "
+        "catch it if it never fills.", kind, order_id, status or "unknown")
     return False
 
 

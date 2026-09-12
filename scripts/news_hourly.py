@@ -27,14 +27,32 @@ inside two seconds and returned 429 on eight of eight when hammered. So the
 pacing here is a delay BETWEEN EVERY CALL, not a sleep after each fourth --
 that pattern still bursts 4 calls into one second and trips it.
 
-AND IT KEEPS POLYGON'S OWN SENTIMENT, which arrives free with the news and
-carries reasoning:
+POLYGON'S SENTIMENT IS ASPECT-BASED, WHICH IS THE WHOLE REASON IT IS THE ONLY
+ONE HERE. It reads the article body and emits a verdict PER TICKER:
 
     {"ticker":"NKE","sentiment":"negative",
      "sentiment_reasoning":"Stock at 12-year lows, declining revenue..."}
 
-That has never been scored against an outcome here. It is stored beside
-FinBERT's so verdict_outcome can settle which is worth having.
+FinBERT was scored alongside it and removed 2026-09-12. It is a sentence
+classifier, not an aspect-based one, so it was handed a bare headline with no
+way to know which ticker it was rating -- and on a multi-ticker article it
+rated the wrong subject. The case that settled it:
+
+    "Nike Is Being Deleted From the S&P 100. Is Its Seat in the Dow
+     Jones Industrial Average in Jeopardy?"
+
+    polygon  positive  "Being added to S&P 100, ranked top 50 by market cap"
+    finbert  -0.81     read "Deleted... in Jeopardy?"
+
+Nike is deleted; SanDisk is ADDED. Polygon was right and FinBERT was answering
+a different question. That also explains its 50-52% on the graded outcomes: it
+was scoring the wrong subject a good fraction of the time. No prompt or
+threshold fixes it -- there is no way to tell a sentence classifier "score
+this headline FOR SanDisk".
+
+BEING THE RIGHT SHAPE IS NOT THE SAME AS BEING RIGHT. Polygon's read has never
+been scored against an outcome here either, which is why nothing gates on it.
+verdict_outcome grades it nightly.
 """
 
 from __future__ import annotations
@@ -57,10 +75,6 @@ NY = ZoneInfo("America/New_York")
 
 POLYGON_KEY = os.getenv("POLYGON_API_KEY", "")
 POLYGON_NEWS = "https://api.polygon.io/v2/reference/news"
-HF_TOKEN = os.getenv("HF_TOKEN", "")
-FINBERT = os.getenv("TRADING_FINBERT_URL",
-                    "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert")
-
 SYMBOLS = [s.strip().upper() for s in os.getenv(
     "TRADING_HOURLY_SYMBOLS",
     "QQQ,NVDA,SNDK,MU,META,AVGO,ADBE,AMZN,GOOGL,MSFT,CRWV,WDC").split(",") if s.strip()]
@@ -135,35 +149,6 @@ def polygon_sentiment(articles: list, symbol: str) -> "tuple | None":
     return label, score, " | ".join(reasons)[:1500], len(vals)
 
 
-def finbert_sentiment(titles: list) -> "tuple | None":
-    """(label, signed score, None, n). top_k=3 or a batch returns only argmax."""
-    if not titles or not HF_TOKEN:
-        return None
-    try:
-        r = httpx.post(FINBERT, headers={"Authorization": f"Bearer {HF_TOKEN}"},
-                       json={"inputs": titles[:60], "parameters": {"top_k": 3}},
-                       timeout=60.0)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("FinBERT unreachable (%s)", type(exc).__name__)
-        return None
-    if r.status_code != 200:
-        logger.warning("FinBERT returned %d: %s", r.status_code, r.text[:160])
-        return None
-    tot = 0.0
-    n = 0
-    for scores in r.json():
-        if not isinstance(scores, list):
-            continue
-        d = {x.get("label"): x.get("score", 0.0) for x in scores if isinstance(x, dict)}
-        tot += d.get("positive", 0.0) - d.get("negative", 0.0)
-        n += 1
-    if not n:
-        return None
-    score = tot / n
-    label = "positive" if score > 0.15 else "negative" if score < -0.15 else "neutral"
-    return label, score, None, n
-
-
 def sweep(now: "datetime | None" = None) -> int:
     now = now or datetime.now(NY)
     since = now.astimezone(ZoneInfo("UTC")) - timedelta(hours=LOOKBACK_HOURS)
@@ -183,9 +168,6 @@ def sweep(now: "datetime | None" = None) -> int:
             p = polygon_sentiment(arts, sym)
             if p:
                 rows.append(("polygon",) + p)
-            f = finbert_sentiment(titles)
-            if f:
-                rows.append(("finbert",) + f)
             for source, label, score, rationale, n in rows:
                 cur.execute("""
                     INSERT INTO symbol_sentiment_hourly

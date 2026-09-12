@@ -153,19 +153,28 @@ still bursts four calls into one second.
  "sentiment_reasoning":"Stock at 12-year lows, declining revenue..."}
 ```
 
-So three candidates are stored side by side and **none of them gates**:
+**FinBERT was tried alongside it and removed the same day.** It is a sentence
+classifier, not an aspect-based one, so it received a bare headline with no way
+to know which ticker it was rating. The case that settled it:
 
 ```
-polygon   ticker sentiment + reasoning     never scored against an outcome
-finbert   local classifier, same headlines 50-52% on this account's own data
-haiku     the 09:30 reasoned verdict       59-60%, lookahead removed
+"Nike Is Being Deleted From the S&P 100. Is Its Seat in the Dow
+ Jones Industrial Average in Jeopardy?"
+
+polygon  positive  "Being added to S&P 100, ranked top 50 by market cap"
+finbert  -0.81     read "Deleted... in Jeopardy?"
 ```
 
-FinBERT's measurement is the reason for the caution: its "negative" symbol-days
-averaged **+0.061%** -- it does not find the direction it names, and a gate on
-it would refuse trades at random. First sweep already showed the two disagreeing
-outright: SNDK polygon +1.00 against finbert -0.81, GOOGL +0.75 against -0.20.
-`verdict_outcome` settles it in twenty sessions.
+**Nike is deleted; SanDisk is ADDED.** Polygon was right and FinBERT was
+answering a different question -- which also explains its 50-52% on the graded
+outcomes: it was scoring the wrong subject a good part of the time. No prompt
+or threshold fixes that; there is no way to tell a sentence classifier "score
+this headline FOR SanDisk".
+
+**BEING THE RIGHT SHAPE IS NOT THE SAME AS BEING RIGHT.** Polygon's read has
+never been scored against an outcome here either, so nothing gates on it.
+`verdict_outcome` grades it nightly, and Haiku's 09:30 verdict (59-60%,
+lookahead removed) remains the incumbent to beat.
 
 **Retention is 10 days, matching `NOVELTY_LOOKBACK_DAYS` exactly.** That is the
 binding constraint: the novelty filter asks for prior coverage over 10 days, and

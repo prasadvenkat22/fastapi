@@ -239,6 +239,54 @@ TRADING_NEWS_DIRECTION=true
 
 ---
 
+## The Mon/Wed 0DTE shadow
+
+`dte0_shadow`, written by `scripts/dte0_shadow.py`. **It never trades** -- no
+order path, no live slice. It exists because the engine's 0DTE record is
+QQQ-only and thin (MORNING_DRIFT 6 live trades, AFTERNOON_CREDIT 7 and
+negative) and there is no single-name 0DTE evidence here at all.
+`weekly_shadow` records five-day holds; a Monday NVDA spread is a different
+instrument with different gamma.
+
+**Which names have mid-week expiries, checked against the chain:**
+
+```
+QQQ                                daily
+AMZN AVGO GOOGL META MSFT NVDA MU  Mon, Wed, Fri
+SNDK CRWV                          Friday only
+```
+
+The two names with the worst weekly tails are also the two that cannot do
+mid-week 0DTE.
+
+**Structure comes from IV/RV**, the one column section 50 measured on this
+book: a credit spread's break-even win rate IS its risk ratio and delta IS the
+market's probability estimate, so an edge can only come from implied exceeding
+realised. At or above 1.05 it sells premium, at or below 0.95 it buys, and
+between it records nothing -- an abstention is data.
+
+**Both sides every session.** One CALL row and one PUT row, so the data can
+answer which direction worked rather than only the one a signal picked.
+
+**The quote is a gate, not a footnote.** Median near-ATM width as a share of
+mid: NVDA 2.6%, MU 2.8%, QQQ 3.9%, META 6.3%, AMZN 11.9%, GOOGL 13.3%, MSFT
+17.0%, AVGO 21.2%. A vertical pays that twice on two legs, so against a 30-50%
+maximum return AVGO's quote eats the trade before direction matters.
+`TRADING_DTE0_MAX_QUOTE_PCT` (15) refuses those chains and the width it did pay
+is stored on every row.
+
+First dry run against Monday 2026-09-14's chain: 10 rows across QQQ, NVDA, MU,
+META and AMZN; GOOGL abstained at IV/RV 0.97; MSFT (17.5%) and AVGO (21.2%)
+refused on quote width. **Every ratio came back between 0.48 and 0.83** --
+realised far above implied, options cheap, so the rule says buy premium rather
+than sell it.
+
+Cron: `--open` at 09:46 ET, `--settle` after the close, both DST-covered.
+Settlement is arithmetic from spot, never a quote -- the closing quote on an
+expiring option is the widest of the day.
+
+---
+
 ## Does the 09:30 verdict predict the day
 
 **QQQ is graded again from 2026-09-12, and that is a test, not a decision.**

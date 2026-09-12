@@ -283,6 +283,15 @@ the number of survivors put the whole $1,500 into one name on the day the
 filters had just rejected everything else -- the day to be smaller, not
 larger. Unspent budget stays unspent.
 
+**Rejections are tallied by reason.** Five filters in series with a silent
+"nothing cleared" leaves no way to tell a quiet market from a knob set wrong.
+
+**The two tools enumerate differently and can disagree.** `dte0_pick` builds
+its own ATR-derived widths from the chain; `dte0_trade` filters whatever
+`screener.rank()` generated. On 2026-09-12's crossed weekend quotes `pick`
+found MU and META structures and `trade` found none. If they disagree on a
+live session, `pick` is the one seeing the full width ladder.
+
 Exits are `orphans.py`'s job and are not duplicated here.
 
 ---
@@ -307,6 +316,21 @@ extrinsic under 25%       the same failure in the units that cause it. NVDA
 target within 0.3 ATR     the move to +30% has to be an ordinary session. ATR
                           converts at ATR/1.596, the constant the probability
                           engines already use.
+short leg within 0.4 ATR  the strike SOLD has to be somewhere price can reach.
+                          NVDA's 225 call fetched 0.11 against a 3.85 long --
+                          2.9% of the cost -- while capping every gain above
+                          225. At 222.5 the same leg earns 0.30, at 220 it
+                          earns 0.84. The number comes from what these names
+                          actually travel in a session: NVDA 3-4 of ATR 7.67
+                          = 0.46, META 5-10 of 21.32 = 0.35, MU 10-15 of
+                          44.15 = 0.28. Widths are DERIVED from this span and
+                          the chain's own strike spacing, not listed -- a $5
+                          spread on NVDA and on MU were never the same trade.
+quote under 15% of mid    a vertical crosses the quote twice, on two legs.
+                          NVDA 2.6%, MU 2.8%, META 6.3%, AMZN 12.2%, GOOGL
+                          14.4%, MSFT 17.5%, AVGO 21.2% -- the last two are
+                          refused, which is what let the universe widen to
+                          every Mon/Wed name.
 ```
 
 It scores calls and puts identically and prints the best of each. **It does not

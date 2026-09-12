@@ -83,6 +83,26 @@ MAX_EXTRINSIC = float(os.getenv("TRADING_PICK_MAX_EXTRINSIC", "25.0"))
 MAX_TARGET_ATR = float(os.getenv("TRADING_PICK_MAX_TARGET_ATR", "0.30"))
 TARGET_PCT = float(os.getenv("TRADING_ORPHAN_TARGET_RETURN_PCT", "30.0"))
 
+# THE MORNING'S NEWS READ, AS A VETO ON DIRECTION.
+#
+# The same shape as the engine's TRADING_NEWS_DIRECTION gate: the verdict can
+# REFUSE a structure that contradicts it and can never propose one. A trade
+# still has to clear EV, edge and all three structure constraints first; news
+# only removes.
+#
+# The screener carries its own conflict guard but it fires on VERY_BEARISH and
+# VERY_BULLISH alone, which are rare -- 6 of 204 graded verdicts. The plain
+# readings are 44 more, and if the read is worth consulting at all it is worth
+# consulting at BEARISH, so this widens it to match the engine rather than
+# leaving two different definitions of "contradicts" in one system.
+#
+# The verdict is written at 09:30 by news_watch and this runs at 09:45, so it
+# is the morning's news and not yesterday's -- session_headlines windows from
+# the previous close and the novelty filter drops re-reported stories.
+NEWS_VETO = os.getenv("TRADING_DTE0_NEWS_VETO", "true").lower() == "true"
+NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
+NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
+
 
 def _passes(r: dict) -> "str | None":
     """None if the row clears all three constraints, else why it did not."""
@@ -188,6 +208,20 @@ def main() -> None:
             # Affordability is a selection criterion, not a post-check.
             if float(r["cost"]) * 100 > per_trade_cap:
                 continue
+            # The morning's news read, as a veto on direction.
+            if NEWS_VETO:
+                verdict = r.get("news")
+                bullish = r.get("direction") != "bearish"
+                if verdict and ((bullish and verdict in NEWS_BEARISH)
+                                or ((not bullish) and verdict in NEWS_BULLISH)):
+                    logger.info("%s %s %.0f/%.0f refused: the structure is %s "
+                                "and the 09:30 read is %s.", r["sym"], side.upper(),
+                                float(r["lo"]), float(r["hi"]),
+                                "bullish" if bullish else "bearish", verdict)
+                    continue
+            if r.get("conflict"):
+                logger.info("%s %s refused: %s", r["sym"], side.upper(), r["conflict"])
+                continue
             key = r["sym"]
             if key not in best or r["ev_dem"] > best[key]["ev_dem"]:
                 r["_side"] = side
@@ -216,10 +250,12 @@ def main() -> None:
         qty = min(int(per // (cost * 100)), tradier_orders.MAX_CONTRACTS)
         logger.info(
             "%-5s %-4s %.0f/%.0f w%.1f x%d @ %.2f = $%.0f | Pwin %.1f%% need %.1f%% "
-            "EV $%+.0f | entry %.0f%% of width, extr %.0f%%, target %s %.2f (%.2f ATR)",
+            "EV $%+.0f | entry %.0f%% of width, extr %.0f%%, target %s %.2f (%.2f ATR) "
+            "| news %s",
             sym, side.upper(), long_k, short_k, w, qty, cost, cost * 100 * qty,
             r["pwin"] * 100, r["need"] * 100, r["ev_dem"], r["_ew"] * 100,
-            r["_ex_pct"], sym, r["_target_spot"], r["_move_atr"])
+            r["_ex_pct"], sym, r["_target_spot"], r["_move_atr"],
+            r.get("news") or "none")
         if qty < 1:
             logger.info("   costs $%.0f, above the $%.0f per-trade budget — skipped.",
                         cost * 100, per)

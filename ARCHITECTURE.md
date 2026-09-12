@@ -130,6 +130,45 @@ re-run wobble is characterised**.
 
 ## The news pipeline
 
+**CHECK A FEED'S DATES, NOT ITS STATUS CODE.** Measured 2026-09-12:
+
+```
+mw_marketpulse   200, 30 entries, newest Jul 2025    ABANDONED, and configured
+mw_realtime      200, 10 entries, newest Jun 2025    ABANDONED
+mw_topstories    200, 10 entries, newest today       live  <- now used
+fool index       200, 50 entries, newest today       live  <- now added
+```
+
+`mw_marketpulse` answered 200 and parsed cleanly every cycle for the life of
+this pipeline while serving headlines over a year old -- *"Consumer credit
+growth soars in December"*, scraped in September. Nothing was logged because
+nothing was wrong: reachable, parsed, and the same ten stale titles stored once
+and filtered as known ever after. **A dead feed and a quiet news day are
+indistinguishable from inside the scrape.** The Motley Fool was never
+configured, which is why an article on SanDisk's crash had no chance of being
+graded.
+
+After the swap: 216 headlines a scrape across YAHOO_FINANCE 99, SEEKING_ALPHA
+88, MARKETWATCH 10, CNBC 10, MOTLEY_FOOL 9.
+
+**And the store was duplicating.** `store_headlines` reads what is known,
+filters the batch, then inserts -- two overlapping runs both see an empty
+`known` and both write. 52 of 236 rows on 2026-09-11 were exact duplicates.
+That is not cosmetic: the novelty filter drops a headline within 0.83 cosine of
+prior coverage, and **a duplicate is a perfect match for itself**. SanDisk had
+three distinct headlines before 09:30 that day and the model received two. A
+unique index on `headline_text` plus `ON CONFLICT DO NOTHING` is the fix that
+holds under a race; the corpus was deduplicated 3,762 -> 3,464.
+
+**What is still missing: the per-symbol read runs once, at 09:30.** Five of
+SanDisk's eleven headlines on 2026-09-11 were published intraday, including
+*"NAND Party Likely To End In 2027"* at 10:08. Macro re-reads hourly; symbols
+do not. Closing that costs a model call per symbol per refresh.
+
+---
+
+
+
 ```
 ingest   nodes._scrape_headlines()
          3 general feeds  +  per-ticker Yahoo & Seeking Alpha for every

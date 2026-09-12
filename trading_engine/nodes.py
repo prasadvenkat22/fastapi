@@ -1121,17 +1121,35 @@ def _feed_name(url: str) -> str:
     """A short, stable label for a feed URL."""
     for frag, name in (("seekingalpha", "SEEKING_ALPHA"),
                        ("yahoo", "YAHOO_FINANCE"), ("dowjones", "MARKETWATCH"),
-                       ("cnbc", "CNBC"), ("prnewswire", "PR_NEWSWIRE"),
+                       ("cnbc", "CNBC"), ("fool.com", "MOTLEY_FOOL"),
+                       ("prnewswire", "PR_NEWSWIRE"),
                        ("businesswire", "BUSINESS_WIRE"), ("sec.gov", "SEC")):
         if frag in url.lower():
             return name
     return "OTHER"
 
 
+# CHECK A FEED'S DATES, NOT ITS STATUS CODE. Measured 2026-09-12:
+#
+#     mw_marketpulse   200, 30 entries, newest Jul 2025   ABANDONED
+#     mw_realtime      200, 10 entries, newest Jun 2025   ABANDONED
+#     mw_topstories    200, 10 entries, newest today      live
+#     fool index       200, 50 entries, newest today      live
+#
+# marketpulse answered 200 and parsed cleanly every cycle for the life of this
+# pipeline while serving headlines over a year old -- "Consumer credit growth
+# soars in December" scraped in September. Nothing logged, because nothing was
+# wrong: the feed was reachable, the parse succeeded, and the ten stale titles
+# were stored once and filtered as known ever afterwards. A dead feed and a
+# quiet news day are indistinguishable from inside the scrape.
+#
+# The Motley Fool was never configured at all, which is why an article the
+# user cited on SanDisk's crash had no chance of being graded.
 RSS_FEEDS = [
     "https://finance.yahoo.com/news/rssindex",
-    "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
+    "https://feeds.content.dowjones.io/public/rss/mw_topstories",
     "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+    "https://www.fool.com/feeds/index.aspx",
 ]
 
 # ---------------------------------------------------------------------------

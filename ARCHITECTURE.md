@@ -239,6 +239,39 @@ TRADING_NEWS_DIRECTION=true
 
 ---
 
+## Picking a 0DTE structure: the three constraints
+
+`scripts/dte0_pick.py`. **Prints, never trades.** Each constraint was learned
+by losing money to its opposite in the week of 2026-09-08:
+
+```
+entry 30-65% of width     above 65% the +30% target is arithmetically
+                          unreachable, since max return is (width-entry)/entry
+                          and 0.77 of width IS exactly 30%. Four QQQ positions
+                          on 09-11 were bought at 0.68-0.81 and their target
+                          rung did nothing; the 15:45 flatten became the exit.
+                          Below 30% the premium is mostly time value and the
+                          -10% stop is nearer than one morning of theta.
+extrinsic under 25%       the same failure in the units that cause it. NVDA
+                          220/200 screened at +28 points of edge with 35% time
+                          value: the stop sat 0.26 below entry against 0.91 of
+                          extrinsic, so theta alone covered it before lunch.
+target within 0.3 ATR     the move to +30% has to be an ordinary session. ATR
+                          converts at ATR/1.596, the constant the probability
+                          engines already use.
+```
+
+It scores calls and puts identically and prints the best of each. **It does not
+pick direction** -- that is the morning's question (news verdict, flow, tape),
+and pretending a strike rule answers it is the same category error as a +55%
+target that could never fire.
+
+Worked on NVDA for 2026-09-14: CALL 215/222 at 47% of width with 7% extrinsic,
+target 0.17 ATR away; PUT 220/215 at 42% with 18%, target 0.13 ATR. Both
+inside a quarter of a daily range.
+
+---
+
 ## The Mon/Wed 0DTE shadow
 
 `dte0_shadow`, written by `scripts/dte0_shadow.py`. **It never trades** -- no

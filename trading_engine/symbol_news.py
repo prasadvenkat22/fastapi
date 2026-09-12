@@ -158,7 +158,32 @@ MACRO_TERMS: List[str] = [
     "liquidity injection", "goldilocks", "risk-on", "risk appetite",
     "earnings upgrade", "guidance raised", "capex cycle", "productivity boom",
 
-    # Index-level tape, which is the outcome these five vectors produce
+    # 6. SHIPPING AND TRADE POLICY, BOTH SIDES TOGETHER.
+    #
+    # Added 2026-09-12. The set could reach Iran and Hormuz but not the Red
+    # Sea attacks that actually move freight and crude, and it had no tariff
+    # vector at all -- a trade shock reaches QQQ through margins and input
+    # costs without ever naming a tech company, which is the whole reason this
+    # symbol reads the macro tape instead of a ticker.
+    #
+    # PAIRED ON PURPOSE. The bearish tilt that pulled QQQ out of the graded
+    # list was retrieval, not the model: a term set that can only surface
+    # trouble hands a classifier nothing else to report. Every disruption term
+    # here ships with the term that would describe it ending, so the read can
+    # express relief on the same subject it can express alarm. Adding one side
+    # alone rebuilds the exact bias vector 5 exists to correct.
+    #
+    # Specific, like the rest -- a bare "shipping" or "trade" would drag in
+    # routine logistics and brokerage copy. And added BEFORE the graded series
+    # starts accumulating: changing the retriever after twenty sessions would
+    # invalidate the measurement it is being changed for.
+    "houthi", "red sea", "tanker attack", "freight rates surge",
+    "tariff", "trade war", "hard landing", "stagflation",
+    "shipping resumes", "supply chain eases", "freight rates fall",
+    "tariff exemption", "tariff rollback", "trade deal", "trade truce",
+    "growth forecast raised",
+
+    # Index-level tape, which is the outcome these six vectors produce
     "nasdaq futures", "dow jones futures", "s&p 500 futures", "stock futures",
 ]
 

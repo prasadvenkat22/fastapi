@@ -211,7 +211,14 @@ landing) gave the term set a side it could not previously express, and the
 novelty filter stopped the wires re-reporting standing macro stories into
 every window. **And then nobody checked**: the symbol stayed out of the graded
 list, so the fix shipped untested. `QQQ` resolves to `MACRO_TERMS` through
-`patterns_for()`, never to the ticker, so what is graded is the macro tape.
+`patterns_for()`, never to the ticker, so what is graded is the macro tape --
+99 terms across six vectors: Fed and rates, geopolitics and oil, the global
+bond complex, hard data, easing and disinflation, and shipping and trade
+policy. **Every disruption term is paired with the term that describes it
+ending.** A set that can only surface trouble hands the classifier nothing
+else to report, which is what produced the 10-of-14 bearish tilt in the
+first place; adding Houthi and tariffs without their relief counterparts
+would have rebuilt it.
 
 Grading it feeds two things that were already built for it: `verdict_outcome`
 scores it nightly, and `macro_outcome.py` reads `news_verdicts WHERE

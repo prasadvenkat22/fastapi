@@ -183,7 +183,41 @@ MACRO_TERMS: List[str] = [
     "tariff exemption", "tariff rollback", "trade deal", "trade truce",
     "growth forecast raised",
 
-    # Index-level tape, which is the outcome these six vectors produce
+    # 7. NEUTRAL ANCHORS, AND THIS IS THE VECTOR THAT FIXES RECALL.
+    #
+    # Every term in vectors 1-6 is a DIRECTIONAL phrase -- "yields fall",
+    # "core inflation", "non-farm payroll", "crude oil". A set built that way
+    # can only retrieve the directions somebody enumerated, and it misses the
+    # ordinary phrasings entirely. Measured over 2,650 headlines on
+    # 2026-09-12, against loose subject probes:
+    #
+    #     yields/bonds  111 headlines, 50 unmatched   "Yields Retreat after
+    #                                                  Waller Signals a Hold"
+    #     inflation     101 headlines, 44 unmatched   "Sticky Inflation Report
+    #                                                  Raises Jackson Hole Stakes"
+    #     fed/rates     132 headlines, 36 unmatched   "Fed's preferred inflation
+    #                                                  gauge shows core prices rose"
+    #     jobs          "Private payrolls rose by 38,000 in August"
+    #
+    # The list had "yields fall" and not "yields", "core inflation" and not
+    # "inflation", "non-farm payroll" and not "payroll", "crude oil" and not
+    # "crude".
+    #
+    # A NEUTRAL ANCHOR IS SELF-BALANCING, which is the deeper point. Vector 5
+    # exists because a set of only-bad terms produced a standing bearish tilt,
+    # and the answer then was to enumerate the good terms too. An anchor needs
+    # no counterpart: "inflation" retrieves "inflation cools" and "sticky
+    # inflation" alike and hands the model both, which is what the model is
+    # for. Enumerating directions is what created the bias in the first place.
+    #
+    # Kept to words that are unambiguous IN A FINANCE FEED. "pipeline" is not
+    # here -- it matched "Novartis Growth Pipeline" -- and neither is "attack",
+    # which matched a cyber-security story about Boston Scientific.
+    "inflation", "payroll", "crude", "yields", "treasury", "central bank",
+    "rate decision", "jackson hole", "recession", "refinery", "opec+",
+    "missile strike", "drone strike", "sovereign debt", "credit spreads",
+
+    # Index-level tape, which is the outcome these seven vectors produce
     "nasdaq futures", "dow jones futures", "s&p 500 futures", "stock futures",
 ]
 

@@ -130,6 +130,35 @@ re-run wobble is characterised**.
 
 ## The news pipeline
 
+**A NEUTRAL ANCHOR BEATS AN ENUMERATED DIRECTION.** Vectors 1-6 of
+`MACRO_TERMS` are directional phrases -- `yields fall`, `core inflation`,
+`non-farm payroll`, `crude oil` -- so the set could only retrieve the
+directions somebody had listed. Measured over 2,650 headlines on 2026-09-12:
+
+```
+subject         headlines   missed before   after vector 7
+inflation            101         44              0
+jobs/growth            9          3              0
+fed/rates            132         36             20
+yields/bonds         111         50             34
+oil/energy           134         52             38
+geopolitics           99         30             27
+```
+
+It had `yields fall` and not `yields`, `core inflation` and not `inflation`,
+`non-farm payroll` and not `payroll`. So *"Yields Retreat after Waller Signals
+a Hold"*, *"Sticky Inflation Report"* and *"Private payrolls rose by 38,000"*
+all missed.
+
+**And an anchor needs no counterpart.** Vector 5 exists because a set of
+only-bad terms produced a standing bearish tilt, and the answer then was to
+enumerate the good terms too. `inflation` retrieves *"inflation cools"* and
+*"sticky inflation"* alike and hands the model both -- which is what the model
+is for. **Enumerating directions is what created the bias in the first place.**
+Terms are kept unambiguous in a finance feed: `pipeline` is excluded because it
+matched a Novartis drug pipeline, `attack` because it matched a cyber-security
+story.
+
 **CHECK A FEED'S DATES, NOT ITS STATUS CODE.** Measured 2026-09-12:
 
 ```

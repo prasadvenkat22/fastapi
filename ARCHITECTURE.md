@@ -133,6 +133,16 @@ re-run wobble is characterised**.
 `symbol_sentiment_hourly`, written by `scripts/news_hourly.py` every hour
 08:00-16:30 ET. **It scores. It does not gate.**
 
+**The RSS scrape is retired (2026-09-12).** `news_hourly.py` is the only
+fetcher; the per-minute cycle now READS the stored corpus through
+`_stored_headlines()` and makes no network call at all. It had to stop
+fetching rather than merely change source: Polygon's free tier allows five
+calls a minute across twelve tickers, so a single cycle would exhaust it. The
+same constraint removes network I/O from the hot path, which section 55
+records the cost of -- three cycles lost at the open with seven positions live.
+`TRADING_USE_RSS=true` rolls the old path back; the scrape function is left
+intact rather than deleted for exactly that reason.
+
 **Polygon replaces the RSS scrape because articles arrive TICKER-TAGGED**,
 which deletes the alias-matching layer and the three bug classes it produced
 in a single evening: `ALIASES["SNDK"] = ["sandisk","sndk"]` could not see a

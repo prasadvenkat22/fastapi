@@ -149,12 +149,60 @@ def polygon_sentiment(articles: list, symbol: str) -> "tuple | None":
     return label, score, " | ".join(reasons)[:1500], len(vals)
 
 
+def _store_corpus(articles: list) -> None:
+    """Embed and store these headlines, so the rest of the pipeline still works.
+
+    THIS JOB IS NOW THE ONLY FETCHER. market_news_vectors feeds the novelty
+    filter and session_headlines, which feeds the 09:30 verdict and
+    verdict_outcome behind it. Dropping the RSS scrape without writing here
+    would leave all three reading a corpus nobody tops up.
+
+    Source and publication time travel through nodes' module globals because
+    store_headlines reads them from there -- the same channel the scrape used.
+    """
+    import asyncio
+
+    from trading_engine import nodes
+    from trading_engine.vector_store import store_headlines
+    from GENAI.vector_stores import VoyageEmbeddings
+
+    titles = []
+    for a in articles:
+        t = a.get("title")
+        if not t or t in titles:
+            continue
+        titles.append(t)
+        pub = (a.get("publisher") or {}).get("name") or "POLYGON"
+        nodes._LAST_SOURCES[t] = f"POLYGON:{pub}"[:60]
+        # Polygon sends an ISO string; asyncpg wants a datetime, and the RSS
+        # path fed it one. A string here fails the whole executemany batch.
+        pub_at = a.get("published_utc")
+        if isinstance(pub_at, str):
+            try:
+                pub_at = datetime.fromisoformat(pub_at.replace("Z", "+00:00"))
+            except ValueError:
+                pub_at = None
+        nodes._LAST_PUBLISHED[t] = pub_at
+    if not titles:
+        return
+    try:
+        asyncio.run(store_headlines(titles, VoyageEmbeddings()))
+    except Exception:
+        logger.warning("Could not store %d headlines — sentiment still recorded.",
+                       len(titles), exc_info=True)
+
+
 def sweep(now: "datetime | None" = None) -> int:
     now = now or datetime.now(NY)
     since = now.astimezone(ZoneInfo("UTC")) - timedelta(hours=LOOKBACK_HOURS)
     written = 0
     conn = psycopg2.connect(_dsn())
     conn.autocommit = True
+    # ONE EMBEDDING CALL PER SWEEP, NOT ONE PER SYMBOL. Voyage's free tier
+    # allows 3 requests a minute; storing inside the loop made twelve calls in
+    # two and a half minutes and every one after the third was refused. The
+    # articles are accumulated and embedded once at the end instead.
+    corpus: list = []
     with conn, conn.cursor() as cur:
         for i, sym in enumerate(SYMBOLS):
             if i:
@@ -164,6 +212,7 @@ def sweep(now: "datetime | None" = None) -> int:
             if not titles:
                 logger.info("%-5s no articles in the last %dh", sym, LOOKBACK_HOURS)
                 continue
+            corpus.extend(arts)
             rows = []
             p = polygon_sentiment(arts, sym)
             if p:
@@ -182,7 +231,9 @@ def sweep(now: "datetime | None" = None) -> int:
                         "  ".join(f"{s}={l} {sc:+.2f}"
                                   for s, l, sc, _, _ in rows) or "no score")
 
-        # Retention. Above the novelty lookback on purpose -- see RETAIN_DAYS.
+        _store_corpus(corpus)
+
+        # Retention. Matched to the novelty lookback -- see RETAIN_DAYS.
         cur.execute("DELETE FROM market_news_vectors WHERE publication_date < %s",
                     (date.today() - timedelta(days=RETAIN_DAYS),))
         if cur.rowcount:

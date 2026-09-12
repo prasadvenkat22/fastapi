@@ -1108,6 +1108,14 @@ PER_SYMBOL_FEEDS = (
 # coverage, and store_headlines dedupes what repeats anyway.
 PER_SYMBOL_ENTRIES = int(os.getenv("TRADING_PER_SYMBOL_ENTRIES", "8"))
 
+# How much of the STORED corpus the cycle reads, now that news_hourly.py is
+# the only fetcher. The RSS lists above are dead and the scrape that used them
+# is kept only so a rollback is one flag away -- TRADING_USE_RSS=true restores
+# it. See _stored_headlines() for why fetching had to leave the hot path.
+HEADLINE_LOOKBACK_HOURS = int(os.getenv("TRADING_HEADLINE_LOOKBACK_H", "24"))
+HEADLINE_LIMIT = int(os.getenv("TRADING_HEADLINE_LIMIT", "120"))
+USE_RSS = os.getenv("TRADING_USE_RSS", "false").lower() == "true"
+
 
 def _tracked_symbols() -> list:
     """Names to pull per-symbol news for. The managed list, not the alias map,
@@ -1685,6 +1693,57 @@ def _scrape_headlines() -> List[str]:
     return headlines
 
 
+def _stored_headlines() -> List[str]:
+    """Recent headlines READ FROM THE STORE, with no network call.
+
+    scripts/news_hourly.py is the only fetcher: it pulls ticker-tagged
+    articles from Polygon once an hour and writes them to
+    market_news_vectors. This reads what that job stored.
+
+    IT HAD TO STOP FETCHING, not merely change source. This is called inside
+    the per-minute trading cycle, and Polygon's free tier allows five calls a
+    minute across twelve tickers -- one cycle would exhaust it. The same
+    constraint removes network I/O from the hot path, which section 55 records
+    the cost of: three cycles lost at the open with seven positions live.
+
+    WHAT DROPPING RSS BUYS. Articles arrive ticker-tagged, so the alias layer
+    and every bug it produced goes with it: ALIASES["SNDK"] that could not see
+    a sector story, SECTOR_TERMS that matched 0 of 236 headlines, and
+    mw_marketpulse answering 200 for months while serving headlines a year
+    old. A dead feed and a quiet news day were indistinguishable here; a
+    Polygon 429 is logged by name.
+    """
+    _LAST_SOURCES.clear()
+    _LAST_PUBLISHED.clear()
+    out: List[str] = []
+    try:
+        import psycopg2
+
+        dsn = (os.getenv("DATABASE_URL", "")
+               .replace("postgresql+psycopg2://", "postgresql://")
+               .replace("postgresql+asyncpg://", "postgresql://"))
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT headline_text, source, publication_date "
+                "FROM market_news_vectors "
+                "WHERE publication_date >= now() - make_interval(hours => %s) "
+                "ORDER BY publication_date DESC LIMIT %s",
+                (HEADLINE_LOOKBACK_HOURS, HEADLINE_LIMIT),
+            )
+            for text, source, published in cur.fetchall():
+                out.append(text)
+                if source:
+                    _LAST_SOURCES[text] = source
+                if published:
+                    _LAST_PUBLISHED[text] = published
+    except Exception:
+        # Non-fatal, exactly as the scrape was: the cycle continues on the
+        # objective macro terms, which is where the measured signal lives.
+        logger.warning("Could not read stored headlines — continuing without them.",
+                       exc_info=True)
+    return out
+
+
 async def market_signals_agent(state: TradingState) -> dict:
     from .vector_store import query_similar_headlines, store_headlines  # local import avoids a circular import with graph wiring
 
@@ -1734,7 +1793,8 @@ async def market_signals_agent(state: TradingState) -> dict:
         # rests on breadth, VIX and yields, which is where the evidence in
         # this file says the signal actually lives.
         try:
-            headlines = _scrape_headlines()
+            # Polygon-only since 2026-09-12. TRADING_USE_RSS=true rolls back.
+            headlines = _scrape_headlines() if USE_RSS else _stored_headlines()
             embeddings = VoyageEmbeddings()
             if headlines:
                 await store_headlines(headlines, embeddings)

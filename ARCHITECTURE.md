@@ -239,6 +239,54 @@ TRADING_NEWS_DIRECTION=true
 
 ---
 
+## The one script that trades by itself
+
+`scripts/dte0_trade.py`. Everything else in `scripts/` observes; this one
+places orders, so the guards come first:
+
+```
+--live required            dry run is the default and prints the same plan
+TRADING_DTE0_LIVE=true     must ALSO be set; --live alone does nothing
+TRADING_DTE0_MAX_BUDGET    hard ceiling, 1500
+--max-trades 3             one per underlying
+already-held check         refuses a symbol the account already holds for
+                           today's expiry, and FAILS CLOSED if it cannot read
+                           positions at all
+MAX_ORDER_CONTRACTS        sizing respects the clamp rather than discovering it
+```
+
+**QQQ is excluded by default.** The engine trades QQQ 0DTE itself from 09:45;
+a second position here would be an independent bet on the same underlying with
+the engine logging RECONCILE every minute.
+
+**Debits only.** Credit structures lock capital against the full width, this
+book has no measured record selling premium, and IV/RV across these names came
+back 0.48-0.83 on 2026-09-12 -- implied below realised, premium cheap.
+
+Ranked by EV from `screener.rank()`, the same call `/screener/verticals` and
+`weekly_pick.py` make, then filtered by the three constraints. **EV picks the
+best of what is sound; the constraints decide what is sound** -- the screener
+knows nothing about them and happily returned NVDA 200/220 at +28 points of
+edge with 35% of its premium in time value.
+
+Three rules earned during the first dry run:
+
+**A negative edge is not a trade.** Ranking on EV alone selected META at Pwin
+50.1% against a 54.3% break-even. The best of a bad set is still bad.
+
+**Affordability is a selection criterion, not a post-check.** MU's top row was
+a 50-wide at $1,936, so the name was dropped entirely instead of falling back
+to a structure that fits.
+
+**Size against the slot, not against what qualified.** Dividing the budget by
+the number of survivors put the whole $1,500 into one name on the day the
+filters had just rejected everything else -- the day to be smaller, not
+larger. Unspent budget stays unspent.
+
+Exits are `orphans.py`'s job and are not duplicated here.
+
+---
+
 ## Picking a 0DTE structure: the three constraints
 
 `scripts/dte0_pick.py`. **Prints, never trades.** Each constraint was learned

@@ -370,6 +370,34 @@ expiring option is the widest of the day.
 
 ## Does the 09:30 verdict predict the day
 
+**A ticker match cannot see the story that moves the sector.** 2026-09-11:
+SanDisk fell on Chinese memory-efficiency research that pressured the whole
+NAND complex, and the 09:30 read returned **two headlines** and graded it
+NEUTRAL -- reasoning that SK Hynix and Samsung had declined while SanDisk
+"held up". It never saw the story: a wire writing *"memory-efficient model
+pressures NAND makers"* prints no ticker, and `ALIASES["SNDK"]` was
+`["sandisk", "sndk"]`.
+
+That is the discovery that produced `MACRO_TERMS`, one level down. `SECTOR_TERMS`
+gives the single names their sector vectors the way QQQ got its macro ones:
+
+```
+memory     SNDK MU WDC STX        glut / oversupply / efficiency / prices fall
+                                  <-> shortage / undersupply / HBM demand / capacity cuts
+ai_model   META GOOGL MSFT NVDA   model efficiency / cheaper training / capex cut
+           AMZN AVGO MU           <-> frontier model / agent launch / compute demand
+```
+
+**Balanced 8 and 8, for the reason vector 5 exists** -- a set assembled only
+from gluts and cuts hands the classifier nothing but trouble, which is exactly
+what produced the 10-of-14 bearish tilt on QQQ. SNDK goes from 2 match terms
+to 18; CRWV keeps its 2, because its story really is its own.
+
+**It makes these names correlated on purpose.** One memory headline now grades
+for SNDK, MU, WDC and STX together, so four verdicts can move as one. They do
+move as one -- but it means the row count in `news_verdict_outcomes` overstates
+the evidence, which is why that report prints a per-session column beside it.
+
 **QQQ is graded again from 2026-09-12, and that is a test, not a decision.**
 The index read was pulled after coming back BEARISH on 10 of 14 sessions at
 **5/10 on direction**, with the tilt surviving the tape reversing -- five

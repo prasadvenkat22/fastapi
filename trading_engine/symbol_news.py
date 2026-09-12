@@ -213,13 +213,77 @@ MAX_HEADLINES = int(os.getenv("TRADING_NEWS_MAX_HEADLINES", "45"))
 NEWS_MODEL = os.getenv("TRADING_NEWS_MODEL", "claude-haiku-4-5")
 
 
+# A TICKER MATCH CANNOT SEE THE STORY THAT MOVES THE SECTOR.
+#
+# 2026-09-11: SanDisk fell on Chinese memory-efficiency research that pressured
+# the whole NAND complex. The 09:30 read returned TWO headlines and graded it
+# NEUTRAL, reasoning that SK Hynix and Samsung had declined while SanDisk "held
+# up". It never saw the story itself -- a wire writing "memory-efficient model
+# pressures NAND makers" prints no ticker, and ALIASES["SNDK"] is ["sandisk",
+# "sndk"].
+#
+# This is the same discovery that produced MACRO_TERMS. QQQ stopped being read
+# as a company because what moves it is unreachable through a QQQ ticker match;
+# what moves SNDK is memory demand, and that is unreachable through a SanDisk
+# one. The fix is the same shape, one level down.
+#
+# BALANCED, FOR THE REASON VECTOR 5 EXISTS. A term set assembled only from
+# gluts, cuts and efficiency gains can hand the classifier nothing but trouble,
+# and a classifier given only trouble reports trouble daily -- that is precisely
+# what produced the 10-of-14 bearish tilt on QQQ. Every pressure term below
+# ships with the term describing its opposite.
+#
+# AND IT MAKES THESE NAMES CORRELATED ON PURPOSE. One memory headline now
+# grades for SNDK, MU, WDC and STX together, so four verdicts can move as one.
+# That is honest -- they DO move as one -- but it means the row count in
+# news_verdict_outcomes overstates the evidence, which is why that report
+# prints a per-session column beside the per-row one.
+SECTOR_TERMS: Dict[str, List[str]] = {
+    # SNDK, MU, WDC, STX. The pressure side first, then its mirror.
+    "memory": [
+        "memory glut", "nand oversupply", "dram oversupply", "memory prices fall",
+        "inventory correction", "memory efficiency", "lower memory demand",
+        "storage oversupply",
+        "memory shortage", "nand undersupply", "dram prices rise", "hbm demand",
+        "memory contract prices", "ai memory demand", "capacity cuts",
+        "storage demand surge",
+    ],
+    # META, GOOGL, MSFT, NVDA, AMZN. What a new model or agent does to the
+    # company that ships it, and what cheaper compute does to the ones selling
+    # the compute.
+    "ai_model": [
+        "model efficiency", "cheaper training", "open weights", "inference cost falls",
+        "capex cut", "ai spending slows", "compute glut", "training costs fall",
+        "frontier model", "model launch", "agent launch", "ai agent",
+        "inference demand", "training run", "compute demand", "capex raised",
+    ],
+}
+
+# Which vectors reach which name. A symbol absent here keeps ticker matching
+# alone, which is the right answer for a company whose story is its own.
+SYMBOL_SECTORS: Dict[str, List[str]] = {
+    "SNDK": ["memory"], "MU": ["memory", "ai_model"],
+    "WDC": ["memory"], "STX": ["memory"],
+    "META": ["ai_model"], "GOOGL": ["ai_model"], "MSFT": ["ai_model"],
+    "NVDA": ["ai_model"], "AMZN": ["ai_model"], "AVGO": ["ai_model"],
+}
+
+
 def patterns_for(symbol: str) -> List[str]:
-    """Match strings for a symbol. QQQ resolves to the macro tape, not to
-    articles that happen to name the ETF."""
+    """Match strings for a symbol: its own names, plus the sector story.
+
+    QQQ resolves to the macro tape and nothing else -- it is not a company and
+    has no ticker story worth matching. Every other name keeps its aliases and
+    gains the vectors its sector moves on, because the headline that moves a
+    memory maker frequently never prints its name.
+    """
     sym = symbol.upper()
     if sym == "QQQ":
         return MACRO_TERMS
-    return ALIASES.get(sym, [sym.lower()])
+    out = list(ALIASES.get(sym, [sym.lower()]))
+    for sector in SYMBOL_SECTORS.get(sym, []):
+        out.extend(SECTOR_TERMS.get(sector, []))
+    return out
 
 
 def _dsn() -> str:

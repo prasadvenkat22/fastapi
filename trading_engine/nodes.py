@@ -255,6 +255,75 @@ BEARISH_START_HOUR, BEARISH_START_MINUTE = (
 )
 
 
+# THE MACRO NEWS READ AS A DIRECTIONAL PERMISSION, NOT A TRADE GENERATOR.
+#
+# It VETOES the side the morning's QQQ read contradicts. It never invents an
+# entry: a tier still has to fire on the technicals, and if none does there is
+# no trade whatever the news says. That distinction is the whole safety of
+# this gate -- the failure mode of every previous attempt at a news- or
+# macro-driven morning was taking a position the tape did not support.
+#
+# WHAT IT IS GATED ON, AND WHY BOTH SWITCHES EXIST.
+#
+#     QQQ macro news read     5/10 on next-session direction, and a standing
+#                             bearish tilt that survived the tape reversing
+#     morning put debit       27% wins, -50.62 a trade
+#     MORNING_CREDIT          38% wins, -57.64 a trade over 60 sessions
+#
+# Every measurement this repository has on trading a bad morning directionally
+# is negative. The corrections that might change that -- the balanced term set
+# and the novelty filter -- landed 2026-09-07 and the QQQ read was only put
+# back in the graded list on 2026-09-12, so there is no post-fix evidence at
+# all yet. news_verdict_outcomes accumulates it nightly.
+#
+# OFF by default for that reason, and MORNING_PUT is off separately, so
+# turning this on alone changes which side may trade without adding a
+# structure to trade it with.
+NEWS_DIRECTION = os.getenv("TRADING_NEWS_DIRECTION", "false").lower() == "true"
+# Only the readings strong enough to be worth a veto. NEUTRAL never gates --
+# it is the verdict for "nothing new since the close", which is most mornings.
+NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
+NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
+# Minimum confidence. The model reports its own, and a 0.5 read should not
+# stand down a setup the tape supports.
+NEWS_DIRECTION_MIN_CONF = float(os.getenv("TRADING_NEWS_DIRECTION_MIN_CONF", "0.70"))
+
+_news_verdict_cache: dict = {}
+
+
+def _qqq_news_verdict():
+    """(verdict, confidence) for today's QQQ macro read, or None.
+
+    Cached per day: the verdict is written once at 09:30 and re-reading it
+    every cycle would put a database round trip inside the entry path for a
+    value that cannot change. A failure returns None and the gate stands down,
+    which is the safe direction -- a database hiccup must not start refusing
+    entries.
+    """
+    today = datetime.now(ZoneInfo("America/New_York")).date()
+    if today in _news_verdict_cache:
+        return _news_verdict_cache[today]
+    out = None
+    try:
+        import psycopg2
+
+        dsn = (os.getenv("DATABASE_URL", "")
+               .replace("postgresql+psycopg2://", "postgresql://")
+               .replace("postgresql+asyncpg://", "postgresql://"))
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT verdict, confidence FROM news_verdicts "
+                        "WHERE symbol='QQQ' AND trading_day=%s", (today,))
+            row = cur.fetchone()
+            if row:
+                out = (row[0], float(row[1] or 0.0))
+    except Exception:  # noqa: BLE001 — a read failure must not gate entries
+        logger.warning("Could not read the QQQ news verdict — the direction "
+                       "gate stands down for this cycle.", exc_info=True)
+        return None
+    _news_verdict_cache[today] = out
+    return out
+
+
 def _is_before_bearish_start() -> bool:
     now_est = datetime.now(ZoneInfo("America/New_York"))
     return (now_est.hour, now_est.minute) < (BEARISH_START_HOUR, BEARISH_START_MINUTE)
@@ -2648,6 +2717,36 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             tier, bullish = "TREND", trend_bull
         else:
             tier, bullish = None, False
+
+        # THE MORNING'S MACRO NEWS READ, AS A VETO ON ONE SIDE.
+        #
+        # Placed after the tier ladder and before the event blackout, so it
+        # can only remove an entry the technicals already produced. See
+        # NEWS_DIRECTION for what it is gated on and why it is off by default.
+        if NEWS_DIRECTION and tier is not None:
+            _nv = _qqq_news_verdict()
+            if _nv and _nv[1] >= NEWS_DIRECTION_MIN_CONF:
+                _v, _c = _nv
+                if bullish and _v in NEWS_BEARISH:
+                    logger.info(
+                        "QQQ macro news reads %s (%.2f) — refusing the bullish "
+                        "%s entry. The tape and the tape's news disagree, and "
+                        "this gate resolves that by standing down, never by "
+                        "taking the other side.", _v, _c, tier)
+                    tier, bullish = None, False
+                elif (not bullish) and _v in NEWS_BULLISH:
+                    logger.info(
+                        "QQQ macro news reads %s (%.2f) — refusing the bearish "
+                        "%s entry.", _v, _c, tier)
+                    tier, bullish = None, False
+                else:
+                    logger.info("QQQ macro news reads %s (%.2f) — agrees with "
+                                "the %s %s setup.", _v, _c, tier,
+                                "bullish" if bullish else "bearish")
+            elif _nv:
+                logger.info("QQQ macro news reads %s at %.2f confidence, below "
+                            "the %.2f the direction gate requires — ignored.",
+                            _nv[0], _nv[1], NEWS_DIRECTION_MIN_CONF)
 
         # A scheduled macro event. The VIX gate is a level and a Fed day with
         # the VIX at 18 sails through it; the sentiment verdict gates bullish

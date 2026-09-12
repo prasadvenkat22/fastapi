@@ -632,6 +632,54 @@ WINDOWS = (
              "first candidate for removal if the scoreboard does not defend it.",
     ),
     PlaybookWindow(
+        # BUY PUTS INTO A MORNING THE MACRO READ CALLS BAD.
+        #
+        # Placed AFTER MORNING_DRIFT in this tuple on purpose. window_for()
+        # returns the first window covering the hour and is used where the
+        # direction is not yet known, so MORNING_DRIFT must keep owning the
+        # morning for every caller that does not ask for a side.
+        # window_for_direction() is what reaches this one, and only for a
+        # bearish setup.
+        #
+        # WHAT THE EVIDENCE SAYS, because it is not on this trade's side and
+        # the person enabling it should not have to go looking:
+        #
+        #     morning put debit, measured   27% wins   -50.62 a trade
+        #     MORNING_CREDIT, 60 sessions   38% wins   -57.64 a trade
+        #     QQQ macro news read           5/10 on next-session direction
+        #     QQQ mornings down >0.25%      -0.41% by 10:30, then it fades:
+        #                                   -0.16% by 11:30, n=8
+        #
+        # The 45-minute continuation is the only thing in that list pointing
+        # this way, which is why close_by is 11:30 rather than the 13:25 the
+        # other morning windows use: the move this trades measured real for
+        # about three quarters of an hour and gone by lunch. A hold is what
+        # turned the last two attempts at a bearish morning into losses.
+        #
+        # OFF unless TRADING_ENABLED_WINDOWS names it, and gated again by
+        # TRADING_NEWS_DIRECTION so it cannot fire on technicals alone. Two
+        # switches because one of them is a strategy nobody has measured
+        # positive and the other is a news read scoring 5/10.
+        name="MORNING_PUT",
+        start=_env_time("TRADING_MORNING_PUT_START", "09:45"),
+        end=_env_time("TRADING_MORNING_PUT_END", "11:30"),
+        placement=ITM,
+        width=_env_float("TRADING_MORNING_PUT_WIDTH", 4.0),
+        take_profit_pct=30.0,
+        stop_loss_pct=-20.0,
+        bearish_only=True,
+        # CLEAN ONLY, for the reason MORNING_DRIFT is CLEAN only: the same ITM
+        # structure measured +18.74 a trade when the full stack held and -4.49
+        # when it did not, and the looser tiers are what open it on the days
+        # that lose. A window with no measured record of its own has no claim
+        # to a looser entry than the one that has.
+        entry_tiers=_env_tiers("TRADING_MORNING_PUT_TIERS", frozenset({"CLEAN"})),
+        close_by=time(11, 30),
+        note="Put debit spread for a morning the macro news read calls "
+             "bearish. Closes at 11:30, not 13:25: the continuation it trades "
+             "measured 45 minutes long and gone by lunch.",
+    ),
+    PlaybookWindow(
         # Sell calls above a morning that is going down.
         #
         # Built because the engine has nothing for a bad morning. MORNING_DRIFT

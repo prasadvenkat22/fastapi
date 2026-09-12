@@ -197,6 +197,48 @@ SNDK rose 11.9% that day on an index inclusion the store had no record of.
 
 ---
 
+## Trading the morning on the macro read
+
+Built 2026-09-12, **off behind two separate switches**, and every measurement
+this repository holds on the idea is negative:
+
+```
+morning put debit, measured    27% wins   -50.62 a trade
+MORNING_CREDIT, 60 sessions    38% wins   -57.64 a trade   halves -37.95/-77.32
+QQQ macro news read            5/10 on next-session direction
+QQQ mornings down >0.25%       -0.41% by 10:30, -0.16% by 11:30, n=8
+```
+
+`MORNING_PUT` is the structure: ITM put debit, 09:45-11:30, width 4, CLEAN
+tiers only, **closing at 11:30 rather than the 13:25 the other morning windows
+use**. That last part is the only thing the evidence supports -- the
+continuation measured about 45 minutes long and gone by lunch, and holding is
+what turned both previous attempts at a bearish morning into losses.
+
+`TRADING_NEWS_DIRECTION` is the gate: the morning's QQQ macro verdict **vetoes
+the side it contradicts**, above `TRADING_NEWS_DIRECTION_MIN_CONF` (0.70).
+NEUTRAL never gates -- it is the verdict for "nothing new since the close",
+which is most mornings.
+
+**IT NEVER INVENTS AN ENTRY.** A tier still has to fire on the technicals, and
+if none does there is no trade whatever the news says. The failure mode of
+every previous attempt at a news- or macro-driven morning was taking a
+position the tape did not support, so this gate can only ever remove one. It
+sits after the tier ladder and before the event blackout.
+
+Two switches because they fail differently: the window is a strategy nobody
+has measured positive, and the gate is a news read scoring 5/10 whose
+corrections (balanced terms, novelty filter) landed 2026-09-07 and have no
+post-fix evidence at all yet. `news_verdict_outcomes` accumulates that
+nightly.
+
+```
+TRADING_ENABLED_WINDOWS=MORNING_DRIFT,MORNING_PUT,AFTERNOON_CREDIT
+TRADING_NEWS_DIRECTION=true
+```
+
+---
+
 ## Does the 09:30 verdict predict the day
 
 **QQQ is graded again from 2026-09-12, and that is a test, not a decision.**

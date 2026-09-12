@@ -62,7 +62,28 @@ ALIASES: Dict[str, List[str]] = {
     "GOOGL": ["alphabet", "googl", "google"],
     "META": ["meta platforms", "facebook"],
     "MSFT": ["microsoft", "msft"],
-    # QQQ is deliberately absent -- see MACRO_TERMS.
+    # QQQ resolves to MACRO_TERMS, not to this list -- see terms_for(). It is
+    # present so the index is GRADED each morning, which it was not between
+    # 2026-09-07 and 2026-09-11.
+    #
+    # It was pulled after the read came back BEARISH on 10 of 14 sessions at
+    # 5/10 on direction, with the tilt surviving the tape reversing. That was
+    # diagnosed as RETRIEVAL bias, not model bias, and BOTH corrections landed
+    # on 2026-09-07: vector 5 gave the term set a side it previously could not
+    # express, and the novelty filter stopped the wires re-reporting the same
+    # standing macro story into every window.
+    #
+    # And then nobody checked. The fix shipped and the symbol stayed out of
+    # the graded list, so four sessions passed with the correction untested
+    # (2026-09-11). Grading it is what makes the correction falsifiable:
+    # news_verdict_outcomes scores it nightly, and macro_outcome.py has always
+    # read `news_verdicts WHERE symbol='QQQ'` -- the column it wants exists
+    # only when this line does.
+    #
+    # ADVISORY. Nothing gates on it. The precedent is section 22 and section
+    # 14: a term nobody has scored is logged beside the decision, never wired
+    # into it, and 5/10 on direction is the number to beat before that changes.
+    "QQQ": ["qqq", "nasdaq 100", "nasdaq-100"],
 }
 
 # QQQ IS NOT A COMPANY AND MUST NOT BE READ LIKE ONE.

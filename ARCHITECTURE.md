@@ -199,6 +199,30 @@ SNDK rose 11.9% that day on an index inclusion the store had no record of.
 
 ## Does the 09:30 verdict predict the day
 
+**QQQ is graded again from 2026-09-12, and that is a test, not a decision.**
+The index read was pulled after coming back BEARISH on 10 of 14 sessions at
+**5/10 on direction**, with the tilt surviving the tape reversing -- five
+straight bearish reads while QQQ printed +0.22, +0.04, +0.30, -0.05. The
+diagnosis was RETRIEVAL, not the model: a term set built from tightening,
+conflict, debt stress and hard data can only hand the classifier trouble.
+
+Both corrections landed 2026-09-07 -- vector 5 (easing, disinflation, soft
+landing) gave the term set a side it could not previously express, and the
+novelty filter stopped the wires re-reporting standing macro stories into
+every window. **And then nobody checked**: the symbol stayed out of the graded
+list, so the fix shipped untested. `QQQ` resolves to `MACRO_TERMS` through
+`patterns_for()`, never to the ticker, so what is graded is the macro tape.
+
+Grading it feeds two things that were already built for it: `verdict_outcome`
+scores it nightly, and `macro_outcome.py` reads `news_verdicts WHERE
+symbol='QQQ'` -- the column it has always wanted exists only now.
+
+**Nothing gates on it.** Section 22 and section 14 are the precedent: a term
+nobody has scored is logged beside the decision, never wired into it. 5/10 on
+direction is the number the corrected read has to beat first.
+
+
+
 `news_verdict_outcomes`, one row per graded verdict, written by
 `scripts/verdict_outcome.py` after the close. **Advisory: nothing reads it at
 runtime.**

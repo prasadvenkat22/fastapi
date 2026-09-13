@@ -88,7 +88,7 @@ POLYGON_NEWS = "https://api.polygon.io/v2/reference/news"
 # 13 seconds of pacing to fetch fund comparisons.
 SYMBOLS = [s.strip().upper() for s in os.getenv(
     "TRADING_HOURLY_SYMBOLS",
-    "NVDA,SNDK,MU,META,AVGO,ADBE,AMZN,GOOGL,MSFT,CRWV,WDC").split(",") if s.strip()]
+    "NVDA,TSLA,AAPL,AMZN,MSFT,META,GOOGL,AVGO").split(",") if s.strip()]
 
 # Seconds between Polygon calls. 5/minute measured, so 13s leaves headroom
 # without the burst that a "sleep after every fourth" pattern still produces.

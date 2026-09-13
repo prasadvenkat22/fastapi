@@ -72,7 +72,7 @@ NY = ZoneInfo("America/New_York")
 # Mon/Wed/Fri names plus QQQ. SNDK and CRWV are absent because their chains
 # carry Friday expiries only -- verified, not assumed.
 SYMBOLS = [s.strip().upper() for s in os.getenv(
-    "TRADING_DTE0_SYMBOLS", "QQQ,NVDA,MU,META,AMZN,GOOGL,MSFT,AVGO").split(",") if s.strip()]
+    "TRADING_DTE0_SYMBOLS", "QQQ,NVDA,TSLA,AAPL,AMZN,MSFT,META,GOOGL,AVGO").split(",") if s.strip()]
 
 # IV/RV bands. Between them there is no measured reason to prefer either
 # structure, so nothing is recorded -- an abstention is data.

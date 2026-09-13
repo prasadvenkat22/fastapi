@@ -62,6 +62,8 @@ ALIASES: Dict[str, List[str]] = {
     "GOOGL": ["alphabet", "googl", "google"],
     "META": ["meta platforms", "facebook"],
     "MSFT": ["microsoft", "msft"],
+    "TSLA": ["tesla", "tsla"],
+    "AAPL": ["apple", "aapl"],
     # QQQ resolves to MACRO_TERMS, not to this list -- see terms_for(). It is
     # present so the index is GRADED each morning, which it was not between
     # 2026-09-07 and 2026-09-11.

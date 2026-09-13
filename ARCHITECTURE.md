@@ -128,6 +128,37 @@ re-run wobble is characterised**.
 
 ---
 
+## One symbol list, after six drifted apart
+
+Audited 2026-09-13. Six lists existed and no two matched: names tracked for
+news that nothing could trade, names traded that had no 09:30 verdict, and
+Friday-only chains sitting in an intraday list burning API calls for a signal
+nothing could act on.
+
+**The tradeable set is now eight names**, all confirmed to carry Mon/Wed/Fri
+expiries, with the quote width that decides whether they clear the liquidity
+gate:
+
+```
+NVDA  2.6%   TSLA  2.7%   META  6.3%   AAPL  7.3%     tradeable
+AMZN 12.2%   GOOGL 14.4%                              marginal, passes
+MSFT 17.5%   AVGO 21.2%                               REFUSED by the gate
+```
+
+`dte0_trade`, `dte0_shadow`, `news_hourly` and `TRADING_MANAGE_UNDERLYING` all
+carry the same eight; QQQ is added to the news and paper lists only, since the
+engine owns it and Polygon returns ETF comparisons for it.
+
+**TSLA and AAPL needed aliases.** Without them `patterns_for()` falls back to
+the bare ticker, so "Tesla" and "Apple" -- which is what a wire actually prints
+-- would never have matched.
+
+**Dropped:** SNDK, MU, CRWV, MRVL, PANW, DELL, WDC, STX, ADBE. MU is the one
+worth noting: at 2.8% it had the second-tightest quote on the board. SNDK and
+CRWV list Friday expiries only and could never have traded intraday anyway.
+
+---
+
 ## Hourly per-symbol sentiment, from Polygon
 
 `symbol_sentiment_hourly`, written by `scripts/news_hourly.py` every hour

@@ -85,7 +85,7 @@ MAX_BUDGET = float(os.getenv("TRADING_DTE0_MAX_BUDGET", "1500"))
 # Every name with Monday and Wednesday expiries, checked against the chain on
 # 2026-09-12. QQQ is excluded above; SNDK and CRWV list Fridays only.
 SYMBOLS = os.getenv("TRADING_DTE0_TRADE_SYMBOLS",
-                    "NVDA,MU,META,AMZN,GOOGL,MSFT,AVGO")
+                    "NVDA,TSLA,AAPL,AMZN,MSFT,META,GOOGL,AVGO")
 
 # A WIDER UNIVERSE NEEDS THE LIQUIDITY GATE THAT dte0_shadow ALREADY HAS.
 #

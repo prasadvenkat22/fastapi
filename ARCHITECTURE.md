@@ -405,6 +405,41 @@ TRADING_NEWS_DIRECTION=true
 
 ## The one script that trades by itself
 
+**Rotation (`--rotate`) re-enters a name after it exits.** The engine has had
+this for QQQ all along and its numbers were tuned on outcomes --
+`TRADING_WIN_COOLDOWN_MINUTES=30`, `TRADING_REENTRY_COOLDOWN_MINUTES=90`; this
+borrows the shape rather than inventing one.
+
+```
+TRADING_DTE0_ROTATE          off by default, and SEPARATE from --live
+TRADING_DTE0_ROTATE_COOLDOWN_MIN   30   after any exit, however it left
+TRADING_DTE0_MAX_ROTATIONS          3   per symbol per day
+TRADING_DTE0_ROTATE_CUTOFF      13:30   no NEW entry after this
+```
+
+Exits are read from `trading_history`, where orphan exits also land -- so a
+stall, a target and a flatten all count the same, which is what makes
+"re-enter after it exits" mean one thing.
+
+**What it costs, because it compounds:** NVDA's quote is 2.6% of mid, so a
+round trip is ~5.2% of premium -- about **$19 a rotation on a $374 position
+against a $112 target**, roughly 17% of each target spent getting in and out.
+And the later entries are structurally worse: extrinsic has decayed,
+entry/width drifts to the bottom of the band, and a 14:30 entry has 75 minutes
+before the flatten. Hence the cutoff and the cap.
+
+**It fails CLOSED.** If the exit history cannot be read, every symbol is
+reported at the cap and nothing rotates -- verified when a missing import
+triggered exactly that path.
+
+**This is the first order-placing path here without a track record.**
+Everything else that trades by itself is QQQ-only and measured. `dte0_shadow`
+accumulates the paper version alongside.
+
+---
+
+
+
 `scripts/dte0_trade.py`. Everything else in `scripts/` observes; this one
 places orders, so the guards come first:
 

@@ -12,6 +12,9 @@ are listed before anything else.
     TRADING_DTE0_LIVE=true        must ALSO be set; --live alone does nothing
     TRADING_DTE0_MAX_BUDGET       hard ceiling, 1500, applied after sizing
     --max-trades                  3 by default, one per underlying
+    --rotate                      re-entry pass. Needs TRADING_DTE0_ROTATE too,
+                                  skips names held / in cooldown / at the cap,
+                                  and refuses any new entry past 13:30
     already-held check            refuses a symbol the account already holds
                                   an option in for today's expiry, so a rerun
                                   cannot double a position
@@ -57,10 +60,12 @@ import argparse
 import logging
 import os
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, time as dtime
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import psycopg2  # noqa: E402
 
 from trading_engine import tradier_orders  # noqa: E402
 from trading_engine.data_feed import fetch_option_chain, fetch_spot  # noqa: E402
@@ -96,6 +101,35 @@ SYMBOLS = os.getenv("TRADING_DTE0_TRADE_SYMBOLS",
 # indirectly is not the same as refused, and a high enough EV would still let
 # it through.
 MAX_QUOTE_PCT = float(os.getenv("TRADING_DTE0_MAX_QUOTE_PCT", "15.0"))
+
+# ROTATION: re-enter a name after it exits, on fresh news.
+#
+# The engine has had this for QQQ since long before tonight, and its two
+# numbers were tuned on measured outcomes -- TRADING_WIN_COOLDOWN_MINUTES=30
+# and TRADING_REENTRY_COOLDOWN_MINUTES=90. This borrows the shape rather than
+# inventing one.
+#
+# WHAT IT COSTS, because it is not free and compounds:
+#
+#     NVDA quote 2.6% of mid  ->  round trip ~5.2% of premium
+#     $374 position           ->  ~$19 a rotation
+#     +30% target             ->  ~$112
+#     three rotations         ->  ~$57 of spread against $336 of targets
+#
+# About 17% of each target spent getting in and out, and the later entries are
+# structurally worse: extrinsic has decayed, entry/width drifts to the bottom
+# of the band, and a 14:30 entry has 75 minutes before the 15:45 flatten.
+# Hence the cutoff and the per-day cap.
+#
+# OFF BY DEFAULT AND SEPARATE FROM --live. This is the first order-placing
+# path here without a track record; everything else that trades by itself is
+# QQQ-only and measured. dte0_shadow is building the paper record in parallel.
+ROTATE_ENABLED = os.getenv("TRADING_DTE0_ROTATE", "false").lower() == "true"
+ROTATE_COOLDOWN_MIN = float(os.getenv("TRADING_DTE0_ROTATE_COOLDOWN_MIN", "30"))
+MAX_ROTATIONS = int(os.getenv("TRADING_DTE0_MAX_ROTATIONS", "3"))
+# No NEW entry after this. A position opened late cannot reach a +30% target
+# before the flatten takes it at whatever the mark is.
+ROTATE_CUTOFF = os.getenv("TRADING_DTE0_ROTATE_CUTOFF", "13:30")
 MIN_EW = float(os.getenv("TRADING_PICK_MIN_ENTRY_WIDTH", "0.30"))
 # 0.75, NOT 0.65. The boundary is arithmetic: max return is (width-entry)/entry,
 # so a +30% target becomes unreachable at exactly e/w = 1/1.30 = 0.769. 0.65 was
@@ -222,6 +256,72 @@ def _quote_pct(symbol: str, expiry: str) -> "float | None":
     return pcts[len(pcts) // 2] if pcts else None
 
 
+def _dsn() -> str:
+    return (os.getenv("DATABASE_URL", "")
+            .replace("postgresql+psycopg2://", "postgresql://")
+            .replace("postgresql+asyncpg://", "postgresql://"))
+
+
+def _exits_today(symbols: set, now: datetime) -> dict:
+    """{symbol: (last_close, last_pnl, closes_today)} from trading_history.
+
+    Orphan exits book here too, so a position closed by the stall, the target
+    or the flatten all count -- which is what makes "re-enter after it exits"
+    mean the same thing however it left.
+    """
+    out: dict = {}
+    if not symbols:
+        return out
+    try:
+        with psycopg2.connect(_dsn()) as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT underlying, max(closed_at), count(*),
+                       (array_agg(realized_pnl_dollars ORDER BY closed_at DESC))[1]
+                FROM trading_history
+                WHERE closed_at IS NOT NULL
+                  AND closed_at >= %s AND underlying = ANY(%s)
+                GROUP BY underlying
+            """, (now.date(), list(symbols)))
+            for sym, last, n, pnl in cur.fetchall():
+                out[sym] = (last, float(pnl or 0.0), int(n))
+    except Exception:
+        # FAIL CLOSED: not knowing what already traded means not rotating.
+        logger.warning("Could not read exit history — rotation stands down.",
+                       exc_info=True)
+        return {s: (now, 0.0, MAX_ROTATIONS) for s in symbols}
+    return out
+
+
+def _rotation_filter(syms: list, now: datetime) -> list:
+    """Which names may take a NEW position right now."""
+    hh, mm = (int(x) for x in ROTATE_CUTOFF.split(":"))
+    if now.time() >= dtime(hh, mm):
+        logger.info("past the %s rotation cutoff — no new entries.", ROTATE_CUTOFF)
+        return []
+    exits = _exits_today(set(syms), now)
+    keep = []
+    for sym in syms:
+        rec = exits.get(sym)
+        if not rec:
+            keep.append(sym)
+            continue
+        last, pnl, n = rec
+        if n >= MAX_ROTATIONS:
+            logger.info("%-5s %d exits today, at the %d cap — done for the day.",
+                        sym, n, MAX_ROTATIONS)
+            continue
+        mins = (now - last).total_seconds() / 60.0 if last else 999.0
+        if mins < ROTATE_COOLDOWN_MIN:
+            logger.info("%-5s exited %.0f min ago (%+.0f) — cooling down for "
+                        "another %.0f min.", sym, mins, pnl,
+                        ROTATE_COOLDOWN_MIN - mins)
+            continue
+        logger.info("%-5s exited %.0f min ago (%+.0f), %d today — eligible again.",
+                    sym, mins, pnl, n)
+        keep.append(sym)
+    return keep
+
+
 def _held_today(symbols: set, expiry: str) -> set:
     """Underlyings the account already holds an option in for `expiry`.
 
@@ -252,6 +352,10 @@ def main() -> None:
     ap.add_argument("--by", default="ev", choices=("ev", "evpct", "prob", "edge"))
     ap.add_argument("--expiry", default="")
     ap.add_argument("--live", action="store_true")
+    ap.add_argument("--rotate", action="store_true",
+                    help="re-entry pass: skip names already held, still in "
+                         "cooldown, or at the daily cap. Requires "
+                         "TRADING_DTE0_ROTATE=true as well.")
     args = ap.parse_args()
 
     budget = min(args.budget, MAX_BUDGET)
@@ -260,6 +364,16 @@ def main() -> None:
     syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     exp = args.expiry or date.today().isoformat()
     now = datetime.now(NY)
+
+    if args.rotate:
+        if not ROTATE_ENABLED:
+            logger.warning("--rotate given but TRADING_DTE0_ROTATE is not true "
+                           "— nothing done.")
+            return
+        syms = _rotation_filter(syms, now)
+        if not syms:
+            logger.info("no name is eligible for a new position right now.")
+            return
     live = args.live and LIVE_ENABLED
     if args.live and not LIVE_ENABLED:
         logger.warning("--live given but TRADING_DTE0_LIVE is not true — DRY RUN.")

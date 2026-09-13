@@ -24,7 +24,7 @@ This file is the map.
 | time | job | what it does |
 |---|---|---|
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
-| 09:30 | `news_watch.py` | **scrapes the wires, then** grades everything published since the previous close, writes `news_verdicts`. Window guard 09:20–10:05 |
+| hourly at :25, 09:25–16:25 | `news_watch.py` | grades everything published since the previous close, writes `news_verdicts` (current) **and `news_verdict_history` (append-only)**. Window guard 09:20–16:00, `TRADING_NEWS_HOURLY`. Unchanged headlines skip the model via the digest |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
 | every 5 min, 09:30–16:00 | `price_alert.py` | level crossings, fires once per crossing. Live rules: `SNDK<1762`, `SNDK>1762`, `SNDK<1700`, `CRWV<95` |
 | every 5 min, 09:30–16:00 | `profit_stall.py` | a winner giving back 5% from peak, after 15 min quiet. Decides on intrinsic |
@@ -71,11 +71,24 @@ the transmission channel, not the headline:
 Good jobs data reading as bearish for equities through the rate channel is the
 kind of inference a keyword count or a tree on technicals cannot reach.
 
-**It gates nothing.** `trading_macro_verdicts` and `news_verdicts` are
-accumulating so the question can be settled: did BEARISH verdicts precede down
-sessions, or refuse days the engine would have won? That is the same test the
-weekly overlay is built for, and it is the honest route back to the LLM gate
-that was switched off on two days of evidence.
+**`trading_macro_verdicts` still gates nothing.** It accumulates so the
+question can be settled: did BEARISH verdicts precede down sessions, or refuse
+days the engine would have won?
+
+**`news_verdicts` DOES gate, as of 2026-09-13 — see sections 143–144.** Two
+gates, on both books:
+
+- **Level**, asymmetric. Puts refused into `BULLISH+`; calls into
+  `VERY_BEARISH` only. BEARISH is 53% of this feed, so a BEARISH-level call
+  gate would refuse half of all sessions against a 4.5bp separation.
+- **Turn**, symmetric. One step from the day's *opening* verdict refuses the
+  contradicted side. This is the intraday regime change — a read BEARISH since
+  09:30 has said nothing new by 14:00; one that was NEUTRAL and just went
+  BEARISH is the event.
+
+The turn gate has never fired on a historical session and **cannot be
+backtested** — every past day holds one verdict, so there is no delta in the
+record. Armed on its shape, not on a result.
 - **No ML model.** See below.
 
 ---
@@ -316,10 +329,17 @@ three distinct headlines before 09:30 that day and the model received two. A
 unique index on `headline_text` plus `ON CONFLICT DO NOTHING` is the fix that
 holds under a race; the corpus was deduplicated 3,762 -> 3,464.
 
-**What is still missing: the per-symbol read runs once, at 09:30.** Five of
+**Closed 2026-09-13: the per-symbol read now runs hourly.** Five of
 SanDisk's eleven headlines on 2026-09-11 were published intraday, including
-*"NAND Party Likely To End In 2027"* at 10:08. Macro re-reads hourly; symbols
-do not. Closing that costs a model call per symbol per refresh.
+*"NAND Party Likely To End In 2027"* at 10:08, and the once-a-day read never
+graded them. `news_watch.py` now re-grades 09:20–16:00; the headline digest
+means an unchanged hour costs one query and no model call, so only a genuinely
+new headline pays.
+
+Three things had to be fixed for the schedule change to mean anything — the
+verdict overwriting itself under six measurement scripts, a dead `ingest()`
+left behind by the RSS removal, and a day-long cache in the engine that would
+have held the morning verdict until midnight. Section 143.
 
 ---
 
@@ -371,11 +391,20 @@ can be dropped with it.
 and report the spread.** A difference smaller than the re-run wobble is not a
 difference.
 
-**`news_watch.py` scrapes before it grades, and must.** The only other scraper
-is the trading cycle, which refuses to run outside market hours — so at 09:30
-the freshest row in the store is 16:00 the previous session and the overnight
-window is empty by construction. Fixing the window without fixing what fills it
-gives a filter that works perfectly on an empty table (section 124).
+**`news_hourly.py` is the only fetcher; `news_watch.py` only grades.** The
+original reason still holds — nothing else fills the store outside market
+hours, so a window reaching back to the previous close finds an empty table and
+reads as "there was simply no news", every morning, forever (section 124). What
+changed is who fills it: the RSS scrape was deleted on 2026-09-12 and
+`news_hourly.py` (Polygon per ticker, plus `MACRO_FEEDS` for the macro tape)
+took over, running at :07 — eighteen minutes ahead of the grader.
+
+`news_watch.ingest()` is now a **safety net, not the fetcher**: it measures
+corpus age and sweeps Polygon only when the newest headline is older than
+`TRADING_NEWS_MAX_CORPUS_AGE_MIN` (90), i.e. only when the hourly job has
+actually stopped. It previously called `nodes._scrape_headlines()` — deleted
+with the RSS machinery — inside a bare `except`, so it printed a one-line
+failure and graded whatever happened to be stored (section 143).
 
 **Why per-symbol feeds are not optional.** Measured against the five events
 that moved this book's names on 2026-09-04:

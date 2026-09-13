@@ -9079,3 +9079,228 @@ orders, short enough that nobody looks.
     fired correctly at 18:50 and booked +814 on SNDK 1690/1740 x4. Two things
     happening at once, one right and one wrong, and the right one is what got
     reported.
+
+
+143. THE NEWS READ GOES HOURLY, AND WHAT THAT BROKE ON THE WAY  (2026-09-13)
+--------------------------------------------------------------------------------
+
+The verdict was written once, at 09:30, and read all day. That was correct for
+a book that entered in the morning and held. Rotation shipped on 09-12 and
+stopped it being correct: dte0_trade can open a position at noon, and it was
+checking that entry against a three-hour-old read. SNDK's 10:08 catalyst on
+09-11 was never graded at all.
+
+news_watch.py now runs 09:20-16:00 ET (TRADING_NEWS_HOURLY, default on). The
+headline digest already made a re-run free when nothing had broken, so a quiet
+hour costs one query and no model call; only a genuinely new headline pays for
+a re-grade, which is the event worth paying for.
+
+Four things broke, or were already broken, and each one mattered more than the
+schedule change itself.
+
+1. THE VERDICT OVERWRITES ITSELF, AND SIX SCRIPTS MEASURE AGAINST IT.
+
+news_verdicts is keyed (symbol, trading_day) and upserted, so an hourly
+re-grade replaces the morning read. Six scripts join that row to the session's
+realized move -- verdict_outcome, macro_outcome, news_ev_backtest,
+xgb_sentiment, novelty_check, sentiment_signal_test.
+
+    Every one would have kept running, kept producing numbers, and quietly
+    started scoring an afternoon verdict against a move it had already seen.
+
+The accuracy climbs and nothing in the output says why. The wrong version of
+this change does not fail; it flatters. macro_outcome.py's own docstring
+already blames that exact overwrite for August being unanswerable: "the verdict
+was overwritten in one row instead of kept."
+
+news_verdict_history (migration f7b3d02a5e41) is append-only. news_verdicts
+keeps its meaning -- the CURRENT verdict, which is what entry-time readers
+want, so weekly_pick and the dte0 veto needed no change. Measurement moved to
+verdict_at(), which takes the row in force at VERDICT_CUTOFF (09:45).
+
+THE SEED STAMPS asof AT THE SESSION'S OPEN, NOT created_at. Only 37 of the 204
+existing rows came from the live watcher; the other 167 were written by
+sentiment_signal_test --backfill, whose created_at is when the backfill RAN. A
+created_at stamp put those after the cutoff and discarded them -- every script
+would have silently restarted at a fifth of its data. All 204 survive.
+
+2. ingest() HAD BEEN DEAD SINCE THE RSS REMOVAL.
+
+news_watch.ingest() called nodes._scrape_headlines(), deleted on 09-12 with the
+RSS machinery, inside a bare `except Exception`. It printed a one-line failure
+and returned 0, and the morning read went on grading whatever happened to be
+stored. A silent no-op behind an except is the same bug as the empty overnight
+window it was written to fix. It now measures corpus age and sweeps Polygon
+only when the hourly job has actually stopped.
+
+3. THE ENGINE CACHED THE VERDICT FOR THE WHOLE DAY.
+
+_qqq_news_verdict() cached per date, and said why: the verdict "is written once
+at 09:30" and therefore "cannot change". True until this change, and
+TRADING_NEWS_DIRECTION=true is live, so this is the real path.
+
+    With a day-long cache the engine reads the morning verdict once and holds
+    it until midnight. Every re-grade lands in the database and reaches
+    nothing. The gate looks live and is frozen, which is worse than switched
+    off, because nothing in the logs tells the two apart.
+
+Now a 300s TTL. monotonic(), so a clock adjustment cannot freeze or expire it.
+
+4. dte0_shadow IS EMPTY. 0 rows, despite being on cron since it shipped. The
+paper record dte0_trade's own comments cite as "building in parallel" does not
+exist. Nothing in this section could be backtested against it. Unfixed.
+
+
+144. GATING THE MACRO TURN, NOT THE MACRO LEVEL  (2026-09-13)
+--------------------------------------------------------------------------------
+
+Put twice, from both sides, and right both times:
+
+    at 11:00 yields and crude drop, the tape goes risk-on, and a put spread is
+    the worst structure on the board however good that name's 09:30 news was.
+
+    at 14:00 crude spikes on Iran, yields spike on the Fed, the tape turns
+    bearish, and a call debit spread is losing money.
+
+NOTHING GUARDED EITHER. dte0_trade consulted no breadth, no VIX, no yields, no
+oil. The engine's objective gates are one-sided by design and nodes.py says so
+outright -- "Rising yields hurt QQQ; falling yields are broadly supportive."
+They refuse LONG exposure into risk-off. Not one refuses a SHORT structure into
+risk-on. Half the board had no guard at all.
+
+THE FIRST VERSION WAS DEAD CODE. It fired on VERY_BULLISH and VERY_BEARISH
+only, and neither has printed once in 17 QQQ verdicts -- a switch that reads as
+a conservative default and cannot fire on any session on record.
+
+A LEVEL GATE IS THE WRONG INSTRUMENT, and this is the part worth keeping. The
+words used were "changes by 11 am" and "turns bearish". Both describe a
+TRANSITION. BEARISH is the MODAL reading of this feed:
+
+    BEARISH   9 of 17 sessions   52.9%   all nine above the 0.70 conf bar
+    NEUTRAL   7 of 17            41.2%
+    BULLISH   1 of 17             5.9%
+    VERY_*    0 of 17             0.0%
+
+and novelty_check.py already found that tilt suspect -- BEARISH on 10 of 14,
+5 of 10 on direction, "unmoved while the tape reversed". Gating a level that IS
+the background state refuses half the book as noise. Gating the CHANGE fires
+only when the read moves, which is rare by construction and is the described
+event.
+
+    A read BEARISH since 09:30 has said nothing new by 14:00.
+    A read that was NEUTRAL and has just gone BEARISH is the event.
+    The level gate calls both "BEARISH now" and cannot tell them apart.
+
+So two gates, on both books:
+
+    LEVEL, asymmetric -- the tail guard. Puts refused into BULLISH+ (5.9% of
+    sessions), calls into VERY_BEARISH only. The asymmetry is forced by the
+    base rates above: a BEARISH-level call gate costs 52.9% of sessions, and
+    BEARISH ran -0.085% against NEUTRAL's -0.040%, four and a half basis
+    points, which does not buy a refusal rate like that. That is the August
+    macro gate, which refused 55 of 55 cycles on a day QQQ rose $6.50.
+
+    DELTA, symmetric -- the turn guard. One step from the day's OPENING
+    verdict refuses the contradicted side. No confidence floor: the movement
+    BETWEEN two graded reads is itself the signal, and requiring both ends to
+    be confident would filter out most turns.
+
+Verified on the two cases as stated:
+
+    open BEARISH -> now BULLISH     PUT  refused (level),  CALL allowed
+    open NEUTRAL -> now BEARISH     CALL refused (turn),   PUT  allowed
+    open BEARISH -> now BEARISH     both allowed -- the quiet day is untouched
+
+THE QQQ ENGINE ALREADY HAD THE LEVEL HALF, and its cost had never been written
+down. NEWS_DIRECTION is symmetric and live, refusing calls on BEARISH above
+0.70 confidence, and all nine BEARISH verdicts clear that bar -- so it has been
+standing down on 53% of sessions. It gained the turn gate; both books now read
+macro the same way.
+
+CORRECTIONS TO WHAT WAS ARGUED AGAINST THIS FIRST. The 4.5bp figure measured
+the MORNING verdict against the WHOLE session. The claim was about the 11:00
+verdict against the afternoon, and until the hourly re-grade a second verdict
+never existed -- so that number never addressed it. It was the wrong evidence,
+offered as though it were the right evidence.
+
+WHAT IS NOT MEASURED, PLAINLY. The turn gate has never fired on a historical
+session and CANNOT be backtested: every past day holds exactly one verdict, so
+there is no delta in the record. It is armed on its shape, not on a result.
+The level gate's put side rests on one session -- the single BULLISH day
+returned +0.959%, where a put would have lost. n=1 is not a result; it is armed
+because the cost is bounded by how rarely it fires, and because the alternative
+is no guard on the risk-on case at all.
+
+AND THE OBJECTIVE FEEDS ARE ALREADY DISPROVEN ON THIS BOOK, which is why these
+gates run off the news read and not off crude and TNX directly:
+
+    crude   every threshold that blocks anything makes the result worse. At
+            +0.5% the ten entries it rejects average +0.15/trade against -3.48
+            for the twenty-six it keeps. It filters out the better half.
+
+    yields  4bp has never fired on a trade in 49 sessions. 2bp fires and makes
+            it worse, -7.34/tr against -2.31 ungated: the three trades it
+            blocks are among the better ones.
+
+Both were measured on MORNING entries. Neither has been tested against
+afternoon entries, which is the case actually at issue, and the hourly history
+now accumulating is the first data that could answer it.
+
+
+145. MONDAY'S TEST PLAN FOR SECTIONS 143-144  (2026-09-13)
+--------------------------------------------------------------------------------
+
+Nothing in 143 or 144 has fired on a real session. What to read on 09-14, in
+the order it happens, and what each answer would mean.
+
+09:25  news_watch, first hourly run.
+       /var/log/news-watch.log should show a verdict per symbol and no
+       traceback. A traceback here means the schema and the code are out of
+       step, which is the failure the migration was for.
+
+10:25 onward, every hour.
+       Symbols whose headlines have not changed must print "(unchanged, no
+       model call)". If every symbol re-grades every hour the digest is not
+       working and this is costing ~8 model calls an hour for nothing.
+
+       SELECT symbol, asof, verdict FROM news_verdict_history
+       WHERE trading_day = CURRENT_DATE ORDER BY asof, symbol;
+
+       One row per symbol per CHANGED grade. If QQQ has more than one row, a
+       turn was recorded -- that is the first live data on section 144.
+
+Any dte0_trade run, /var/log/dte0-trade.log.
+       Every run now logs one line before ranking:
+
+         macro read (QQQ): <v> <conf> as of HH:MM | open <v> | <turn> |
+         level gate on, delta gate on
+
+       "no turn" on a quiet day is the expected reading. The line appearing at
+       all confirms the opening verdict is being read; "open -" means
+       verdict_at found no history row and the delta gate is standing down.
+
+       A refusal prints as either "the <sym> tape is <v>" (level) or "<sym>
+       TURNED <dir> since the open" (delta), and is counted in the rejection
+       tally at the end.
+
+Engine log, any cycle with a setup.
+       "QQQ macro news TURNED bearish since the open (X -> Y)" is the turn
+       gate firing on the 0DTE book. "moved X -> Y since the open, which
+       agrees" is a move in the harmless direction.
+
+WHAT WOULD FALSIFY THE DESIGN. If QQQ re-grades hourly and the verdict never
+moves off its opening value on any session, the turn gate cannot fire and the
+delta is not a signal this feed produces -- in which case the honest response
+is to say so and either widen the read or drop the gate, not to lower
+TRADING_DTE0_MACRO_DELTA_STEPS until something fires.
+
+KNOBS, all live-tunable without a deploy:
+
+    TRADING_NEWS_HOURLY            true   false restores the 09:20-10:05 window
+    TRADING_NEWS_MAX_CORPUS_AGE_MIN 90    when news_watch fetches for itself
+    TRADING_NEWS_VERDICT_TTL_S     300    engine verdict cache
+    TRADING_DTE0_MACRO_VETO        true   level gate, single names
+    TRADING_DTE0_MACRO_DELTA       true   turn gate, single names
+    TRADING_DTE0_MACRO_DELTA_STEPS 1      steps from the open that count
+    TRADING_NEWS_TURN_GATE         true   turn gate, QQQ 0DTE
+    TRADING_NEWS_TURN_STEPS        1

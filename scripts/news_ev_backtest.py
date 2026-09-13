@@ -40,7 +40,8 @@ import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trading_engine.symbol_news import classify_day, session_headlines
+from trading_engine.symbol_news import (classify_day, session_headlines,
+                                        verdict_at)
 
 # Same ladder weekly_pick.py uses. Stated, not fitted -- section 120.
 NEWS_DRIFT_WEIGHT = {"VERY_BULLISH": 1.0, "BULLISH": 0.5, "NEUTRAL": 0.0,
@@ -91,12 +92,15 @@ def payoff(term: np.ndarray, side: str, short_k: float, long_k: float,
 
 
 def verdict_for(sym: str, day: date):
-    """The stored verdict for that day, else grade the day's headlines now."""
+    """The stored verdict AS OF THE OPEN, else grade the day's headlines now.
+
+    verdict_at, not a plain read of news_verdicts: the watcher re-grades
+    hourly and that table keeps only the latest, so a direct read would price
+    a past cohort against a verdict written after the move.
+    """
     try:
         with psycopg2.connect(_dsn()) as c, c.cursor() as cur:
-            cur.execute("SELECT verdict, confidence FROM news_verdicts "
-                        "WHERE symbol=%s AND trading_day=%s", (sym.upper(), day))
-            r = cur.fetchone()
+            r = verdict_at(cur, sym.upper(), day)
         if r:
             return r[0], float(r[1] or 0.0), "stored"
     except Exception:

@@ -35,6 +35,8 @@ import psycopg2
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from trading_engine.symbol_news import VERDICT_CUTOFF
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from xgb_probability import DEFAULT_SYMS, build
@@ -71,8 +73,25 @@ def sentiment_rows(csv_path: str = "") -> dict:
                     ORD.get(p[2], 0.0), float(p[3] or 0), int(p[4] or 0))
         return out
     with psycopg2.connect(_dsn()) as conn, conn.cursor() as cur:
-        cur.execute("SELECT symbol, trading_day, verdict, confidence, "
-                    "headline_count FROM news_verdicts")
+        # AS OF THE OPEN. These four columns become features against a
+        # FORWARD return, so a verdict re-graded at 15:00 is a feature that
+        # has already seen its own label. The model would fit it, the AUC
+        # would rise, and the rise would be the leak rather than the signal --
+        # which is precisely the reading this script exists to rule out.
+        cur.execute("""
+            SELECT h.symbol, h.trading_day, h.verdict, h.confidence,
+                   h.headline_count
+            FROM (SELECT DISTINCT symbol, trading_day
+                  FROM news_verdict_history) k
+            JOIN LATERAL (
+                SELECT symbol, trading_day, verdict, confidence, headline_count
+                FROM news_verdict_history
+                WHERE symbol = k.symbol AND trading_day = k.trading_day
+                  AND asof <= (k.trading_day + %s::time) AT TIME ZONE
+                              'America/New_York'
+                ORDER BY asof DESC LIMIT 1
+            ) h ON TRUE
+        """, (VERDICT_CUTOFF,))
         return {(s.upper(), d): (ORD.get(v, 0.0), float(c or 0.0), int(n or 0))
                 for s, d, v, c, n in cur.fetchall()}
 

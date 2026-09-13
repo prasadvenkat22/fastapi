@@ -8,15 +8,18 @@ and weekend catalysts the market has not traded on yet. SanDisk's S&P 100
 inclusion published Friday 22:11 ET was invisible to the old filter on Monday
 morning.
 
-RUNS ONCE, AT 09:30 ET. The verdict sets the day's structure and the day's
-structure is decided once; a weekly position is held four to five sessions and
-cannot use hourly precision. The macro half of the news read fires separately
-inside the trading cycle (MACRO_REFRESH_MINUTES), which is where an intraday
-regime change is caught.
+RUNS HOURLY, 09:20-16:00 ET (TRADING_NEWS_HOURLY, on by default). It used to
+run once at 09:30, on the reasoning that the verdict sets the day's structure
+and the structure is decided once. That was true of a book that entered in the
+morning and held. It stopped being true when rotation shipped: dte0_trade can
+open a new position at noon, and it was vetoing that entry against a verdict
+graded three hours earlier. SanDisk's 10:08 catalyst on 2026-09-11 was never
+graded at all.
 
-It still fires ON CHANGE rather than on the clock: a digest of the day's
-headline set is stored with the verdict, so a re-run with the same headlines
-skips the model entirely. That is what makes --force safe to use by hand.
+RE-RUNNING IS NEARLY FREE. A digest of the headline set is stored beside the
+verdict, so an hour with no new headlines costs one query and no model call.
+Only a genuinely new headline pays for a re-grade, which is the event worth
+paying for. Set TRADING_NEWS_HOURLY=false to restore the 09:20-10:05 window.
 
 WHAT IT DOES AND DOES NOT DO. It writes a verdict, a suggested structure, and
 an action for any open position in that name. IT DOES NOT TRADE. On the 365
@@ -28,7 +31,7 @@ beside the decision, not wired into it. When news_symbol_impact has enough
 rows to say whether VERY_BULLISH actually precedes a move, that is the moment
 to consider gating.
 
-    python scripts/news_watch.py            # all tracked symbols (09:20-10:05 ET)
+    python scripts/news_watch.py            # all tracked symbols (09:20-16:00 ET)
     python scripts/news_watch.py --symbols SNDK,MU
     python scripts/news_watch.py --force    # ignore the digest, re-grade
 """
@@ -42,6 +45,7 @@ from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import psycopg2
 
@@ -50,6 +54,16 @@ from trading_engine.symbol_news import (ALIASES, classify_day,
                                         session_headlines)
 
 NY = ZoneInfo("America/New_York")
+
+# Re-grade through the session rather than once at the open. Off would restore
+# the original 09:20-10:05 behaviour; on is what rotation needs, and the
+# headline digest keeps an unchanged hour free.
+HOURLY = os.getenv("TRADING_NEWS_HOURLY", "true").lower() == "true"
+
+# How stale the corpus may be before this job fetches for itself. The hourly
+# fetcher runs every 60 minutes, so 90 tolerates one late run and catches a
+# job that has actually stopped.
+INGEST_MAX_AGE_MIN = float(os.getenv("TRADING_NEWS_MAX_CORPUS_AGE_MIN", "90"))
 
 # Verdict -> what to put on if nothing is open. Debit spreads both ways: the
 # 0DTE book's own grid says a long structure wants a shallow ITM long leg and
@@ -97,33 +111,59 @@ def position_action(strategy: str, verdict: str) -> str:
     return "HOLD — news is neutral or unrelated to the position's direction"
 
 
-def ingest() -> int:
-    """Scrape the wires BEFORE grading, and return how many headlines landed.
-
-    WITHOUT THIS THE OVERNIGHT WINDOW IS ALWAYS EMPTY. The only thing that
-    scrapes is the trading cycle, and the cycle refuses to run outside market
-    hours -- so at 09:30 the freshest row in the store is from 16:00 the
-    previous session, and a window reaching back to the previous close finds
-    nothing in it. Fixing the window (section 123) without fixing this would
-    have read as "there was simply no news", every morning, forever.
-
-    Never raises. No headlines is a real answer and a wire outage must not read
-    as a signal -- the same rule classify_day() follows.
-    """
+def corpus_age() -> "float | None":
+    """Minutes since the newest stored headline, or None if the store is empty."""
     try:
-        import asyncio
-
-        from GENAI.vector_stores import VoyageEmbeddings
-
-        from trading_engine.nodes import _scrape_headlines
-        from trading_engine.vector_store import store_headlines
-
-        heads = _scrape_headlines()
-        if heads:
-            asyncio.run(store_headlines(heads, VoyageEmbeddings()))
-        return len(heads)
+        conn = psycopg2.connect(_dsn())
+        with conn, conn.cursor() as cur:
+            cur.execute("SELECT extract(epoch from (now() - max(publication_date)))/60 "
+                        "FROM market_news_vectors")
+            row = cur.fetchone()
+        conn.close()
+        return float(row[0]) if row and row[0] is not None else None
     except Exception as exc:
-        print(f"(pre-open scrape failed, grading on what is already stored: {exc})")
+        print(f"(could not read corpus age: {exc})")
+        return None
+
+
+def ingest() -> int:
+    """Top the corpus up ONLY IF THE HOURLY JOB HAS NOT.
+
+    THIS IS A SAFETY NET, NOT THE FETCHER. news_hourly.py is the only fetcher
+    -- it pulls Polygon per ticker plus the macro tape and writes
+    market_news_vectors, which is what session_headlines and therefore the
+    verdict read. This function used to call nodes._scrape_headlines(), and
+    that function was deleted with the RSS machinery. The call sat inside a
+    bare `except Exception`, so it printed a one-line failure and returned 0
+    and the morning read went on grading whatever happened to be stored. A
+    silent no-op behind an except is the same bug as the empty overnight
+    window it was written to fix.
+
+    So: measure first. If the newest headline is recent, the hourly job is
+    healthy and there is nothing to do -- and a sweep here would burn nine
+    Polygon calls and two minutes of pacing for nothing. Only a stale corpus
+    pays for a sweep, which is exactly the case where the 09:30 read would
+    otherwise be blind.
+
+    Never raises. No headlines is a real answer and a wire outage must not
+    read as a signal -- the same rule classify_day() follows.
+    """
+    age = corpus_age()
+    if age is not None and age <= INGEST_MAX_AGE_MIN:
+        print(f"corpus is {age:.0f} min old — hourly job is current, no fetch")
+        return 0
+    stale = "empty" if age is None else f"{age:.0f} min old"
+    print(f"corpus is {stale} (limit {INGEST_MAX_AGE_MIN:.0f} min) — sweeping Polygon")
+    try:
+        from news_hourly import sweep
+
+        sweep()
+        after = corpus_age()
+        if after is not None:
+            print(f"corpus now {after:.0f} min old")
+        return 1
+    except Exception as exc:
+        print(f"(sweep failed, grading on what is already stored: {exc})")
         return 0
 
 
@@ -159,10 +199,25 @@ def main():
         # crontab has to list BOTH 13:30 and 14:30 UTC to cover EDT and EST,
         # which means one of the two is always an hour late. A wide guard let
         # the late one through and the job ran twice.
-        lo, hi = dtime(9, 20), dtime(10, 5)
+        # THE WINDOW WIDENS WHEN THE VERDICT IS READ MORE THAN ONCE.
+        #
+        # The guard above exists because the 09:30 verdict sets the day's
+        # structure and a wide window let the EST/EDT duplicate cron entry run
+        # it twice. That reasoning holds for a once-a-day read and stops
+        # holding the moment rotation exists: a position opened at 12:00 was
+        # being vetoed against a three-hour-old verdict, which is the same
+        # staleness that let SanDisk's 10:08 catalyst go ungraded on
+        # 2026-09-11.
+        #
+        # RE-RUNNING IS CHEAP BECAUSE OF THE DIGEST. A hash of the headline
+        # set is stored beside the verdict, so an hourly run with unchanged
+        # headlines skips the model entirely -- it costs one query. Only a
+        # genuinely new headline pays for a re-grade, which is exactly the
+        # event worth paying for.
+        lo, hi = dtime(9, 20), (dtime(16, 0) if HOURLY else dtime(10, 5))
         if not (lo <= now.time() <= hi):
             print(f"{now:%Y-%m-%d %H:%M %Z} — outside the "
-                  f"{lo:%H:%M}-{hi:%H:%M} ET open window, nothing to do.")
+                  f"{lo:%H:%M}-{hi:%H:%M} ET window, nothing to do.")
             return
 
     day = now.date()
@@ -180,6 +235,11 @@ def main():
         print(f"(open positions unreadable: {exc})")
 
     n_new = ingest()
+    # ONE asof FOR THE WHOLE SWEEP, truncated to the minute. Nine symbols
+    # graded over two minutes would otherwise carry nine different
+    # timestamps, and "the verdict in force at 09:30" would become a range
+    # query with an off-by-one at every boundary.
+    graded_at = datetime.now(NY).replace(second=0, microsecond=0)
     print(f"NEWS WATCH  {datetime.now(NY):%Y-%m-%d %H:%M %Z}  trading day {day}")
     print(f"scraped {n_new} headlines, window opens {previous_session_close(day):%a %m-%d %H:%M} ET\n")
     print(f"{'sym':6s} {'verdict':14s} {'conf':>5s} {'n':>3s} {'structure':20s} action")
@@ -210,17 +270,35 @@ def main():
             """
             INSERT INTO news_verdicts
               (id, symbol, trading_day, verdict, confidence, rationale,
-               headline_count, headline_digest, suggested_structure, position_action)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               headline_count, headline_digest, suggested_structure,
+               position_action, asof)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (symbol, trading_day) DO UPDATE SET
               verdict=EXCLUDED.verdict, confidence=EXCLUDED.confidence,
               rationale=EXCLUDED.rationale, headline_count=EXCLUDED.headline_count,
               headline_digest=EXCLUDED.headline_digest,
               suggested_structure=EXCLUDED.suggested_structure,
-              position_action=EXCLUDED.position_action, updated_at=now()
+              position_action=EXCLUDED.position_action,
+              asof=EXCLUDED.asof, updated_at=now()
             """,
             (str(uuid.uuid4()), sym, day, v, res["confidence"], res["rationale"],
-             res["headline_count"], d, structure, act),
+             res["headline_count"], d, structure, act, graded_at),
+        )
+        # AND THE APPEND-ONLY COPY. The row above is the CURRENT verdict and
+        # an hourly re-grade overwrites it; this one is never rewritten, so a
+        # measurement script can ask what the read was AT THE OPEN rather than
+        # scoring an afternoon verdict against a move it had already seen.
+        # See migration f7b3d02a5e41.
+        cur.execute(
+            """
+            INSERT INTO news_verdict_history
+              (id, symbol, trading_day, asof, verdict, confidence, rationale,
+               headline_count, headline_digest, suggested_structure)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (symbol, trading_day, asof) DO NOTHING
+            """,
+            (str(uuid.uuid4()), sym, day, graded_at, v, res["confidence"],
+             res["rationale"], res["headline_count"], d, structure),
         )
         print(f"{sym:6s} {v:14s} {res['confidence']:5.2f} {len(heads):3d} "
               f"{structure:20s} {act}")

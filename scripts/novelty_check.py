@@ -25,6 +25,8 @@ import psycopg2
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from trading_engine.symbol_news import VERDICT_CUTOFF
+
 from trading_engine import symbol_news as SN
 
 
@@ -35,8 +37,27 @@ def _dsn() -> str:
 
 
 def graded_days(cur, sym):
-    cur.execute("SELECT trading_day, verdict, confidence, headline_count "
-                "FROM news_verdicts WHERE symbol=%s ORDER BY trading_day", (sym,))
+    """The MORNING verdict per day -- what the novelty filter is being tested on.
+
+    news_watch.py re-grades hourly now, so news_verdicts holds whichever read
+    was last written that day. Comparing a re-grade of the 09:30 headline set
+    against an afternoon verdict would report every late-breaking story as a
+    verdict the filter "moved", which is not what it measures.
+    """
+    cur.execute("""
+        SELECT k.trading_day, h.verdict, h.confidence, h.headline_count
+        FROM (SELECT DISTINCT trading_day FROM news_verdict_history
+              WHERE symbol=%s) k
+        JOIN LATERAL (
+            SELECT verdict, confidence, headline_count
+            FROM news_verdict_history
+            WHERE symbol=%s AND trading_day = k.trading_day
+              AND asof <= (k.trading_day + %s::time) AT TIME ZONE
+                          'America/New_York'
+            ORDER BY asof DESC LIMIT 1
+        ) h ON TRUE
+        ORDER BY k.trading_day
+    """, (sym, sym, VERDICT_CUTOFF))
     return cur.fetchall()
 
 

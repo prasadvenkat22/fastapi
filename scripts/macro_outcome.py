@@ -36,6 +36,8 @@ import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from trading_engine.symbol_news import verdict_at
+
 NY = ZoneInfo("America/New_York")
 
 
@@ -65,9 +67,13 @@ def record(day: date, frame, cur) -> Optional[dict]:
     o, c = float(row["Open"]), float(row["Close"])
     atr = float(row["atr14"]) if row["atr14"] == row["atr14"] else None
 
-    cur.execute("SELECT verdict, confidence, headline_count FROM news_verdicts "
-                "WHERE symbol='QQQ' AND trading_day=%s", (day,))
-    nv = cur.fetchone()
+    # The QQQ news read AS OF THE OPEN. news_watch.py re-grades hourly and
+    # news_verdicts keeps only the latest, so reading it directly would score
+    # an afternoon verdict against a session it had already seen -- the same
+    # overwrite this file's docstring blames for August being unanswerable.
+    nv = verdict_at(cur, "QQQ", day)
+    if nv:
+        nv = nv[:3]
 
     # The macro gate verdict nearest the open, if the engine ran that day.
     cur.execute(

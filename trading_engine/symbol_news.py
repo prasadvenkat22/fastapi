@@ -504,6 +504,48 @@ def session_headlines(symbol: str, day: Optional[date] = None,
         return []
 
 
+VERDICT_CUTOFF = dtime(9, 45)
+
+
+def verdict_at(cur, symbol: str, day: date,
+               cutoff: Optional[dtime] = None) -> Optional[tuple]:
+    """The verdict that was IN FORCE at `cutoff` -- for measurement, not entry.
+
+    USE THIS IN ANY SCRIPT THAT SCORES A VERDICT AGAINST WHAT THE TAPE THEN
+    DID. news_verdicts holds the CURRENT verdict and news_watch.py re-grades
+    hourly, so reading it to grade a past session hands you a verdict written
+    after the move it is being scored against. The number that comes out is
+    better than the real one and nothing about the run looks wrong.
+
+    Entry-time code wants the opposite and should keep reading news_verdicts
+    directly: a position opened at noon should be checked against the noon
+    read, which is the whole reason the watcher went hourly.
+
+    Returns (verdict, confidence, headline_count, asof) or None. Falls back to
+    news_verdicts for rows written before the history table existed -- those
+    were all graded once, in the morning, so the fallback is exact rather than
+    approximate.
+    """
+    cutoff = cutoff or VERDICT_CUTOFF
+    at = datetime.combine(day, cutoff, tzinfo=NY)
+    try:
+        cur.execute(
+            "SELECT verdict, confidence, headline_count, asof "
+            "FROM news_verdict_history "
+            "WHERE symbol=%s AND trading_day=%s AND asof <= %s "
+            "ORDER BY asof DESC LIMIT 1", (symbol, day, at))
+        row = cur.fetchone()
+        if row:
+            return row
+    except Exception:
+        logger.warning("news_verdict_history unreadable; falling back to the "
+                       "current verdict for %s %s", symbol, day, exc_info=True)
+    cur.execute("SELECT verdict, confidence, headline_count, asof "
+                "FROM news_verdicts WHERE symbol=%s AND trading_day=%s",
+                (symbol, day))
+    return cur.fetchone()
+
+
 def classify_day(symbol: str, day: Optional[date] = None,
                  cutoff: Optional[dtime] = None) -> dict:
     """{verdict, confidence, rationale, headline_count} for the news a trader

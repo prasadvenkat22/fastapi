@@ -37,7 +37,8 @@ import argparse
 import os
 import sys
 import uuid
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import psycopg2
@@ -45,7 +46,10 @@ import yfinance as yf
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trading_engine.symbol_news import ALIASES, classify_day, session_headlines
+from trading_engine.symbol_news import (ALIASES, VERDICT_CUTOFF, classify_day,
+                                        session_headlines)
+
+NY = ZoneInfo("America/New_York")
 
 # Ordinal, not one-hot: the classes are ordered and there are not enough rows
 # to spend a degree of freedom on each.
@@ -77,22 +81,47 @@ def backfill(cur, syms, days, force: bool = False) -> int:
     cur.execute("SELECT symbol, trading_day FROM news_verdicts")
     have = {(s, d) for s, d in cur.fetchall()}
     n = 0
+    today = datetime.now(NY).date()
     for s in syms:
         for d in days:
             if (s, d) in have and not force:
+                continue
+            # NEVER TODAY. This writes into news_verdicts, which is the row
+            # dte0_trade's veto and nodes' NEWS_DIRECTION gate read at entry.
+            # A research backfill re-grading the current session would swap
+            # the verdict under a live book, from a script whose whole point
+            # is that it does not trade.
+            if d >= today:
                 continue
             heads = session_headlines(s, d)
             if not heads:
                 continue
             g = classify_day(s, d)
+            # Stamped at the OPEN of the day being backfilled, not at wall
+            # clock. This grades a past session from a past headline set, so
+            # the honest asof is that session's open -- and the analysis above
+            # reads the history at exactly that cutoff, so a "now" stamp would
+            # place every backfilled row after it and read back as missing.
+            at = datetime.combine(d, VERDICT_CUTOFF, tzinfo=NY)
             cur.execute(
                 "INSERT INTO news_verdicts (id, symbol, trading_day, verdict, "
-                "confidence, rationale, headline_count) VALUES (%s,%s,%s,%s,%s,%s,%s) "
+                "confidence, rationale, headline_count, asof) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT (symbol, trading_day) DO UPDATE SET "
                 "verdict=EXCLUDED.verdict, confidence=EXCLUDED.confidence, "
                 "rationale=EXCLUDED.rationale, "
-                "headline_count=EXCLUDED.headline_count",
+                "headline_count=EXCLUDED.headline_count, asof=EXCLUDED.asof",
                 (str(uuid.uuid4()), s, d, g["verdict"], g["confidence"],
+                 g["rationale"], g["headline_count"], at))
+            cur.execute(
+                "INSERT INTO news_verdict_history (id, symbol, trading_day, "
+                "asof, verdict, confidence, rationale, headline_count) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (symbol, trading_day, asof) DO UPDATE SET "
+                "verdict=EXCLUDED.verdict, confidence=EXCLUDED.confidence, "
+                "rationale=EXCLUDED.rationale, "
+                "headline_count=EXCLUDED.headline_count",
+                (str(uuid.uuid4()), s, d, at, g["verdict"], g["confidence"],
                  g["rationale"], g["headline_count"]))
             n += 1
             print(f"  {s:6s} {d}  {g['verdict']:14s} {g['confidence']:.2f} "
@@ -197,8 +226,25 @@ def main():
         print(f"  {len(syms)} symbols x {len(days)} days with headlines\n")
         print(f"\n{backfill(cur, syms, days, args.force)} verdicts written\n")
 
-    cur.execute("SELECT symbol, trading_day, verdict, confidence, headline_count "
-                "FROM news_verdicts ORDER BY trading_day, symbol")
+    # AS OF THE OPEN. This is an AUC of the verdict against a FORWARD return,
+    # so a verdict re-graded at 15:00 would be scored against a move it had
+    # already watched. The statistic would clear 0.500 and the bootstrap
+    # interval would agree, and both would be measuring the clock.
+    cur.execute("""
+        SELECT h.symbol, k.trading_day, h.verdict, h.confidence,
+               h.headline_count
+        FROM (SELECT DISTINCT symbol, trading_day
+              FROM news_verdict_history) k
+        JOIN LATERAL (
+            SELECT symbol, verdict, confidence, headline_count
+            FROM news_verdict_history
+            WHERE symbol = k.symbol AND trading_day = k.trading_day
+              AND asof <= (k.trading_day + %s::time) AT TIME ZONE
+                          'America/New_York'
+            ORDER BY asof DESC LIMIT 1
+        ) h ON TRUE
+        ORDER BY k.trading_day, h.symbol
+    """, (VERDICT_CUTOFF,))
     rows = cur.fetchall()
 
     if args.novelty:

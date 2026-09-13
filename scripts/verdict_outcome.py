@@ -51,6 +51,8 @@ import psycopg2
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from trading_engine.symbol_news import VERDICT_CUTOFF
+
 # The day the window, macro-term and novelty fixes landed. Rows either side of
 # it came from different pipelines and are reported separately.
 FIX_DAY = date(2026, 9, 7)
@@ -129,14 +131,37 @@ def grade(regrade: bool = False) -> int:
     with conn, conn.cursor() as cur:
         if regrade:
             cur.execute("DELETE FROM news_verdict_outcomes")
+        # THE VERDICT AS OF THE OPEN, NOT THE LAST ONE WRITTEN.
+        #
+        # news_watch.py re-grades hourly, and news_verdicts holds one row per
+        # symbol-day that each re-grade overwrites. Selecting v.verdict here
+        # would grade a 15:00 read against a session that was over by 16:00 --
+        # the verdict would "predict" a move it had already watched, this
+        # script's accuracy would climb, and nothing in the output would say
+        # why. macro_outcome.py already takes "the verdict nearest the open"
+        # for trading_macro_verdicts for exactly this reason; news_verdicts
+        # simply had no earlier row to take until f7b3d02a5e41.
+        #
+        # news_verdicts still drives the OUTER loop -- it is the list of
+        # symbol-days that have a verdict at all -- but every graded column
+        # comes from the history row in force at VERDICT_CUTOFF.
         cur.execute("""
-            SELECT v.symbol, v.trading_day, v.verdict, v.confidence, v.headline_count
+            SELECT v.symbol, v.trading_day, h.verdict, h.confidence,
+                   h.headline_count
             FROM news_verdicts v
             LEFT JOIN news_verdict_outcomes o
                    ON o.symbol = v.symbol AND o.trading_day = v.trading_day
-            WHERE o.symbol IS NULL
+            LEFT JOIN LATERAL (
+                SELECT verdict, confidence, headline_count
+                FROM news_verdict_history
+                WHERE symbol = v.symbol AND trading_day = v.trading_day
+                  AND asof <= (v.trading_day + %s::time) AT TIME ZONE
+                              'America/New_York'
+                ORDER BY asof DESC LIMIT 1
+            ) h ON TRUE
+            WHERE o.symbol IS NULL AND h.verdict IS NOT NULL
             ORDER BY v.trading_day, v.symbol
-        """)
+        """, (VERDICT_CUTOFF,))
         todo = cur.fetchall()
         print(f"{len(todo)} verdict(s) to grade")
         for symbol, day, verdict, conf, n in todo:

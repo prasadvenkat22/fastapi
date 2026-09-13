@@ -190,6 +190,58 @@ NEWS_VETO = os.getenv("TRADING_DTE0_NEWS_VETO", "true").lower() == "true"
 NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
 NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
 
+# THE MACRO READ, ON THE SAME ROW -- AND OFF BY DEFAULT.
+#
+# The case for it is sound and was put plainly: a name with good news still
+# weakens into a bad tape, so a single-name entry should answer to QQQ and not
+# only to itself. That is a real effect. The question is whether THIS read
+# measures it, and the rows say not yet:
+#
+#     QQQ verdict      n   avg session ret   down days
+#     BEARISH          8        -0.085%         5 of 8
+#     NEUTRAL          5        -0.040%         3 of 5
+#     BULLISH          1        +0.959%         0 of 1
+#
+# Four and a half basis points between BEARISH and NEUTRAL, on thirteen
+# sessions. The down-day rate differs by one day. Meanwhile BEARISH is 9 of
+# the 17 QQQ verdicts ever written, so switching this on refuses bullish
+# entries on over half of all sessions -- to dodge a drag that is not
+# distinguishable from zero. That is the August macro gate again, which
+# refused 55 of 55 cycles on a day QQQ rose $6.50 off its low.
+#
+# So it is built, it is wired, and it is dark. Every run logs the macro read
+# beside the decision whether or not the gate is on, which is what puts rows
+# into macro_outcome; when BEARISH mornings actually separate from NEUTRAL
+# ones, TRADING_DTE0_MACRO_VETO=true is the whole change.
+MACRO_VETO = os.getenv("TRADING_DTE0_MACRO_VETO", "false").lower() == "true"
+MACRO_SYMBOL = os.getenv("TRADING_DTE0_MACRO_SYMBOL", "QQQ")
+# VERY_* only, if it is ever switched on. Macro is a tilt, not a catalyst: a
+# plain BEARISH tape is the ordinary state of this read and gating on it is
+# what produces the refuse-everything failure above.
+MACRO_STRONG_BEARISH = {"VERY_BEARISH"}
+MACRO_STRONG_BULLISH = {"VERY_BULLISH"}
+
+
+def _macro_verdict() -> "tuple | None":
+    """(verdict, confidence, asof) for the macro name today, or None.
+
+    Reads news_verdicts -- the CURRENT row, deliberately. news_watch.py
+    re-grades hourly, so a rotation entering at 12:00 is checked against the
+    12:00 macro read rather than the one written at the open. That staleness
+    was the reason the watcher went hourly.
+    """
+    try:
+        day = datetime.now(NY).date()
+        with psycopg2.connect(_dsn()) as c, c.cursor() as cur:
+            cur.execute("SELECT verdict, confidence, asof FROM news_verdicts "
+                        "WHERE symbol=%s AND trading_day=%s",
+                        (MACRO_SYMBOL.upper(), day))
+            return cur.fetchone()
+    except Exception:
+        logger.warning("Macro verdict unreadable — single-name news is "
+                       "unaffected.", exc_info=True)
+        return None
+
 
 def _passes(r: dict) -> "str | None":
     """None if the row clears all three constraints, else why it did not."""
@@ -409,6 +461,21 @@ def main() -> None:
         return
     syms = tradeable
 
+    # THE MACRO READ, LOGGED WHETHER OR NOT IT GATES. This line is the row
+    # macro_outcome.py needs to eventually answer whether a bad tape actually
+    # precedes a bad session for single names; without it the question stays
+    # open forever and the gate above stays dark on no evidence rather than on
+    # evidence.
+    macro = _macro_verdict()
+    if macro:
+        mv, mc, masof = macro[0], macro[1] or 0.0, macro[2]
+        logger.info("macro read (%s): %s %.2f%s — %s", MACRO_SYMBOL, mv, mc,
+                    f" as of {masof:%H:%M}" if masof else "",
+                    "GATING" if MACRO_VETO else "logged, not gating")
+    else:
+        mv = None
+        logger.info("macro read (%s): none today.", MACRO_SYMBOL)
+
     # Best surviving candidate per symbol per side.
     best: dict = {}
     for side in ("call", "put"):
@@ -443,6 +510,19 @@ def main() -> None:
                                 "and the 09:30 read is %s.", r["sym"], side.upper(),
                                 float(r["lo"]), float(r["hi"]),
                                 "bullish" if bullish else "bearish", verdict)
+                    continue
+            # The macro tape, as a second veto on direction. Dark by default
+            # -- see MACRO_VETO. VERY_* only even when armed.
+            if MACRO_VETO and mv:
+                bullish = r.get("direction") != "bearish"
+                if ((bullish and mv in MACRO_STRONG_BEARISH)
+                        or ((not bullish) and mv in MACRO_STRONG_BULLISH)):
+                    logger.info("%s %s %.0f/%.0f refused: the structure is %s "
+                                "and the %s tape is %s.", r["sym"], side.upper(),
+                                float(r["lo"]), float(r["hi"]),
+                                "bullish" if bullish else "bearish",
+                                MACRO_SYMBOL, mv)
+                    rejects["against the macro tape"] += 1
                     continue
             if r.get("conflict"):
                 logger.info("%s %s refused: %s", r["sym"], side.upper(), r["conflict"])
@@ -482,11 +562,11 @@ def main() -> None:
         logger.info(
             "%-5s %-4s %.0f/%.0f w%.1f x%d @ %.2f = $%.0f | Pwin %.1f%% need %.1f%% "
             "EV $%+.0f | entry %.0f%% of width, extr %.0f%%, short %.2f ATR out, "
-            "target %s %.2f (%.2f ATR) | news %s",
+            "target %s %.2f (%.2f ATR) | news %s | macro %s",
             sym, side.upper(), long_k, short_k, w, qty, cost, cost * 100 * qty,
             r["pwin"] * 100, r["need"] * 100, r["ev_dem"], r["_ew"] * 100,
             r["_ex_pct"], r["_short_atr"], sym, r["_target_spot"], r["_move_atr"],
-            r.get("news") or "none")
+            r.get("news") or "none", mv or "none")
         if qty < 1:
             logger.info("   costs $%.0f, above the $%.0f per-trade budget — skipped.",
                         cost * 100, per)

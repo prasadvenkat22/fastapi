@@ -288,6 +288,63 @@ NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
 # stand down a setup the tape supports.
 NEWS_DIRECTION_MIN_CONF = float(os.getenv("TRADING_NEWS_DIRECTION_MIN_CONF", "0.70"))
 
+# THE TAPE TURNING, as distinct from the tape's level.
+#
+# The gate above is a LEVEL gate and it is symmetric, so it already refuses a
+# bullish 0DTE entry on a BEARISH read. That sounds like enough until you look
+# at what it costs: BEARISH is 9 of the 17 QQQ verdicts on record and all nine
+# clear the 0.70 confidence bar, so this stands down on 53% of sessions -- and
+# novelty_check.py found that tilt suspect, BEARISH on 10 of 14 with 5 of 10 on
+# direction, "unmoved while the tape reversed".
+#
+# A TURN IS THE OTHER EVENT, and a level gate is blind to it. The read opening
+# NEUTRAL and going BEARISH at 14:00 on an Iran headline and a Fed surprise is
+# the case worth refusing a call debit spread for; a read that was BEARISH at
+# 09:30 and is still BEARISH at 14:00 has said nothing new. The level gate
+# cannot tell those apart -- both are simply "BEARISH now".
+#
+# NEW TODAY, AND ONLY POSSIBLE TODAY. The verdict was written once per session
+# until news_watch.py went hourly, so there was one reading a day and no delta
+# to measure. That also means this has never fired on any historical session
+# and cannot be backtested: it is armed on its shape, not on a result.
+NEWS_TURN_GATE = os.getenv("TRADING_NEWS_TURN_GATE", "true").lower() == "true"
+NEWS_TURN_STEPS = float(os.getenv("TRADING_NEWS_TURN_STEPS", "1"))
+NEWS_ORD = {"VERY_BEARISH": -2.0, "BEARISH": -1.0, "NEUTRAL": 0.0,
+            "BULLISH": 1.0, "VERY_BULLISH": 2.0}
+_news_open_cache: dict = {}
+
+
+def _qqq_news_open_verdict():
+    """The QQQ verdict in force AT THE OPEN, for the turn gate, or None.
+
+    Separate from _qqq_news_verdict() on purpose: that one returns the CURRENT
+    read and its tuple shape is relied on by the direction gate. This reads the
+    append-only history through verdict_at(), the same function the measurement
+    scripts use, so "at the open" means one thing across the system.
+    """
+    today = datetime.now(ZoneInfo("America/New_York")).date()
+    hit = _news_open_cache.get(today)
+    if hit is not None and (_time.monotonic() - hit[0]) < NEWS_VERDICT_TTL_S:
+        return hit[1]
+    out = None
+    try:
+        import psycopg2
+
+        from .symbol_news import verdict_at
+
+        dsn = (os.getenv("DATABASE_URL", "")
+               .replace("postgresql+psycopg2://", "postgresql://")
+               .replace("postgresql+asyncpg://", "postgresql://"))
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            row = verdict_at(cur, "QQQ", today)
+            out = row[0] if row else None
+    except Exception:  # noqa: BLE001 — a read failure must not gate entries
+        logger.warning("Could not read the opening QQQ verdict — the turn gate "
+                       "stands down for this cycle.", exc_info=True)
+        return None
+    _news_open_cache[today] = (_time.monotonic(), out)
+    return out
+
 _news_verdict_cache: dict = {}
 # How long a read is reused before going back to the database.
 #
@@ -2795,6 +2852,34 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 logger.info("QQQ macro news reads %s at %.2f confidence, below "
                             "the %.2f the direction gate requires — ignored.",
                             _nv[0], _nv[1], NEWS_DIRECTION_MIN_CONF)
+
+        # THE TURN, which the level gate above cannot see. A read that has been
+        # BEARISH since 09:30 has said nothing new by 14:00; a read that was
+        # NEUTRAL and has just gone BEARISH is the event. No confidence floor
+        # here -- the movement between two graded reads IS the signal, and
+        # requiring both to be confident would mostly filter out the turn.
+        if NEWS_TURN_GATE and tier is not None:
+            _now = _qqq_news_verdict()
+            _open = _qqq_news_open_verdict()
+            if _now and _open:
+                _d = NEWS_ORD.get(_now[0], 0.0) - NEWS_ORD.get(_open, 0.0)
+                if bullish and _d <= -NEWS_TURN_STEPS:
+                    logger.info(
+                        "QQQ macro news TURNED bearish since the open (%s -> "
+                        "%s) — refusing the bullish %s entry. The level gate "
+                        "would have allowed this; the change is the signal.",
+                        _open, _now[0], tier)
+                    tier, bullish = None, False
+                elif (not bullish) and _d >= NEWS_TURN_STEPS:
+                    logger.info(
+                        "QQQ macro news TURNED bullish since the open (%s -> "
+                        "%s) — refusing the bearish %s entry.",
+                        _open, _now[0], tier)
+                    tier, bullish = None, False
+                elif _d:
+                    logger.info("QQQ macro news moved %s -> %s since the open, "
+                                "which agrees with the %s setup.", _open,
+                                _now[0], "bullish" if bullish else "bearish")
 
         # A scheduled macro event. The VIX gate is a level and a Fed day with
         # the VIX at 18 sails through it; the sentiment verdict gates bullish

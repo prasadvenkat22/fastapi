@@ -70,6 +70,7 @@ import psycopg2  # noqa: E402
 from trading_engine import tradier_orders  # noqa: E402
 from trading_engine.data_feed import fetch_option_chain, fetch_spot  # noqa: E402
 from trading_engine.screener import rank  # noqa: E402
+from trading_engine.symbol_news import verdict_at  # noqa: E402
 
 logger = logging.getLogger("dte0_trade")
 NY = ZoneInfo("America/New_York")
@@ -232,14 +233,53 @@ NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
 # until then every run logs the read beside the decision.
 MACRO_VETO = os.getenv("TRADING_DTE0_MACRO_VETO", "true").lower() == "true"
 MACRO_SYMBOL = os.getenv("TRADING_DTE0_MACRO_SYMBOL", "QQQ")
-# Bearish structures (put debit spreads) refused into a bullish tape.
+# TWO GATES, AND THE SECOND ONE IS THE POINT.
+#
+# LEVEL. The tail guard. Refuses a structure the tape is extremely against.
+# Asymmetric because the base rates are: this read prints BEARISH on 9 of 17
+# sessions and BULLISH on 1, so refusing puts into a bullish tape costs 5.9%
+# of sessions while refusing calls into a bearish one costs 52.9%. A level
+# gate on the call side is therefore held at VERY_BEARISH.
 MACRO_REFUSE_BEARISH_ON = {"BULLISH", "VERY_BULLISH"}
-# Bullish structures refused only on an extreme -- see the base rates above.
 MACRO_REFUSE_BULLISH_ON = {"VERY_BEARISH"}
+
+# DELTA -- THE TAPE TURNING, WHICH IS THE CASE A LEVEL GATE CANNOT SEE.
+#
+# The scenario, put twice and correctly: at 11:00 yields and crude drop and
+# the tape goes risk-on, so a put spread is the wrong structure. At 14:00
+# crude spikes on Iran, yields spike on the Fed, the tape turns bearish, and a
+# call debit spread is the wrong structure. Both are TURNS. The word in both
+# cases was "changes" and "turns", not "is".
+#
+# A LEVEL GATE IS THE WRONG INSTRUMENT FOR A TURN. BEARISH is the modal
+# reading of this feed -- 53% of sessions -- and novelty_check.py found the
+# tilt suspect: BEARISH on 10 of 14 sessions, 5 of 10 on direction, "unmoved
+# while the tape reversed". Gating a level that is the background state refuses
+# half the book for noise. Gating the CHANGE fires only when the read actually
+# moves, which is rare by construction and is the event being described.
+#
+# THIS WAS NOT OBSERVABLE UNTIL TODAY. The verdict was written once at 09:30,
+# so there was exactly one reading per session and no delta existed to gate
+# on. The hourly re-grade is the precondition for this gate, not a separate
+# feature -- which is also why it cannot be backtested: every historical day
+# has a single verdict, so this would have fired zero times on the record.
+# It is armed on its shape, not on a measurement, and that is stated plainly
+# rather than dressed up. dte0_shadow is empty (0 rows), so there is no paper
+# record to check it against either; that is worth fixing separately.
+#
+# Symmetric, unlike the level gate, because a turn is a turn whichever way it
+# goes -- and because a deterioration from NEUTRAL to BEARISH is information
+# in a way that a standing BEARISH is not.
+MACRO_DELTA_GATE = os.getenv("TRADING_DTE0_MACRO_DELTA", "true").lower() == "true"
+# How far the read must move from the day's OPENING verdict to count as a
+# turn. 1 step: NEUTRAL -> BEARISH, or BEARISH -> VERY_BEARISH.
+MACRO_DELTA_STEPS = float(os.getenv("TRADING_DTE0_MACRO_DELTA_STEPS", "1"))
+MACRO_ORD = {"VERY_BEARISH": -2.0, "BEARISH": -1.0, "NEUTRAL": 0.0,
+             "BULLISH": 1.0, "VERY_BULLISH": 2.0}
 
 
 def _macro_verdict() -> "tuple | None":
-    """(verdict, confidence, asof) for the macro name today, or None.
+    """(verdict, confidence, asof, opening_verdict) for the macro name, or None.
 
     Reads news_verdicts -- the CURRENT row, deliberately. news_watch.py
     re-grades hourly, so a rotation entering at 12:00 is checked against the
@@ -252,7 +292,15 @@ def _macro_verdict() -> "tuple | None":
             cur.execute("SELECT verdict, confidence, asof FROM news_verdicts "
                         "WHERE symbol=%s AND trading_day=%s",
                         (MACRO_SYMBOL.upper(), day))
-            return cur.fetchone()
+            cur_row = cur.fetchone()
+            if not cur_row:
+                return None
+            # The OPENING read, for the delta. verdict_at() takes the history
+            # row in force at the cutoff, which is the same function the
+            # measurement scripts use -- one definition of "at the open", not
+            # two that can drift apart.
+            open_row = verdict_at(cur, MACRO_SYMBOL.upper(), day)
+            return cur_row + (open_row[0] if open_row else None,)
     except Exception:
         logger.warning("Macro verdict unreadable — single-name news is "
                        "unaffected.", exc_info=True)
@@ -483,13 +531,20 @@ def main() -> None:
     # open forever and the gate above stays dark on no evidence rather than on
     # evidence.
     macro = _macro_verdict()
+    mv = mopen = None
+    mdelta = 0.0
     if macro:
-        mv, mc, masof = macro[0], macro[1] or 0.0, macro[2]
-        logger.info("macro read (%s): %s %.2f%s — %s", MACRO_SYMBOL, mv, mc,
-                    f" as of {masof:%H:%M}" if masof else "",
-                    "GATING" if MACRO_VETO else "logged, not gating")
+        mv, mc, masof, mopen = macro[0], macro[1] or 0.0, macro[2], macro[3]
+        mdelta = MACRO_ORD.get(mv, 0.0) - MACRO_ORD.get(mopen or mv, 0.0)
+        turn = ("no turn" if abs(mdelta) < MACRO_DELTA_STEPS
+                else f"TURNED {'bullish' if mdelta > 0 else 'bearish'} "
+                     f"({mopen} -> {mv})")
+        logger.info("macro read (%s): %s %.2f%s | open %s | %s | level gate %s,"
+                    " delta gate %s", MACRO_SYMBOL, mv, mc,
+                    f" as of {masof:%H:%M}" if masof else "", mopen or "-", turn,
+                    "on" if MACRO_VETO else "off",
+                    "on" if MACRO_DELTA_GATE else "off")
     else:
-        mv = None
         logger.info("macro read (%s): none today.", MACRO_SYMBOL)
 
     # Best surviving candidate per symbol per side.
@@ -527,10 +582,11 @@ def main() -> None:
                                 float(r["lo"]), float(r["hi"]),
                                 "bullish" if bullish else "bearish", verdict)
                     continue
-            # The macro tape, as a second veto on direction. Asymmetric on
-            # purpose -- see MACRO_VETO for the base rates that set each side.
+            # The macro tape, twice: the LEVEL as a tail guard (asymmetric --
+            # see the base rates beside MACRO_VETO), and the DELTA as the
+            # intraday-turn guard (symmetric -- a turn is a turn either way).
+            bullish = r.get("direction") != "bearish"
             if MACRO_VETO and mv:
-                bullish = r.get("direction") != "bearish"
                 if mv in (MACRO_REFUSE_BULLISH_ON if bullish
                           else MACRO_REFUSE_BEARISH_ON):
                     logger.info("%s %s %.0f/%.0f refused: the structure is %s "
@@ -539,6 +595,18 @@ def main() -> None:
                                 "bullish" if bullish else "bearish",
                                 MACRO_SYMBOL, mv)
                     rejects["against the macro tape"] += 1
+                    continue
+            if MACRO_DELTA_GATE and abs(mdelta) >= MACRO_DELTA_STEPS:
+                # A bullish structure dies on a bearish turn and vice versa.
+                if (bullish and mdelta <= -MACRO_DELTA_STEPS) or                    ((not bullish) and mdelta >= MACRO_DELTA_STEPS):
+                    logger.info("%s %s %.0f/%.0f refused: the structure is %s "
+                                "and %s TURNED %s since the open (%s -> %s).",
+                                r["sym"], side.upper(), float(r["lo"]),
+                                float(r["hi"]), "bullish" if bullish else "bearish",
+                                MACRO_SYMBOL,
+                                "bullish" if mdelta > 0 else "bearish",
+                                mopen, mv)
+                    rejects["the macro tape turned against it"] += 1
                     continue
             if r.get("conflict"):
                 logger.info("%s %s refused: %s", r["sym"], side.upper(), r["conflict"])
@@ -578,11 +646,11 @@ def main() -> None:
         logger.info(
             "%-5s %-4s %.0f/%.0f w%.1f x%d @ %.2f = $%.0f | Pwin %.1f%% need %.1f%% "
             "EV $%+.0f | entry %.0f%% of width, extr %.0f%%, short %.2f ATR out, "
-            "target %s %.2f (%.2f ATR) | news %s | macro %s",
+            "target %s %.2f (%.2f ATR) | news %s | macro %s (open %s)",
             sym, side.upper(), long_k, short_k, w, qty, cost, cost * 100 * qty,
             r["pwin"] * 100, r["need"] * 100, r["ev_dem"], r["_ew"] * 100,
             r["_ex_pct"], r["_short_atr"], sym, r["_target_spot"], r["_move_atr"],
-            r.get("news") or "none", mv or "none")
+            r.get("news") or "none", mv or "none", mopen or "-")
         if qty < 1:
             logger.info("   costs $%.0f, above the $%.0f per-trade budget — skipped.",
                         cost * 100, per)

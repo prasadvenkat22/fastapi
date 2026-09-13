@@ -9,6 +9,7 @@ above into a final trading decision.
 
 import logging
 import os
+import time as _time          # the module; `time` is datetime.time here
 from dataclasses import replace as _dc_replace
 from datetime import datetime, time as dtime, timezone
 from typing import List
@@ -288,20 +289,34 @@ NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
 NEWS_DIRECTION_MIN_CONF = float(os.getenv("TRADING_NEWS_DIRECTION_MIN_CONF", "0.70"))
 
 _news_verdict_cache: dict = {}
+# How long a read is reused before going back to the database.
+#
+# THIS WAS CACHED PER DAY, AND THE REASON IT GAVE STOPPED BEING TRUE.
+# The old docstring said the verdict "is written once at 09:30" and therefore
+# "cannot change", which was correct until news_watch.py went hourly. With a
+# day-long cache the engine would read the morning verdict once, hold it until
+# midnight, and never see a single re-grade -- so a 10:08 catalyst would be
+# graded, written, and invisible to the only gate that consumes it. The gate
+# would look live and be frozen, which is worse than off.
+#
+# The round trip the cache existed to avoid is real -- this sits in the entry
+# path and runs every cycle -- so the fix is a TTL, not removal. Five minutes
+# is well under the hourly re-grade and cuts the queries to ~12 an hour.
+NEWS_VERDICT_TTL_S = float(os.getenv("TRADING_NEWS_VERDICT_TTL_S", "300"))
 
 
 def _qqq_news_verdict():
-    """(verdict, confidence) for today's QQQ macro read, or None.
+    """(verdict, confidence) for the CURRENT QQQ macro read, or None.
 
-    Cached per day: the verdict is written once at 09:30 and re-reading it
-    every cycle would put a database round trip inside the entry path for a
-    value that cannot change. A failure returns None and the gate stands down,
-    which is the safe direction -- a database hiccup must not start refusing
-    entries.
+    Cached for NEWS_VERDICT_TTL_S, not for the day: news_watch.py re-grades
+    hourly, so an entry at noon must be able to see the noon read. A failure
+    returns None and the gate stands down, which is the safe direction -- a
+    database hiccup must not start refusing entries.
     """
     today = datetime.now(ZoneInfo("America/New_York")).date()
-    if today in _news_verdict_cache:
-        return _news_verdict_cache[today]
+    hit = _news_verdict_cache.get(today)
+    if hit is not None and (_time.monotonic() - hit[0]) < NEWS_VERDICT_TTL_S:
+        return hit[1]
     out = None
     try:
         import psycopg2
@@ -319,7 +334,7 @@ def _qqq_news_verdict():
         logger.warning("Could not read the QQQ news verdict — the direction "
                        "gate stands down for this cycle.", exc_info=True)
         return None
-    _news_verdict_cache[today] = out
+    _news_verdict_cache[today] = (_time.monotonic(), out)
     return out
 
 

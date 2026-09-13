@@ -190,36 +190,52 @@ NEWS_VETO = os.getenv("TRADING_DTE0_NEWS_VETO", "true").lower() == "true"
 NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
 NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
 
-# THE MACRO READ, ON THE SAME ROW -- AND OFF BY DEFAULT.
+# THE MACRO READ, AS AN ASYMMETRIC VETO ON DIRECTION.
 #
-# The case for it is sound and was put plainly: a name with good news still
-# weakens into a bad tape, so a single-name entry should answer to QQQ and not
-# only to itself. That is a real effect. The question is whether THIS read
-# measures it, and the rows say not yet:
+# The case: macro turns during the session. Yields drop, crude drops, the tape
+# goes risk-on at 11:00 -- and a put spread on a single name is then the worst
+# structure on the board however good that name's own news looked at 09:30.
 #
-#     QQQ verdict      n   avg session ret   down days
-#     BEARISH          8        -0.085%         5 of 8
-#     NEUTRAL          5        -0.040%         3 of 5
-#     BULLISH          1        +0.959%         0 of 1
+# NOTHING GUARDED THAT. This script consults no breadth, no VIX, no yields, no
+# oil, and the engine's objective gates are one-sided by design -- nodes.py
+# says so in as many words: "Rising yields hurt QQQ; falling yields are broadly
+# supportive." They refuse LONG exposure into risk-off. Not one of them refuses
+# a SHORT structure into risk-on. That half of the board was unguarded.
 #
-# Four and a half basis points between BEARISH and NEUTRAL, on thirteen
-# sessions. The down-day rate differs by one day. Meanwhile BEARISH is 9 of
-# the 17 QQQ verdicts ever written, so switching this on refuses bullish
-# entries on over half of all sessions -- to dodge a drag that is not
-# distinguishable from zero. That is the August macro gate again, which
-# refused 55 of 55 cycles on a day QQQ rose $6.50 off its low.
+# WHY THE TWO SIDES GET DIFFERENT THRESHOLDS. The base rates are not
+# symmetric, so a symmetric rule cannot be right. Over the 17 QQQ verdicts on
+# record -- BEARISH 9, NEUTRAL 7, BULLISH 1, and VERY_* exactly zero:
 #
-# So it is built, it is wired, and it is dark. Every run logs the macro read
-# beside the decision whether or not the gate is on, which is what puts rows
-# into macro_outcome; when BEARISH mornings actually separate from NEUTRAL
-# ones, TRADING_DTE0_MACRO_VETO=true is the whole change.
-MACRO_VETO = os.getenv("TRADING_DTE0_MACRO_VETO", "false").lower() == "true"
+#   refuse PUT  spreads when macro BULLISH+       fires  5.9% of sessions
+#   refuse CALL spreads when macro BEARISH+       fires 52.9% of sessions
+#
+# The put side is rare and cheap: this read almost never calls the tape
+# bullish, so the gate stays out of the way and speaks up exactly when it
+# has something to say. The call side would refuse over half of all
+# sessions -- and BEARISH days ran -0.085% against NEUTRAL's -0.040%, four and
+# a half basis points apart, which does not buy a refusal rate like that. That
+# is the August macro gate, which refused 55 of 55 cycles on a day QQQ rose
+# $6.50 off its low. So the call side is held at VERY_BEARISH: dormant on this
+# record, live the moment the read ever calls a real crash.
+#
+# GATING ON VERY_* ALONE WAS DEAD CODE. The first version of this refused only
+# VERY_BULLISH and VERY_BEARISH. Neither has ever printed, so it could not fire
+# on any session on record -- a switch that reads as a conservative default and
+# is in fact a no-op.
+#
+# WHAT IS STILL UNMEASURED, PLAINLY. The evidence for the put side is one
+# session: the single BULLISH day returned +0.959%, where a put spread would
+# have lost. n=1 is not a result. It is armed because the COST is bounded by
+# how rarely it fires, not because the edge is established -- and because the
+# alternative is leaving the risk-on case with no guard at all. The hourly
+# re-grade shipped today is what starts generating the rows to judge it on;
+# until then every run logs the read beside the decision.
+MACRO_VETO = os.getenv("TRADING_DTE0_MACRO_VETO", "true").lower() == "true"
 MACRO_SYMBOL = os.getenv("TRADING_DTE0_MACRO_SYMBOL", "QQQ")
-# VERY_* only, if it is ever switched on. Macro is a tilt, not a catalyst: a
-# plain BEARISH tape is the ordinary state of this read and gating on it is
-# what produces the refuse-everything failure above.
-MACRO_STRONG_BEARISH = {"VERY_BEARISH"}
-MACRO_STRONG_BULLISH = {"VERY_BULLISH"}
+# Bearish structures (put debit spreads) refused into a bullish tape.
+MACRO_REFUSE_BEARISH_ON = {"BULLISH", "VERY_BULLISH"}
+# Bullish structures refused only on an extreme -- see the base rates above.
+MACRO_REFUSE_BULLISH_ON = {"VERY_BEARISH"}
 
 
 def _macro_verdict() -> "tuple | None":
@@ -511,12 +527,12 @@ def main() -> None:
                                 float(r["lo"]), float(r["hi"]),
                                 "bullish" if bullish else "bearish", verdict)
                     continue
-            # The macro tape, as a second veto on direction. Dark by default
-            # -- see MACRO_VETO. VERY_* only even when armed.
+            # The macro tape, as a second veto on direction. Asymmetric on
+            # purpose -- see MACRO_VETO for the base rates that set each side.
             if MACRO_VETO and mv:
                 bullish = r.get("direction") != "bearish"
-                if ((bullish and mv in MACRO_STRONG_BEARISH)
-                        or ((not bullish) and mv in MACRO_STRONG_BULLISH)):
+                if mv in (MACRO_REFUSE_BULLISH_ON if bullish
+                          else MACRO_REFUSE_BEARISH_ON):
                     logger.info("%s %s %.0f/%.0f refused: the structure is %s "
                                 "and the %s tape is %s.", r["sym"], side.upper(),
                                 float(r["lo"]), float(r["hi"]),

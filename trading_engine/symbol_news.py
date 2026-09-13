@@ -557,7 +557,8 @@ def classify_day(symbol: str, day: Optional[date] = None,
     signal. Never raises: section 55 records a headline lookup taking down
     three cycles at the open with seven positions live.
     """
-    empty = {"verdict": "NEUTRAL", "confidence": 0.0, "rationale": None, "headline_count": 0}
+    empty = {"verdict": "NEUTRAL", "confidence": 0.0, "rationale": None,
+             "headline_count": 0, "graded": True}
     heads = session_headlines(symbol, day, cutoff)
     if not heads:
         return empty
@@ -593,10 +594,30 @@ def classify_day(symbol: str, day: Optional[date] = None,
             "confidence": float(out.confidence),
             "rationale": out.rationale,
             "headline_count": len(heads),
+            "graded": True,
         }
     except Exception:
-        logger.warning("News classification failed for %s.", symbol, exc_info=True)
-        return {**empty, "headline_count": len(heads)}
+        # GRADED=FALSE IS NOT A NEUTRAL READING, and the difference is the
+        # whole point of this branch.
+        #
+        # This used to return NEUTRAL at confidence 0.0, which every caller
+        # then stored as though the model had looked at the headlines and
+        # found them unremarkable. It had not; it had never been reached. An
+        # expired API key, a rate limit or a network blip would write a full
+        # day of NEUTRAL verdicts that pass every gate -- the level gate
+        # refuses neither side on NEUTRAL, and a NEUTRAL-to-NEUTRAL delta is
+        # zero, so the turn gate cannot fire either. Every guard would stand
+        # down at once, silently, and the rows would go on to poison
+        # news_verdict_history and the six scripts that measure against it.
+        #
+        # A wire outage must not read as a signal -- the rule this module
+        # already follows for missing headlines. An AUTH FAILURE READING AS
+        # NEUTRAL breaks exactly that rule. Callers check `graded` and decline
+        # to store anything when it is False.
+        logger.warning("News classification failed for %s -- NOT a NEUTRAL "
+                       "reading, nothing should be stored for it.", symbol,
+                       exc_info=True)
+        return {**empty, "headline_count": len(heads), "graded": False}
 
 
 # Retained so older callers keep working. The session window is the correct

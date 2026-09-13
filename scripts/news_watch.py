@@ -242,6 +242,7 @@ def main():
     graded_at = datetime.now(NY).replace(second=0, microsecond=0)
     print(f"NEWS WATCH  {datetime.now(NY):%Y-%m-%d %H:%M %Z}  trading day {day}")
     print(f"scraped {n_new} headlines, window opens {previous_session_close(day):%a %m-%d %H:%M} ET\n")
+    failed: list = []
     print(f"{'sym':6s} {'verdict':14s} {'conf':>5s} {'n':>3s} {'structure':20s} action")
     for sym in syms:
         heads = session_headlines(sym, day)
@@ -262,6 +263,19 @@ def main():
             continue
 
         res = classify_day(sym, day)
+        # A FAILED GRADE IS NOT A NEUTRAL ONE. classify_day returns
+        # graded=False when the model was never reached -- an expired key, a
+        # rate limit, a network blip. Storing that as NEUTRAL would write a
+        # verdict nobody produced, and NEUTRAL clears every gate: neither side
+        # is refused on it, and a NEUTRAL-to-NEUTRAL delta is zero so the turn
+        # gate cannot fire either. Every guard stands down at once, and the row
+        # goes on to poison news_verdict_history and the six scripts that
+        # measure against it. Skip the write; leave the last verdict standing.
+        if not res.get("graded", True):
+            failed.append(sym)
+            print(f"{sym:6s} {'(GRADE FAILED)':14s}       {len(heads):3d} "
+                  f"{'-':20s} model unreachable — nothing stored")
+            continue
         v = res["verdict"]
         structure = STRUCTURE.get(v, "NO_NEW_TRADE")
         actions = [position_action(s, v) for s in open_by_symbol.get(sym, [])]
@@ -305,11 +319,23 @@ def main():
         if res["rationale"]:
             print(f"       -> {res['rationale'][:150]}")
 
-    print("\nADVISORY ONLY. Nothing here places or closes an order. On the 365 "
-          "labelled rows in news_symbol_impact, news mentions do not yet predict "
-          "a move; re-check before this is allowed to gate anything.")
+    # LOUD, AND NON-ZERO. A warning in a log nobody opens is how a dead API key
+    # stays invisible for a week; cron mails on a non-zero exit.
+    if failed:
+        print(f"\n*** {len(failed)} SYMBOL(S) COULD NOT BE GRADED: "
+              f"{', '.join(failed)}")
+        print("*** The model was not reached, so NO verdict was stored for "
+              "them. The gates that read news_verdicts are running on whatever "
+              "was last written -- or on nothing. Check ANTHROPIC_API_KEY.")
+
+    print("\nThe verdict GATES both books (sections 143-144): the level gate "
+          "refuses a structure the tape is strongly against, the turn gate one "
+          "the tape has turned against since the open. Neither has yet fired on "
+          "a historical session.")
     cur.close()
     conn.close()
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

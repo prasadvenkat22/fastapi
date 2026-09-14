@@ -206,11 +206,50 @@ def submit_vertical(underlying: str, expiry: "date | str", call_put: str,
     if opening:
         long_side, short_side = "buy_to_open", "sell_to_open"
     else:
+        # A CLOSE ASKS THE BROKER WHAT IT ACTUALLY HOLDS, rather than assuming
+        # the structure the engine believes in.
+        #
+        # This hardcoded sell_to_close/buy_to_close, which is right only when
+        # the position really is one long leg and one short. On 2026-09-14 the
+        # account held AVGO 350 and 342.5 puts BOTH LONG -- the opening fill
+        # had not established a short leg -- and every close was rejected with
+        # "Buy To Cover order cannot be placed unless closing a short
+        # position". The orphan stop fired correctly at -58% and was refused
+        # eight times in a row, once a minute, because the exit asked to cover
+        # a short that did not exist. The target, the stall watch and the 15:45
+        # flatten all route through here, so the position had NO working exit
+        # at all on expiry day.
+        #
+        # The broker's position sign is the only authority on which side a leg
+        # is. Read it, and fall back to the old assumption when the lookup
+        # fails -- a read failure must not block an exit.
         long_side, short_side = "sell_to_close", "buy_to_close"
+        try:
+            held = {p.get("symbol"): float(p.get("quantity") or 0)
+                    for p in open_positions()}
+            lq, sq = held.get(long_sym, 0.0), held.get(short_sym, 0.0)
+            if lq or sq:
+                long_side = "sell_to_close" if lq >= 0 else "buy_to_close"
+                short_side = "buy_to_close" if sq < 0 else "sell_to_close"
+                if (lq > 0) == (sq > 0) and lq and sq:
+                    logger.warning(
+                        "%s %s/%s: both legs are %s at the broker, not a "
+                        "spread. Closing each on its real side.", underlying,
+                        long_strike, short_strike,
+                        "long" if lq > 0 else "short")
+        except Exception:
+            logger.warning("Could not read positions to choose close sides — "
+                           "assuming a normal spread.", exc_info=True)
 
     # The NET direction of money: opening a credit spread collects, closing it
-    # pays, and a debit spread is the mirror of both.
+    # pays, and a debit spread is the mirror of both. When BOTH legs are being
+    # sold -- the two-longs case above -- the package always collects, whatever
+    # the engine thinks the structure was.
     collecting = is_credit if opening else not is_credit
+    if not opening and long_side == short_side == "sell_to_close":
+        collecting = True
+    elif not opening and long_side == short_side == "buy_to_close":
+        collecting = False
 
     payload = {
         "class": "multileg",

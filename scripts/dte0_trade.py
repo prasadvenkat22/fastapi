@@ -85,8 +85,17 @@ MAX_BUDGET = float(os.getenv("TRADING_DTE0_MAX_BUDGET", "1500"))
 # engine already covers is the opposite of diversifying into single names.
 # Every name with Monday and Wednesday expiries, checked against the chain on
 # 2026-09-12. QQQ is excluded above; SNDK and CRWV list Fridays only.
+# MU added 2026-09-14. Every 0DTE name the engine manages should also be a name
+# it can OPEN, otherwise the book can only inherit a position in that symbol and
+# never choose one -- which is how MU came to be held, managed and ungraded at
+# the same time. Keep this in step with TRADING_HOURLY_SYMBOLS: a name traded
+# here with no news row cannot be vetoed by the news gate.
+#
+# Both directions, already: rank() is called for "call" and "put" with
+# structure="debit", so each name is considered as a call debit spread AND a
+# put debit spread and the better EV wins. Nothing here is long-only.
 SYMBOLS = os.getenv("TRADING_DTE0_TRADE_SYMBOLS",
-                    "NVDA,TSLA,AAPL,AMZN,MSFT,META,GOOGL,AVGO")
+                    "NVDA,TSLA,AAPL,AMZN,MSFT,META,GOOGL,AVGO,MU")
 
 # A WIDER UNIVERSE NEEDS THE LIQUIDITY GATE THAT dte0_shadow ALREADY HAS.
 #

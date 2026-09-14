@@ -193,7 +193,10 @@ OUT_PATH = os.getenv("TRADING_NEWS_ENRICHED_PATH", "/app/data/news_enriched.json
 
 # How many macro headlines a verdict needs. One risk-off story is not a
 # risk-off tape, and a mean over two swings on either of them.
-MIN_ARTICLES = int(os.getenv("TRADING_MACRO_MIN_ARTICLES", "4"))
+# TOPICS, not headlines. Four wires carrying one story is one fact, and a
+# verdict must not claim four. Two independent topics agreeing is a weaker
+# claim than four but an honest one; below that there is no macro read.
+MIN_TOPICS = int(os.getenv("TRADING_MACRO_MIN_TOPICS", "2"))
 
 # How lopsided the vote must be to call a direction. 0.2 = 60/40.
 VERDICT_MARGIN = float(os.getenv("TRADING_MACRO_MARGIN", "0.20"))
@@ -398,6 +401,28 @@ MOVE_DOWN = {
     "slump", "slumps", "tumble", "tumbles", "down", "weak", "steady", "hold",
     "holds",
 }
+# WHICH TOPIC A DRIVER BELONGS TO. Aggregation happens WITHIN a topic and then
+# across topics, never across raw headlines -- see macro_verdict(). On the
+# 2026-09-13 tape three of the seven directional headlines were the same Strait
+# of Hormuz supply event reported three ways, so a flat count made one story
+# worth three votes and would have swamped a single rates headline pointing the
+# other way. Correlated rows are not independent evidence; the repo already
+# learned that counting sessions rather than rows for correlated names.
+TOPIC = {}
+for _t, _ds in {
+    "energy": {"oil", "crude", "brent", "wti", "gas prices", "supply"},
+    "rates": {"yield", "yields", "rate", "rates", "rate hike"},
+    "inflation": {"inflation", "cpi", "ppi", "pce"},
+    "trade": {"tariff", "tariffs", "trade war"},
+    "labour": {"unemployment", "jobless", "payrolls", "jobs report"},
+    "growth": {"gdp", "growth", "recession", "deficit", "debt", "earnings"},
+    "risk": {"vix", "volatility"},
+    "equities": {"stocks", "shares", "futures", "equities", "nasdaq", "s&p",
+                 "dow"},
+}.items():
+    for _d in _ds:
+        TOPIC[_d] = _t
+
 # "on" is deliberately NOT a separator: it is a preposition far more often than
 # a conjunction, and splitting on it cut "Tariffs on Chinese goods raised"
 # between the driver and its direction.
@@ -411,7 +436,7 @@ def macro_direction(text: str) -> tuple:
     "Shares slip in Asia as oil climbs, rate hikes loom" is three, and scoring
     the whole string as one blurs them into whichever verb the model noticed.
     """
-    votes, why = [], []
+    votes, why, drivers = [], [], []
     for clause in CLAUSE_SPLIT.split(text):
         c = clause.strip()
         if len(c) < 4:
@@ -425,12 +450,14 @@ def macro_direction(text: str) -> tuple:
             if has_term(d, c.lower()):
                 votes.append(-move)
                 why.append(d + ("+" if move > 0 else "-"))
+                drivers.append(d)
                 break
         else:
             for d in DIRECT_DRIVERS:
                 if has_term(d, c.lower()):
                     votes.append(move)
                     why.append(d + ("+" if move > 0 else "-"))
+                    drivers.append(d)
                     break
     if not votes:
         # SUPPLY SHOCKS HAVE NO MOVEMENT VERB. "Vessel struck in Strait of
@@ -448,10 +475,13 @@ def macro_direction(text: str) -> tuple:
         low = text.lower()
         geo = sorted({g for g in MACRO_GEO if has_term(g, low)})
         if geo and any(has_term(d, low) for d in DISRUPTION):
-            return -1, "supply risk: " + ", ".join(geo[:3])
-        return 0, "no driver+direction"
+            return -1, "supply risk: " + ", ".join(geo[:3]), "energy"
+        return 0, "no driver+direction", None
     total = sum(votes)
-    return (1 if total > 0 else -1 if total < 0 else 0), " ".join(why)
+    # ONE TOPIC PER HEADLINE -- the first driver found. A headline counted in
+    # two topics votes twice, which is the double-count this exists to stop.
+    topic = next((TOPIC[d] for d in drivers if d in TOPIC), "other")
+    return (1 if total > 0 else -1 if total < 0 else 0), " ".join(why), topic
 
 
 # --------------------------------------------------------------- 1. fetch
@@ -657,7 +687,8 @@ def enrich(articles: list) -> list:
     macro = [a for a in articles if a["is_macro"]]
     if macro:
         for a in macro:
-            a["rule_dir"], a["rule_why"] = macro_direction(a["scored_text"])
+            (a["rule_dir"], a["rule_why"],
+             a["topic"]) = macro_direction(a["scored_text"])
         try:
             for a, r in zip(macro, finbert([m["scored_text"] for m in macro])):
                 a["sentiment"] = r["label"]
@@ -672,6 +703,7 @@ def enrich(articles: list) -> list:
     for a in articles:
         a.setdefault("rule_dir", 0)
         a.setdefault("rule_why", "")
+        a.setdefault("topic", None)
         a.setdefault("sentiment", None)
         a.setdefault("finbert_signed", None)
     return articles
@@ -725,34 +757,50 @@ def classify_macro(a: dict, ents: list) -> tuple:
 
 
 def macro_verdict(scored: list) -> "tuple | None":
-    """(label, score in [-1,1], n) from the rule votes, or None if too thin.
+    """(label, net in [-1,1], n_topics, per_topic) or None if too thin.
 
-    NOT A MEAN OF SENTIMENT SCORES. A mean let one +0.91 advert cancel a real
-    -0.95 risk-off headline on the 2026-09-13 tape and drag a bearish reading
-    to neutral. Two defences:
+    TWO STAGES, AND NEVER ONE BLEND. Headlines aggregate WITHIN a topic, and
+    topics aggregate across. Nothing averages an oil headline against a
+    payrolls headline as though they were two draws from one distribution --
+    they are two different facts about two different things.
 
-      the votes are BOUNDED to +/-1, so no single article can carry the
-      aggregate the way a 0.91 confidence could; and
+    WHY, CONCRETELY. On the 2026-09-13 tape three of the seven directional
+    headlines were the SAME Strait of Hormuz supply event, reported by three
+    wires. A flat count made one story worth three votes, so it would have
+    outvoted a rates headline pointing the other way purely by being
+    syndicated. Correlated rows are not independent evidence. This repository
+    already learned that lesson once, clustering by session rather than
+    counting rows for correlated names.
 
-      the score is the NET PROPORTION of directional votes, which is a
-      majority measure -- it moves only when articles genuinely disagree in
-      count, not when one of them is loud.
+    So each topic gets ONE vote: the sign of its internal majority, regardless
+    of how many wires carried it. The overall score is the net across topic
+    votes, which is bounded, resistant to a single loud article, and resistant
+    to a single heavily-syndicated story -- the failure a mean of confidences
+    could not survive at all.
 
-    Articles where the rules find no driver+direction do not vote. They are
-    counted in n_seen and reported, because "twelve macro stories, two of them
-    directional" is a materially different day from "twelve, all directional"
-    and the verdict should not hide it.
+    MIN_ARTICLES now counts TOPICS, not headlines. Four wires on one story is
+    one fact, and a verdict should not claim four.
     """
-    votes = [a["rule_dir"] for a in scored if a.get("rule_dir")]
-    if len(votes) < MIN_ARTICLES:
-        logger.info("only %d directional macro article(s) of %d, below the %d "
-                    "minimum -- no verdict", len(votes), len(scored),
-                    MIN_ARTICLES)
+    directional = [a for a in scored if a.get("rule_dir")]
+    by_topic: dict = {}
+    for a in directional:
+        by_topic.setdefault(a.get("topic") or "other", []).append(a["rule_dir"])
+
+    per_topic = {}
+    for t, votes in by_topic.items():
+        net = sum(votes)
+        per_topic[t] = (1 if net > 0 else -1 if net < 0 else 0, len(votes))
+
+    voting = [d for d, _ in per_topic.values() if d]
+    if len(voting) < MIN_TOPICS:
+        logger.info("only %d directional topic(s) from %d headline(s), below "
+                    "the %d minimum -- no verdict", len(voting),
+                    len(directional), MIN_TOPICS)
         return None
-    net = sum(votes) / len(votes)
+    net = sum(voting) / len(voting)
     label = ("positive" if net > VERDICT_MARGIN
              else "negative" if net < -VERDICT_MARGIN else "neutral")
-    return label, net, len(votes)
+    return label, net, len(voting), per_topic
 
 
 def store(verdict: tuple, now: datetime) -> int:
@@ -766,7 +814,7 @@ def store(verdict: tuple, now: datetime) -> int:
     read" would have been silently answering it with FinBERT numbers for every
     QQQ row. A convenience in the writer is not worth a lie in the data.
     """
-    label, mean, n = verdict
+    label, mean, n = verdict[0], verdict[1], verdict[2]
     conn = psycopg2.connect(_dsn())
     conn.autocommit = True
     with conn, conn.cursor() as cur:
@@ -862,8 +910,12 @@ def main() -> None:
               "which leaves the gates on the last good verdict rather than a "
               "manufactured neutral.")
         return
-    label, mean, n = v
-    print(f"\nMACRO VERDICT  {label.upper()}  mean {mean:+.3f}  over {n} headline(s)")
+    label, net, n, per_topic = v
+    print("\nBY TOPIC (one vote each, however many wires carried it):")
+    for t, (d, cnt) in sorted(per_topic.items()):
+        arrow = {1: "RISK_ON ", -1: "RISK_OFF", 0: "  split "}[d]
+        print(f"  {t:<10} {arrow}  from {cnt} headline(s)")
+    print(f"\nMACRO VERDICT  {label.upper()}  net {net:+.3f}  over {n} topic(s)")
     if args.dry_run:
         print("DRY RUN — nothing written.")
         return

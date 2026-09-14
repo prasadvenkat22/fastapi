@@ -542,6 +542,32 @@ def main() -> None:
     # precedes a bad session for single names; without it the question stays
     # open forever and the gate above stays dark on no evidence rather than on
     # evidence.
+    # THE RAW FACTORS, NOT JUST THE VERDICT LABEL.
+    #
+    # "macro BEARISH" tells you nothing about WHY, and the why is the part that
+    # changes hourly. Crude, the 10Y and VIX are what the macro read is now
+    # built from (source='objective'), so the line prints them beside it: a
+    # refusal that says "crude -2.3%, 10Y -1.8bp, VIX -3.2%" can be argued with,
+    # and one that says "BEARISH" cannot.
+    factors = ""
+    try:
+        from trading_engine.data_feed import fetch_oil, fetch_tnx, fetch_vix
+
+        bits = []
+        for name, fn, unit in (("crude", fetch_oil, "%"), ("10Y", fetch_tnx, "bp"),
+                               ("VIX", fetch_vix, "%")):
+            try:
+                rd = fn()
+                if rd is None:
+                    continue
+                mvv = (rd.change_bps if unit == "bp" else rd.change_pct)
+                bits.append(f"{name} {mvv:+.2f}{unit}")
+            except Exception:
+                continue
+        factors = " | ".join(bits)
+    except Exception:
+        pass
+
     macro = _macro_verdict()
     mv = mopen = None
     mdelta = 0.0
@@ -556,8 +582,15 @@ def main() -> None:
                     f" as of {masof:%H:%M}" if masof else "", mopen or "-", turn,
                     "on" if MACRO_VETO else "off",
                     "on" if MACRO_DELTA_GATE else "off")
+        if factors:
+            logger.info("   driven by: %s", factors)
+        logger.info("   -> %s spreads %s, %s spreads %s",
+                    "PUT", "REFUSED" if mv in MACRO_REFUSE_BEARISH_ON else "allowed",
+                    "CALL", "REFUSED" if mv in MACRO_REFUSE_BULLISH_ON else "allowed")
     else:
-        logger.info("macro read (%s): none today.", MACRO_SYMBOL)
+        logger.info("macro read (%s): none today — both macro gates stand "
+                    "down.%s", MACRO_SYMBOL,
+                    f"  (factors: {factors})" if factors else "")
 
     # Best surviving candidate per symbol per side.
     best: dict = {}

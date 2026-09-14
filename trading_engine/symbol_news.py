@@ -630,7 +630,32 @@ def _verdict_from_score(score: float) -> str:
 # RSS/NER/FinBERT row that news_enrich.py writes. Everything else reads
 # Polygon's aspect score. Kept as a mapping rather than an if, so adding a
 # second macro proxy later is a line and not a branch.
-GRADE_SOURCE = {os.getenv("TRADING_MACRO_SYMBOL", "QQQ").upper(): "finbert"}
+# ARMED 2026-09-14: the macro name now grades from PRICES, not text.
+#
+# The text read printed -0.67 at 09:00, 10:00, 11:00, 12:00, 13:00, 14:00 and
+# 15:00 ET -- seven identical readings -- through a session where crude fell 3%,
+# the 10Y turned from +2.9bp to -1.8bp, VIX collapsed 4% and QQQ rose 1.13% off
+# an 11:00 turn. The price read called that turn while it was happening and
+# closed at +0.694 against the text read's -0.714.
+#
+# WHAT IT COST THAT DAY, and the caveats belong with the number. Put spreads
+# closed after 11:00 ET booked -686 across 12 trades against -226 on 9 calls --
+# the short side three times worse on a rising tape. BUT those are CLOSE times
+# and a gate blocks only NEW entries: just 4 put spreads were actually opened
+# after 11:00, and the largest single loss (AVGO -307) was opened at 10:40 and
+# would not have been refused. The true saving is smaller than -686 and cannot
+# be pinned exactly, because trading_history.opened_at is null and its strategy
+# column labels put spreads BULL_CALL_SPREAD.
+#
+# AND THE PRIOR IS A WARNING. These same series measured as one-sided risk-off
+# entry filters LOST -- crude filters out the better half of entries, TNX at 2bp
+# made results worse. A two-sided intraday directional read is a different
+# claim, but it is one session of evidence, armed deliberately rather than
+# because it is proven. TRADING_MACRO_GRADE_SOURCE=finbert reverts it with no
+# deploy; both rows keep being written either way, so macro_outcome.py can
+# still score the one that is not driving.
+GRADE_SOURCE = {os.getenv("TRADING_MACRO_SYMBOL", "QQQ").upper():
+                os.getenv("TRADING_MACRO_GRADE_SOURCE", "objective")}
 DEFAULT_GRADE_SOURCE = "polygon"
 
 

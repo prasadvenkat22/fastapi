@@ -47,17 +47,33 @@ NY = ZoneInfo("America/New_York")
 # inside ordinary words and flood the tag with noise, which is why the
 # tickers themselves are only used where they are long enough to be
 # unambiguous.
+# ONE NAME PER FETCHED TICKER, AND NOTHING ELSE.
+#
+# This carried seventeen names against a fetch list of nine, so CRWV, DELL,
+# MRVL, PANW, SNDK, STX and WDC were graded every hour with no source that
+# could ever supply them. news_watch printed the same seven "GRADE FAILED"
+# lines every run and exited non-zero -- a cron failure mail an hour for a
+# non-problem, and a real NVDA failure would have arrived inside a list that
+# always had seven entries.
+#
+# Silencing that in the reporting was the wrong half of the fix. The list
+# itself was the bug: Polygon is the only ticker news source now, it fetches
+# TRADING_HOURLY_SYMBOLS, and a name absent from that list cannot be graded by
+# anything. Keep the two in step.
+#
+# Removed 2026-09-14 with the ticker legs they belonged to. The aliases are
+# recorded here rather than deleted outright, because putting a name BACK means
+# adding it to TRADING_HOURLY_SYMBOLS first and the wire spellings are the part
+# that is easy to get wrong:
+#
+#     SNDK ["sandisk","sndk"]       STX  ["seagate","stx technology"]
+#     WDC  ["western digital","wdc"]  DELL ["dell technologies","dell"]
+#     PANW ["palo alto networks","panw"]  MRVL ["marvell","mrvl"]
+#     CRWV ["coreweave","crwv"]
 ALIASES: Dict[str, List[str]] = {
-    "SNDK": ["sandisk", "sndk"],
-    "STX": ["seagate", "stx technology"],
-    "WDC": ["western digital", "wdc"],
     "MU": ["micron"],
     "NVDA": ["nvidia", "nvda"],
-    "DELL": ["dell technologies", "dell"],
     "AVGO": ["broadcom", "avgo"],
-    "PANW": ["palo alto networks", "panw"],
-    "MRVL": ["marvell", "mrvl"],
-    "CRWV": ["coreweave", "crwv"],
     "AMZN": ["amazon", "amzn"],
     "GOOGL": ["alphabet", "googl", "google"],
     "META": ["meta platforms", "facebook"],

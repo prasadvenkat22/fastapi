@@ -81,6 +81,14 @@ def _covered() -> set:
 
 COVERED = _covered()
 
+# DRIFT DETECTOR. ALIASES and the fetch list were allowed to diverge silently
+# and it cost seven false alarms an hour; this says so the first time instead.
+_DRIFT = set(ALIASES) - COVERED
+if _DRIFT:
+    print(f"NOTE: {', '.join(sorted(_DRIFT))} are in ALIASES but not in the "
+          f"fetch list — they cannot be graded. Add them to "
+          f"TRADING_HOURLY_SYMBOLS or drop them from ALIASES.")
+
 # Verdict -> what to put on if nothing is open. Debit spreads both ways: the
 # 0DTE book's own grid says a long structure wants a shallow ITM long leg and
 # real OTM room, and the same asymmetry applies whichever side you take.

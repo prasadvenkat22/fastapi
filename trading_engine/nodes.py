@@ -16,7 +16,6 @@ from typing import List
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from langchain_anthropic import ChatAnthropic
 
 from GENAI.vector_stores import VoyageEmbeddings
 from schemas_pgrs.trading_schema import MarketSentimentOutput
@@ -996,21 +995,15 @@ BREADTH_COLLAPSE_RATIO = float(os.getenv("TRADING_BREADTH_COLLAPSE_RATIO", "0.40
 # every refusal, so a few weeks of forward data answers it either way.
 MACRO_LLM_GATE = os.getenv("TRADING_MACRO_LLM_GATE", "true").lower() == "true"
 
-# Model for the macro verdict. LEFT ON OPUS, unlike the per-symbol news
-# sentiment which moved to Haiku after being checked on a real case.
+# The macro verdict had a model behind it until 2026-09-13. It does not now:
+# the Claude call was removed at the operator's instruction and no grader has
+# replaced it. The four objective terms -- breadth level and trend, VIX level
+# and velocity, yield velocity -- are what the macro read consists of today.
 #
-# The two are not the same task. Headline sentiment is a classification over
-# one day's text. This one synthesises breadth, VIX level AND velocity, the
-# 10-year, up to thirty headlines and three semantically similar past ones
-# into a risk verdict -- and it is the term that would gate live entries if
-# TRADING_MACRO_LLM_GATE were ever switched back on. Downgrading a decision
-# input while it is cheap to run is how you find out it mattered later.
-#
-# The saving would be marginal anyway: at MACRO_REFRESH_MINUTES=60 this runs
-# about seven times a session, so Haiku would save a few dollars a month
-# against the twelve-fold cut the interval change already delivered. Env var
-# so the choice stays yours, and so a future comparison needs no deploy.
-MACRO_MODEL = os.getenv("TRADING_MACRO_MODEL", "claude-opus-5")
+# TRADING_MACRO_LLM_GATE stays in the code because the wiring is still there
+# and a FinBERT read of the macro RSS tape would slot straight into it. With
+# no grader configured the verdict is NOT_GRADED, which is inert while the
+# gate is off and refusing while it is on.
 
 # Standard Wilder's RSI(14) thresholds.
 RSI_OVERBOUGHT = float(os.getenv("TRADING_RSI_OVERBOUGHT", "70.0"))
@@ -1860,7 +1853,10 @@ async def market_signals_agent(state: TradingState) -> dict:
             breadth_trend.recent_peak_ratio, breadth_trend.reading_count,
         )
 
-    llm = None if cache_fresh else ChatAnthropic(model=MACRO_MODEL, max_tokens=1024).with_structured_output(MarketSentimentOutput)
+    # THE MACRO LLM CALL IS GONE (2026-09-13), at the operator's instruction.
+    # The prompt below is kept because it documents exactly what the four
+    # objective terms are being asked to stand in for, and because a FinBERT
+    # read of the macro tape would answer the same question.
     prompt = (
         "You are a macro risk classifier for a same-day QQQ options trading system. "
         "Classify today's market risk as GOOD (safe to hold/enter a bullish position) or BAD (risk-off).\n\n"
@@ -1905,21 +1901,28 @@ async def market_signals_agent(state: TradingState) -> dict:
         #
         # Not cached either: _write_macro_cache would persist a verdict the
         # model never gave and suppress the retry for the cache's whole life.
-        try:
-            llm_result: MarketSentimentOutput = await llm.ainvoke(prompt)
-            llm_verdict = llm_result.verdict
-            llm_confidence = llm_result.confidence_score
-            llm_risk_factor = llm_result.risk_factor
-            logger.info("Macro verdict %s (confidence %.2f): %s", llm_verdict, llm_confidence, llm_risk_factor)
-            _write_macro_cache(llm_verdict, llm_confidence, llm_risk_factor)
-        except Exception:
-            logger.exception(
-                "Macro verdict unavailable — treating as BAD%s. The cycle is NOT "
-                "abandoned.",
-                " (inert: TRADING_MACRO_LLM_GATE is off)" if not MACRO_LLM_GATE else "",
-            )
-            llm_verdict, llm_confidence = "BAD", 0.0
-            llm_risk_factor = "macro model unavailable"
+        # NOT GRADED, AND NOT WRITTEN. The model that produced this verdict
+        # was removed; nothing has replaced it yet. The four objective terms
+        # below -- breadth level, breadth trend, VIX level, VIX velocity,
+        # yield velocity -- carry the macro read on their own, which is the
+        # configuration the engine has actually been running since
+        # TRADING_MACRO_LLM_GATE was switched off on 2026-08-25.
+        #
+        # WHY NOT KEEP DEGRADING TO BAD. That fallback was correct while the
+        # call existed and could fail transiently: with the gate ON an unknown
+        # macro read must not PERMIT a bullish entry. But there is no call to
+        # fail now, so "BAD" would no longer mean "the model is down", it
+        # would be a permanent fabricated verdict written to
+        # trading_macro_verdicts every hour -- and macro_outcome.py measures
+        # that table. A dead API key was already doing this: every cycle since
+        # the key expired logged "treating as BAD" and recorded it.
+        #
+        # NOT_GRADED is inert at line ~1600 the same way BAD is while the gate
+        # is off. If TRADING_MACRO_LLM_GATE is ever switched back on with no
+        # grader wired in, it refuses rather than permits -- the same safe
+        # direction, without the fabricated data.
+        llm_verdict, llm_confidence = "NOT_GRADED", 0.0
+        llm_risk_factor = "no macro grader configured"
 
     # VIX is gated on level *and* velocity — a sharp intraday spike is
     # risk-off even when the absolute level is still under the ceiling,

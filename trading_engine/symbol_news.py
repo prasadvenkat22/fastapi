@@ -231,22 +231,32 @@ LOOKBACK_DAYS = int(os.getenv("TRADING_NEWS_LOOKBACK_DAYS", "3"))
 # whichever vector sorts last and can flip a verdict for no reason.
 MAX_HEADLINES = int(os.getenv("TRADING_NEWS_MAX_HEADLINES", "45"))
 
-# Haiku, not Opus, and the switch is an ENV VAR so reverting costs no deploy.
+# NO LANGUAGE MODEL GRADES NEWS HERE ANY MORE (2026-09-13).
 #
-# Headline sentiment is a classification, which is the task Haiku is built for,
-# and it was checked rather than assumed. On the 2026-09-04 SanDisk headlines
-# -- the exact case this whole feature exists for -- all three models returned
-# the same answer with the same reasoning:
+# Claude Haiku classified every symbol-day until today and was removed at the
+# operator's instruction. Polygon's aspect-based sentiment takes its place --
+# see NEWS_BACKEND. That is the right shape for the job: Polygon reads the
+# article body and emits a verdict PER TICKER, which is exactly what a
+# sentence classifier cannot do. FinBERT was tried on 2026-09-12 and dropped
+# for that reason (commit 4ea2e30f7): handed the bare headline
 #
-#     claude-opus-5     NEUTRAL  conf 0.70  2.7s  "both items are backward-looking"
-#     claude-haiku-4-5  NEUTRAL  conf 0.95  1.5s  "merely lists SNDK in a round-up"
-#     claude-sonnet-5   NEUTRAL  conf 0.85  2.8s  "generic round-up ... already-occurred"
+#     "Nike Is Being Deleted From the S&P 100. Is Its Seat in the Dow
+#      Jones Industrial Average in Jeopardy?"
 #
-# Haiku is $1/$5 per MTok against Opus at $5/$25, so this is 5x cheaper on the
-# one call that scales with news volume. ONE TEST CASE IS NOT VALIDATION: if a
-# verdict ever looks wrong, set TRADING_NEWS_MODEL=claude-opus-5 and compare
-# before concluding the prompt is at fault.
-NEWS_MODEL = os.getenv("TRADING_NEWS_MODEL", "claude-haiku-4-5")
+# it returned -0.81 for SanDisk, the company being ADDED. Polygon returned
+# positive, correctly.
+#
+# WHAT IS LOST, STATED HONESTLY. The model was doing work a score cannot:
+# weighing headlines rather than counting them, recognising that a story
+# recapping yesterday's move is already priced, and writing the rationale that
+# made a verdict auditable. Polygon gives a number and an article count. On
+# the 2026-09-04 SanDisk case the model's value was precisely the judgement
+# "merely lists SNDK in a round-up" -- a distinction a sentiment score does
+# not draw, and one that keeps a round-up from reading as a catalyst.
+#
+# So this is a real trade, not a free removal: cheaper, no key, no vendor in
+# the entry path, and a coarser read. If verdicts start looking wrong, that
+# judgement is the thing that went missing.
 
 
 # SECTOR TERMS WERE TRIED HERE AND REMOVED THE SAME DAY (2026-09-12).
@@ -546,6 +556,96 @@ def verdict_at(cur, symbol: str, day: date,
     return cur.fetchone()
 
 
+# WHICH BACKEND GRADES A SYMBOL'S NEWS.
+#
+# "polygon"  aspect-based sentiment, already fetched hourly by news_hourly.py
+#            and stored in symbol_sentiment_hourly. No model call, no API key,
+#            no new dependency -- the data is on the box already.
+# "none"     refuse to grade. Gates stand down. Use this to run the book on
+#            EV, edge and structure alone.
+#
+# THERE IS NO LLM OPTION ANY MORE. The Claude call was removed on 2026-09-13
+# at the operator's instruction. See NEWS_BACKEND_NOTES below for what that
+# costs, because it is not nothing.
+NEWS_BACKEND = os.getenv("TRADING_NEWS_BACKEND", "polygon").lower()
+
+# Polygon's per-ticker score -> the five-point verdict scale.
+#
+# THESE THRESHOLDS ARE CHOSEN, NOT FITTED, and they are the number to revisit
+# first. Polygon emits positive/negative/neutral per ticker with a score in
+# [-1, 1]; the gates downstream want VERY_BEARISH..VERY_BULLISH. Every cut
+# point here changes how often those gates fire.
+#
+# THE GATE THRESHOLDS WERE DERIVED ON THE CLAUDE DISTRIBUTION AND DO NOT
+# TRANSFER. Sections 143-144 set the level gate asymmetrically because the
+# Claude read printed BEARISH on 53% of sessions and BULLISH on 6%. Polygon's
+# distribution is different -- on the first 15 rows it skews neutral-positive,
+# with no standing bearish tilt at all. So the asymmetry those gates were
+# given may now be backwards, and the honest position is that the gate
+# thresholds must be re-derived once this has a few weeks of rows. Until then
+# the gates are running on a calibration taken from a different instrument.
+VERY_SCORE = float(os.getenv("TRADING_NEWS_VERY_SCORE", "0.70"))
+PLAIN_SCORE = float(os.getenv("TRADING_NEWS_PLAIN_SCORE", "0.25"))
+
+
+def _verdict_from_score(score: float) -> str:
+    """Polygon's [-1, 1] aspect score as a five-point verdict."""
+    if score >= VERY_SCORE:
+        return "VERY_BULLISH"
+    if score >= PLAIN_SCORE:
+        return "BULLISH"
+    if score <= -VERY_SCORE:
+        return "VERY_BEARISH"
+    if score <= -PLAIN_SCORE:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def _polygon_grade(symbol: str, day: date, cutoff: Optional[dtime]) -> Optional[dict]:
+    """The stored Polygon aspect sentiment for this symbol, as a verdict.
+
+    Reads symbol_sentiment_hourly rather than calling Polygon again:
+    news_hourly.py already fetches on a paced schedule and this must not
+    double the API spend or race it.
+
+    Takes the LATEST row at or before the cutoff, so a backtest asking for
+    09:45 gets the 09:00 read and not the afternoon's -- the same rule
+    verdict_at() follows for verdicts.
+    """
+    at = (datetime.combine(day, cutoff, tzinfo=NY) if cutoff
+          else datetime.now(NY))
+    try:
+        import psycopg2
+
+        with psycopg2.connect(_dsn()) as c, c.cursor() as cur:
+            cur.execute(
+                "SELECT label, score, headline_count, rationale, asof "
+                "FROM symbol_sentiment_hourly "
+                "WHERE symbol=%s AND source='polygon' AND trading_day=%s "
+                "  AND asof <= %s "
+                "ORDER BY asof DESC LIMIT 1", (symbol.upper(), day, at))
+            row = cur.fetchone()
+    except Exception:
+        logger.warning("Polygon sentiment unreadable for %s.", symbol,
+                       exc_info=True)
+        return None
+    if not row:
+        return None
+    label, score, n, rationale, asof = row
+    score = float(score or 0.0)
+    return {
+        "verdict": _verdict_from_score(score),
+        # Confidence is the magnitude of the aspect score. It is NOT a
+        # probability and nothing should read it as one -- it exists so the
+        # QQQ direction gate's 0.70 floor has something to compare against.
+        "confidence": min(1.0, abs(score)),
+        "rationale": (rationale or f"polygon aspect score {score:+.2f} "
+                                   f"({label}) over {n or 0} article(s)"),
+        "headline_count": int(n or 0),
+        "graded": True,
+    }
+
+
 def classify_day(symbol: str, day: Optional[date] = None,
                  cutoff: Optional[dtime] = None) -> dict:
     """{verdict, confidence, rationale, headline_count} for the news a trader
@@ -562,62 +662,30 @@ def classify_day(symbol: str, day: Optional[date] = None,
     heads = session_headlines(symbol, day, cutoff)
     if not heads:
         return empty
-    try:
-        from langchain_anthropic import ChatAnthropic
 
-        llm = ChatAnthropic(
-            model=NEWS_MODEL, max_tokens=1024,
-        ).with_structured_output(NewsSentiment)
-        listed = "\n".join(f"- {h}" for h in heads[:25])
-        out = llm.invoke(
-            f"You are classifying one trading day's news for {symbol} for an options "
-            "trading system that will size a weekly vertical spread on the answer.\n\n"
-            "Judge ONLY the direct implication for this company's share price over the "
-            "next five trading days. A headline that merely mentions the ticker in a "
-            "round-up of movers is NEUTRAL. A headline describing an already-completed "
-            "move is NEUTRAL -- the move is in the price. Reserve VERY_BULLISH and "
-            "VERY_BEARISH for news that re-rates the business.\n\n"
-            "THESE HEADLINES WERE PUBLISHED SINCE THE PREVIOUS SESSION'S CLOSE AND "
-            "ARE NOT RE-REPORTS. Near-duplicates of stories this name already "
-            "carried in the last two weeks have been removed before you see them, "
-            "so what remains is what is NEW this morning and not yet in the price. "
-            "Judge it as new information. A story that merely recaps what the LAST "
-            "session already did is still NEUTRAL: that move is priced.\n\n"
-            "WEIGH THE HEADLINES, DO NOT COUNT THEM. Ten repetitive 'Is X a Buy?' "
-            "pieces are not a bullish signal; one credible report of a cancelled "
-            "order, a guidance change or an SEC filing outranks all of them. "
-            "Syndicated near-duplicates of the same story are ONE event, not many.\n\n"
-            f"New headlines about {symbol} since the previous close:\n{listed}"
-        )
-        return {
-            "verdict": out.verdict,
-            "confidence": float(out.confidence),
-            "rationale": out.rationale,
-            "headline_count": len(heads),
-            "graded": True,
-        }
-    except Exception:
-        # GRADED=FALSE IS NOT A NEUTRAL READING, and the difference is the
-        # whole point of this branch.
-        #
-        # This used to return NEUTRAL at confidence 0.0, which every caller
-        # then stored as though the model had looked at the headlines and
-        # found them unremarkable. It had not; it had never been reached. An
-        # expired API key, a rate limit or a network blip would write a full
-        # day of NEUTRAL verdicts that pass every gate -- the level gate
-        # refuses neither side on NEUTRAL, and a NEUTRAL-to-NEUTRAL delta is
-        # zero, so the turn gate cannot fire either. Every guard would stand
-        # down at once, silently, and the rows would go on to poison
-        # news_verdict_history and the six scripts that measure against it.
-        #
-        # A wire outage must not read as a signal -- the rule this module
-        # already follows for missing headlines. An AUTH FAILURE READING AS
-        # NEUTRAL breaks exactly that rule. Callers check `graded` and decline
-        # to store anything when it is False.
-        logger.warning("News classification failed for %s -- NOT a NEUTRAL "
-                       "reading, nothing should be stored for it.", symbol,
-                       exc_info=True)
+    if NEWS_BACKEND == "none":
+        # Explicitly not grading. graded=False so news_watch stores nothing --
+        # an ungraded day must not become a table full of NEUTRALs that clear
+        # every gate. See the graded contract above.
         return {**empty, "headline_count": len(heads), "graded": False}
+
+    if NEWS_BACKEND == "polygon":
+        g = _polygon_grade(symbol, day, cutoff)
+        if g:
+            return g
+        # NO POLYGON ROW IS NOT A NEUTRAL READING. news_hourly.py only fetches
+        # the traded tickers, so QQQ and the untraded names in ALIASES have no
+        # row here and never will -- QQQ because Polygon structurally cannot
+        # supply a macro read (ticker=QQQ returns ETF comparisons). Returning
+        # NEUTRAL for them would manufacture a verdict from an absence, and
+        # NEUTRAL clears every gate.
+        logger.info("No Polygon sentiment for %s on %s -- not graded.",
+                    symbol, day)
+        return {**empty, "headline_count": len(heads), "graded": False}
+
+    logger.warning("Unknown TRADING_NEWS_BACKEND %r -- not grading.",
+                   NEWS_BACKEND)
+    return {**empty, "headline_count": len(heads), "graded": False}
 
 
 # Retained so older callers keep working. The session window is the correct

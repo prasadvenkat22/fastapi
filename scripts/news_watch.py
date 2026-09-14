@@ -324,9 +324,10 @@ def main():
     if failed:
         print(f"\n*** {len(failed)} SYMBOL(S) COULD NOT BE GRADED: "
               f"{', '.join(failed)}")
-        print("*** The model was not reached, so NO verdict was stored for "
-              "them. The gates that read news_verdicts are running on whatever "
-              "was last written -- or on nothing. Check ANTHROPIC_API_KEY.")
+        print("*** No grade was produced, so NO verdict was stored for them. "
+              "The gates that read news_verdicts are running on whatever was "
+              "last written -- or on nothing. Check that news_hourly.py ran "
+              "and that symbol_sentiment_hourly has rows for today.")
 
     print("\nThe verdict GATES both books (sections 143-144): the level gate "
           "refuses a structure the tape is strongly against, the turn gate one "

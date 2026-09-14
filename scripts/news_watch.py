@@ -65,6 +65,22 @@ HOURLY = os.getenv("TRADING_NEWS_HOURLY", "true").lower() == "true"
 # job that has actually stopped.
 INGEST_MAX_AGE_MIN = float(os.getenv("TRADING_NEWS_MAX_CORPUS_AGE_MIN", "90"))
 
+# Symbols a verdict can actually exist for: whatever news_hourly fetches from
+# Polygon, plus the macro name news_enrich writes. Read from those modules
+# rather than restated here, so the three lists cannot drift apart again.
+def _covered() -> set:
+    out = {os.getenv("TRADING_MACRO_SYMBOL", "QQQ").upper()}
+    try:
+        from news_hourly import SYMBOLS
+
+        out |= {s.upper() for s in SYMBOLS}
+    except Exception:
+        pass
+    return out
+
+
+COVERED = _covered()
+
 # Verdict -> what to put on if nothing is open. Debit spreads both ways: the
 # 0DTE book's own grid says a long structure wants a shallow ITM long leg and
 # real OTM room, and the same asymmetry applies whichever side you take.
@@ -243,6 +259,18 @@ def main():
     print(f"NEWS WATCH  {datetime.now(NY):%Y-%m-%d %H:%M %Z}  trading day {day}")
     print(f"scraped {n_new} headlines, window opens {previous_session_close(day):%a %m-%d %H:%M} ET\n")
     failed: list = []
+    uncovered: list = []
+    # Did the fetcher write ANYTHING in the last couple of hours? That single
+    # question separates "this name was quiet" from "the job is down", and it
+    # is the only one worth waking anybody for.
+    _fetcher_ran = False
+    try:
+        cur.execute("SELECT count(*) FROM symbol_sentiment_hourly "
+                    "WHERE asof >= now() - interval '2 hours'")
+        _fetcher_ran = (cur.fetchone() or [0])[0] > 0
+    except Exception as exc:
+        print(f"(could not check fetcher health: {exc})")
+        _fetcher_ran = True      # do not manufacture an alarm from a bad read
     print(f"{'sym':6s} {'verdict':14s} {'conf':>5s} {'n':>3s} {'structure':20s} action")
     for sym in syms:
         heads = session_headlines(sym, day)
@@ -272,9 +300,31 @@ def main():
         # goes on to poison news_verdict_history and the six scripts that
         # measure against it. Skip the write; leave the last verdict standing.
         if not res.get("graded", True):
-            failed.append(sym)
-            print(f"{sym:6s} {'(GRADE FAILED)':14s}       {len(heads):3d} "
-                  f"{'-':20s} model unreachable — nothing stored")
+            # NO CONFIGURED SOURCE IS NOT A FAILURE. news_hourly fetches eight
+            # tickers and news_enrich writes QQQ; ALIASES holds seventeen
+            # names, so the other eight can NEVER have a row. Reporting those
+            # as failures printed the same eight every hour and exited
+            # non-zero, which mails a cron failure for a non-problem -- and
+            # buries a real one: NVDA genuinely failing would arrive in a list
+            # that always has eight entries, and a guard nobody reads is not a
+            # guard. Distinguish "not covered" from "covered and broken".
+            if sym in COVERED and not _fetcher_ran:
+                # THE FETCHER IS DOWN, which is the only case worth an alarm.
+                failed.append(sym)
+                print(f"{sym:6s} {'(GRADE FAILED)':14s}       {len(heads):3d} "
+                      f"{'-':20s} no source rows at all this hour")
+                continue
+            if sym not in COVERED:
+                uncovered.append(sym)
+                print(f"{sym:6s} {'(no source)':14s}       {len(heads):3d} "
+                      f"{'-':20s} not in the fetch list — not graded")
+            else:
+                # Covered, the fetcher ran, and this name simply had no
+                # articles. A quiet name is a real answer, not a failure --
+                # the same rule classify_day() follows for missing headlines.
+                uncovered.append(f"{sym} (quiet)")
+                print(f"{sym:6s} {'(no articles)':14s}       {len(heads):3d} "
+                      f"{'-':20s} fetcher ran, this name was quiet")
             continue
         v = res["verdict"]
         structure = STRUCTURE.get(v, "NO_NEW_TRADE")

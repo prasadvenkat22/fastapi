@@ -920,6 +920,30 @@ def classify_macro(a: dict, ents: list) -> tuple:
 # --------------------------------------------------------------- 5. output
 
 
+# WHY CLUSTERING HAPPENS HERE AND NOT BEFORE THE SCORERS.
+#
+# Clustering earlier would let the rules and Gemini resolve a cluster ONCE
+# instead of per headline, which saves API calls when coverage is heavily
+# duplicated. Measured on the 2026-09-13 tape rather than assumed:
+#
+#     10 macro headlines -> 10 distinct events, 0 carried by more than one wire
+#     5 resolved by rules (free), 5 abstentions (the only paid calls)
+#
+# THE FREE LAYER ALREADY ABSORBS THE DUPLICATION, which is the structural
+# reason this ordering holds. Syndicated stories are the big obvious ones -- a
+# Hormuz strike, an oil move, a Fed decision -- and those are exactly the ones
+# the rules answer for nothing. What reaches Gemini is the residue: analytical
+# and opinion pieces, which are distinct by nature and do not duplicate. So the
+# cost that clustering would reduce is the cost that is already zero.
+#
+# AND THE NAIVE VERSION IS ACTIVELY WRONG. Abstentions carry no topic -- a
+# topic comes from a matched driver, and abstaining means none matched -- so
+# clustering them by topic drops all five into "other" and resolves five
+# unrelated stories with one call and one answer. The measurement script
+# reported that as "4 calls saved"; it is four answers destroyed.
+#
+# Re-measure on a weekday before revisiting: Sunday is a low-syndication tape
+# and this is a lower bound on duplicate coverage.
 def macro_verdict(scored: list) -> "tuple | None":
     """(label, net in [-1,1], n_topics, per_topic) or None if too thin.
 

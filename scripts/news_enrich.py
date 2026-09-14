@@ -536,6 +536,16 @@ def macro_verdict(scored: list) -> "tuple | None":
 
 
 def store(verdict: tuple, now: datetime) -> int:
+    """Write the macro read as source='finbert'.
+
+    NOT 'polygon'. The first version reused that label so the existing reader
+    would find the row without changing -- which would have made
+    symbol_sentiment_hourly assert that Polygon produced a MACRO verdict, the
+    one thing it structurally cannot produce (ticker=QQQ returns ETF
+    comparisons). Any later question of the form "how accurate is the Polygon
+    read" would have been silently answering it with FinBERT numbers for every
+    QQQ row. A convenience in the writer is not worth a lie in the data.
+    """
     label, mean, n = verdict
     conn = psycopg2.connect(_dsn())
     conn.autocommit = True
@@ -547,7 +557,7 @@ def store(verdict: tuple, now: datetime) -> int:
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (symbol, source, asof) DO NOTHING
         """, (MACRO_SYMBOL, now.replace(minute=0, second=0, microsecond=0),
-              now.date(), "polygon", label, mean, n,
+              now.date(), "finbert", label, mean, n,
               f"finbert macro mean {mean:+.2f} over {n} macro headline(s)"))
         written = cur.rowcount
     conn.close()

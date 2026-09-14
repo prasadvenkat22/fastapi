@@ -601,6 +601,15 @@ def _verdict_from_score(score: float) -> str:
     return "NEUTRAL"
 
 
+# Which scorer's rows back which symbol. The macro name cannot come from
+# Polygon -- measured, ticker=QQQ returns ETF comparisons -- so it reads the
+# RSS/NER/FinBERT row that news_enrich.py writes. Everything else reads
+# Polygon's aspect score. Kept as a mapping rather than an if, so adding a
+# second macro proxy later is a line and not a branch.
+GRADE_SOURCE = {os.getenv("TRADING_MACRO_SYMBOL", "QQQ").upper(): "finbert"}
+DEFAULT_GRADE_SOURCE = "polygon"
+
+
 def _polygon_grade(symbol: str, day: date, cutoff: Optional[dtime]) -> Optional[dict]:
     """The stored Polygon aspect sentiment for this symbol, as a verdict.
 
@@ -621,9 +630,12 @@ def _polygon_grade(symbol: str, day: date, cutoff: Optional[dtime]) -> Optional[
             cur.execute(
                 "SELECT label, score, headline_count, rationale, asof "
                 "FROM symbol_sentiment_hourly "
-                "WHERE symbol=%s AND source='polygon' AND trading_day=%s "
+                "WHERE symbol=%s AND source=%s AND trading_day=%s "
                 "  AND asof <= %s "
-                "ORDER BY asof DESC LIMIT 1", (symbol.upper(), day, at))
+                "ORDER BY asof DESC LIMIT 1",
+                (symbol.upper(),
+                 GRADE_SOURCE.get(symbol.upper(), DEFAULT_GRADE_SOURCE),
+                 day, at))
             row = cur.fetchone()
     except Exception:
         logger.warning("Polygon sentiment unreadable for %s.", symbol,
@@ -639,7 +651,7 @@ def _polygon_grade(symbol: str, day: date, cutoff: Optional[dtime]) -> Optional[
         # probability and nothing should read it as one -- it exists so the
         # QQQ direction gate's 0.70 floor has something to compare against.
         "confidence": min(1.0, abs(score)),
-        "rationale": (rationale or f"polygon aspect score {score:+.2f} "
+        "rationale": (rationale or f"aspect score {score:+.2f} "
                                    f"({label}) over {n or 0} article(s)"),
         "headline_count": int(n or 0),
         "graded": True,

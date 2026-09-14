@@ -61,16 +61,24 @@ NY = ZoneInfo("America/New_York")
 # TRADING_HOURLY_SYMBOLS, and a name absent from that list cannot be graded by
 # anything. Keep the two in step.
 #
-# Removed 2026-09-14 with the ticker legs they belonged to. The aliases are
-# recorded here rather than deleted outright, because putting a name BACK means
-# adding it to TRADING_HOURLY_SYMBOLS first and the wire spellings are the part
-# that is easy to get wrong:
-#
-#     SNDK ["sandisk","sndk"]       STX  ["seagate","stx technology"]
-#     WDC  ["western digital","wdc"]  DELL ["dell technologies","dell"]
-#     PANW ["palo alto networks","panw"]  MRVL ["marvell","mrvl"]
-#     CRWV ["coreweave","crwv"]
 ALIASES: Dict[str, List[str]] = {
+    # THE WEEKLY BOOK TRADES THESE AND IT IS LIVE. Trimmed out on 2026-09-14
+    # to match the 0DTE fetch list, which was the wrong list to match: the
+    # 0DTE book trades nine names, the WEEKLY book trades fifteen
+    # (TRADING_WEEKLY_SYMBOLS, TRADING_WEEKLY_LIVE=true), and weekly_pick's
+    # news overlay reads news_verdicts by symbol. Removing them silently
+    # returned None for seven of its fifteen names -- no news weight, no
+    # conflict flag -- while a SNDK weekly put spread was open.
+    #
+    # The covered set is the UNION of what every book trades, not any one
+    # book's list.
+    "SNDK": ["sandisk", "sndk"],
+    "STX": ["seagate", "stx technology"],
+    "WDC": ["western digital", "wdc"],
+    "DELL": ["dell technologies", "dell"],
+    "PANW": ["palo alto networks", "panw"],
+    "MRVL": ["marvell", "mrvl"],
+    "CRWV": ["coreweave", "crwv"],
     "MU": ["micron"],
     "NVDA": ["nvidia", "nvda"],
     "AVGO": ["broadcom", "avgo"],

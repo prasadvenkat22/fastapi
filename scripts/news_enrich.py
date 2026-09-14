@@ -1,7 +1,11 @@
 """Macro news enrichment.
 
-    RSS -> feedparser -> dedupe -> text extraction -> FinBERT + spaCy
-           (in parallel) -> combined record -> JSONL + macro verdict
+    RSS -> feedparser -> dedupe -> text extraction -> spaCy NER
+        -> (macro only) FinBERT -> combined record -> JSONL + macro verdict
+
+    NER GATES THE SCORER. Only stories spaCy identifies as macro are sent to
+    FinBERT, and they are sent ENTITY-SCOPED -- the sentences carrying the
+    macro terms, not the whole column.
 
 WHAT THIS IS FOR. Polygon supplies per-ticker sentiment and structurally cannot
 supply a macro read -- measured 2026-09-12, `ticker=QQQ` returns ETF
@@ -45,8 +49,8 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -114,16 +118,31 @@ MACRO_KEYWORDS = {
     "dovish", "soft landing", "stagflation", "vix", "volatility",
 }
 
-# en_core_web_trf as specified. IT IS THE MEMORY RISK ON THIS BOX, not the
-# speed cost: trf is a transformer (~450MB) and FinBERT is another (~440MB),
-# and with weights plus activations the pair lands near 2GB against the ~2.6GB
-# free while the trading engine is running. An OOM here would be killed by the
-# kernel, and the kernel does not promise to kill THIS process rather than the
-# engine. Run it as a one-shot job (memory returns on exit) and drop to
-# en_core_web_sm via this env var if the box complains -- sm is ~50MB and this
-# is a keep/drop decision on short text, not fine-grained entity linking.
-SPACY_MODEL = os.getenv("TRADING_SPACY_MODEL", "en_core_web_trf")
+# FINBERT RUNS AS AN API CALL, NOT A LOCAL MODEL. HF_TOKEN is already on the
+# droplet and the router endpoint answers 200, so there is no torch, no
+# transformers, and no 2GB of weights on a box with 2.6GB free. The classic
+# api-inference.huggingface.co host no longer resolves; router.huggingface.co
+# is the one that works.
+FINBERT_URL = os.getenv(
+    "TRADING_FINBERT_URL",
+    "https://router.huggingface.co/hf-inference/models/ProsusAI/finbert")
 FINBERT_MODEL = os.getenv("TRADING_FINBERT_MODEL", "ProsusAI/finbert")
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+HF_BATCH = int(os.getenv("TRADING_HF_BATCH", "32"))
+
+# NER IS AN API CALL TOO. Nothing is downloaded and nothing is hosted: no
+# spaCy model, no torch, no weights on a box with 2.6GB free.
+#
+# THE TRADEOFF, STATED. spaCy is not an API service, so this is not spaCy --
+# it is BERT-CoNLL03, which tags ORG/PER/LOC/MISC and NOT spaCy's MONEY,
+# PERCENT or DATE. The filter here asks "does this story name a macro
+# institution", which is an ORG/LOC question, so the missing types cost
+# nothing today. If MONEY or DATE ever become part of the signal, that is the
+# moment this has to go local.
+NER_URL = os.getenv(
+    "TRADING_NER_URL",
+    "https://router.huggingface.co/hf-inference/models/"
+    "dbmdz/bert-large-cased-finetuned-conll03-english")
 MACRO_SYMBOL = os.getenv("TRADING_MACRO_SYMBOL", "QQQ")
 LOOKBACK_HOURS = int(os.getenv("TRADING_MACRO_LOOKBACK_H", "24"))
 OUT_PATH = os.getenv("TRADING_NEWS_ENRICHED_PATH", "/app/data/news_enriched.jsonl")
@@ -135,8 +154,27 @@ MIN_ARTICLES = int(os.getenv("TRADING_MACRO_MIN_ARTICLES", "4"))
 # FinBERT truncates at 512 tokens; title + summary is well inside that.
 MAX_CHARS = int(os.getenv("TRADING_ENRICH_MAX_CHARS", "1200"))
 
-_nlp = None
-_finbert = None
+
+_TERM_RX: dict = {}
+
+
+def has_term(term: str, text: str) -> bool:
+    """Whole-word containment.
+
+    NOT `term in text`. Substring matching put three personal-finance columns
+    into the macro tape on the first dry run: "sec" matched Social SECurity and
+    SECretary, "ppi" matched shiPPIng, "fed" matched FEDeral. Every false
+    positive here is a vote in the macro mean, so this is not cosmetic.
+
+    Compiled once per term and cached -- the same terms are tested against
+    every article of every sweep.
+    """
+    rx = _TERM_RX.get(term)
+    if rx is None:
+        rx = _TERM_RX[term] = re.compile(r"\b" + re.escape(term) + r"\b")
+    return bool(rx.search(text))
+
+
 
 
 def _dsn() -> str:
@@ -148,32 +186,117 @@ def _dsn() -> str:
 # --------------------------------------------------------------- models
 
 
-def nlp():
-    global _nlp
-    if _nlp is None:
-        try:
-            import spacy
-        except ImportError:
-            raise RuntimeError("spacy is not installed. pip install spacy")
-        try:
-            _nlp = spacy.load(SPACY_MODEL)
-        except OSError:
-            raise RuntimeError(f"spaCy model {SPACY_MODEL} not downloaded. "
-                               f"python -m spacy download {SPACY_MODEL}")
-    return _nlp
+def ner(texts: list) -> list:
+    """Named entities via the HF Inference API. Returns [[{text, label}]].
+
+    AN API, NOT A LOCAL MODEL. spaCy is not an API service, so "use the API"
+    means an HF token-classification model instead of en_core_web_sm/_trf --
+    the tradeoff being that this is BERT-CoNLL03, which tags ORG/PER/LOC/MISC
+    and NOT spaCy's MONEY, PERCENT or DATE. For this pipeline that is the whole
+    entity set that matters: the filter asks "does this story name a macro
+    institution", which is an ORG/LOC question.
+
+    Measured 2026-09-13, both endpoints answer 200. bert-large-cased-conll03
+    over dslim/bert-base-NER because it returns whole entities -- base split
+    FOMC into "F" + "##OMC", which no institution list will match.
+    """
+    import json
+    import time
+    import urllib.request
+
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN is not set; NER needs it.")
+    out = []
+    for k in range(0, len(texts), HF_BATCH):
+        chunk = texts[k:k + HF_BATCH]
+        req = urllib.request.Request(
+            NER_URL, data=json.dumps({"inputs": chunk}).encode(),
+            headers={"Authorization": "Bearer " + HF_TOKEN,
+                     "Content-Type": "application/json"})
+        got = None
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    got = json.loads(resp.read())
+                break
+            except Exception as exc:
+                if attempt == 3:
+                    raise
+                wait = 5 * (attempt + 1)
+                logger.warning("NER %s (%s) -- retrying in %ds",
+                               type(exc).__name__, getattr(exc, "code", None),
+                               wait)
+                time.sleep(wait)
+        # One input returns a flat list of entities; a batch returns one list
+        # per input. Normalise so the caller always gets per-input lists.
+        if got and isinstance(got[0], dict):
+            got = [got]
+        for ents in got:
+            out.append([{"text": e.get("word", ""),
+                         "label": e.get("entity_group") or e.get("entity", "")}
+                        for e in ents])
+    return out
 
 
-def finbert():
-    global _finbert
-    if _finbert is None:
-        try:
-            from transformers import pipeline
-        except ImportError:
-            raise RuntimeError("transformers is not installed. "
-                               "pip install transformers torch")
-        _finbert = pipeline("sentiment-analysis", model=FINBERT_MODEL,
-                            truncation=True, max_length=512)
-    return _finbert
+def sentences(text: str) -> list:
+    """Split on sentence enders. spaCy's doc.sents is gone with spaCy.
+
+    Deliberately crude: this only picks WHICH sentences carry a macro term, and
+    a split that occasionally keeps two sentences together costs a few extra
+    words of context, not a wrong answer.
+    """
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def finbert(texts: list) -> list:
+    """Score texts through the HF Inference API. Returns [{label, score}].
+
+    BATCHED, because one request per headline would exhaust the free tier in a
+    single sweep. Retries on 503, which is what the endpoint returns while a
+    cold model loads.
+
+    THE RESPONSE SHAPE NEEDS UNWRAPPING. A batch of N comes back as a
+    single-element list wrapping the N per-input results -- [[r1, r2, ... rN]]
+    -- not as N lists. Measured 2026-09-13: 3 inputs returned len(out)==1 with
+    3 dicts inside. Assuming one-list-per-input silently scores every headline
+    with the first one's label.
+    """
+    import json
+    import time
+    import urllib.request
+
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN is not set; FinBERT scoring needs it.")
+    out = []
+    for k in range(0, len(texts), HF_BATCH):
+        chunk = texts[k:k + HF_BATCH]
+        body = json.dumps({"inputs": chunk}).encode()
+        req = urllib.request.Request(
+            FINBERT_URL, data=body,
+            headers={"Authorization": "Bearer " + HF_TOKEN,
+                     "Content-Type": "application/json"})
+        got = None
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    got = json.loads(resp.read())
+                break
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                if attempt == 3:
+                    raise
+                wait = 5 * (attempt + 1)
+                logger.warning("FinBERT %s (%s) -- retrying in %ds",
+                               type(exc).__name__, code, wait)
+                time.sleep(wait)
+        if len(got) == 1 and isinstance(got[0], list) and len(got[0]) == len(chunk):
+            got = got[0]
+        for r in got:
+            d = r[0] if isinstance(r, list) else r
+            out.append({"label": str(d["label"]).lower(),
+                        "score": float(d["score"])})
+    return out
 
 
 # --------------------------------------------------------------- 1. fetch
@@ -296,49 +419,87 @@ def extract_text(a: dict) -> str:
 
 
 def enrich(articles: list) -> list:
-    """Run both models over the same text, concurrently, and merge.
+    """NER FIRST, then FinBERT on what survives. Not in parallel.
 
-    Genuinely concurrent: torch and spaCy both release the GIL during
-    inference, so two threads overlap rather than interleave. The cost is that
-    both sets of weights are resident at once -- see SPACY_MODEL.
+    THE ORDER IS THE POINT. spaCy is the gate: it decides which stories are
+    macro at all, and only those reach the scorer. Running the two in parallel
+    scored everything and then threw most of it away -- wasted API calls, and
+    worse, it invited the filter to be sloppy because nothing downstream
+    depended on it. The first dry run scored "The future of retirement? Work
+    until you die." and "Anthropic tells investors it will be profitable"
+    (+0.89) as macro tape.
+
+    Sequential also means FinBERT sees ENTITY-SCOPED text rather than the raw
+    article, so what it reads is the macro clause and not the human-interest
+    wrapper around it.
     """
     texts = [extract_text(a) for a in articles]
     for a, t in zip(articles, texts):
         a["text"] = t
 
-    def run_ner():
-        return [[{"text": e.text, "label": e.label_} for e in doc.ents]
-                for doc in nlp().pipe(texts, batch_size=16)]
+    # 1. NER gates. Entities kept on every record either way.
+    for a, ents in zip(articles, ner(texts)):
+        a["entities"] = ents
+        a["is_macro"], a["macro_why"], a["scored_text"] = classify_macro(a, ents)
 
-    def run_sentiment():
-        return finbert()(texts)
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_ner, f_sent = pool.submit(run_ner), pool.submit(run_sentiment)
-        ents, sents = f_ner.result(), f_sent.result()
-
-    for a, e, s in zip(articles, ents, sents):
-        label, conf = str(s["label"]).lower(), float(s["score"])
-        a["entities"] = e
-        a["sentiment"] = label
-        a["sentiment_conf"] = conf
-        # Signed, so the macro mean is directional. Neutral contributes 0
-        # rather than being dropped -- a genuinely neutral tape should read
-        # neutral, not be decided by its two non-neutral items.
-        a["score"] = conf if label == "positive" else -conf if label == "negative" else 0.0
-        a["is_macro"], a["macro_why"] = classify_macro(a, e)
+    # 2. FinBERT, on the survivors only.
+    macro = [a for a in articles if a["is_macro"]]
+    if macro:
+        for a, r in zip(macro, finbert([m["scored_text"] for m in macro])):
+            label, conf = r["label"], r["score"]
+            a["sentiment"] = label
+            a["sentiment_conf"] = conf
+            # Signed so the macro mean is directional. Neutral contributes 0
+            # rather than being dropped -- a genuinely neutral tape should read
+            # neutral, not be decided by its two non-neutral items.
+            a["score"] = (conf if label == "positive"
+                          else -conf if label == "negative" else 0.0)
+    for a in articles:
+        a.setdefault("sentiment", None)
+        a.setdefault("score", None)
     return articles
 
 
 def classify_macro(a: dict, ents: list) -> tuple:
-    low = (a["title"] + " " + (a.get("summary") or "")).lower()
-    names = {e["text"].lower() for e in ents
-             if e["label"] in ("ORG", "GPE", "NORP")}
-    hit = sorted(o for o in MACRO_ORGS if o in names or o in low)
-    kw = sorted(k for k in MACRO_KEYWORDS if k in low)
-    if hit or kw:
-        return True, ", ".join((hit + kw)[:4])
-    return False, ""
+    """(is_macro, why, text_to_score). spaCy's entities decide, not substrings.
+
+    WORD BOUNDARIES, NOT `in`. The first version tested `"sec" in text` and so
+    matched Social SECurity, SECretary and SECond; `"ppi"` matched shiPPIng;
+    `"fed"` matched FEDeral budget and anything with "fed" inside it. Three of
+    the seventeen headlines that reached FinBERT on the first dry run were
+    personal-finance columns admitted by that bug, and one of them -- an
+    Anthropic profitability story -- was scored +0.89 INTO THE MACRO TAPE.
+    A filter with false positives is not a mild problem here: every one of them
+    is a vote in the macro mean.
+
+    An ORG/GPE/NORP entity that IS a macro institution counts. Otherwise a
+    whole-word keyword match counts. Nothing else does.
+    """
+    import re
+
+    text = a.get("text") or a["title"]
+    low = text.lower()
+    names = {e["text"].lower().strip() for e in ents
+             if e["label"] in ("ORG", "LOC", "MISC", "GPE", "NORP")}
+    # An entity matches a macro institution when one contains the other as a
+    # WHOLE phrase -- "the federal reserve" matches "federal reserve", but
+    # "Securities Corp" does not match "sec".
+    hit_ent = sorted({m for m in MACRO_ORGS
+                      for e in names
+                      if e == m or has_term(m, e)})
+    hit_kw = sorted({k for k in MACRO_KEYWORDS if has_term(k, low)})
+    if not (hit_ent or hit_kw):
+        return False, "", text
+
+    # SCOPED TEXT: the sentences that actually carry the macro terms, so the
+    # scorer reads the macro claim rather than the column wrapped around it.
+    # Falls back to the title when no sentence matches, which keeps the input
+    # non-empty on a headline-only feed.
+    terms = set(hit_ent) | set(hit_kw)
+    keep = [sent for sent in sentences(text)
+            if any(has_term(t, sent.lower()) for t in terms)]
+    scoped = " ".join(keep)[:MAX_CHARS] or a["title"]
+    return True, ", ".join(sorted(terms)[:4]), scoped
 
 
 # --------------------------------------------------------------- 5. output

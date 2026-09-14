@@ -452,6 +452,29 @@ CLAUSE_SPLIT = re.compile(r",|\bas\b|\bwhile\b|\bafter\b|\bamid\b|;|\.")
 # the problem anyway. Any failure, 402 included, falls back silently to the
 # rules' answer. Set TRADING_MACRO_LLM=true once billing exists.
 MACRO_LLM = os.getenv("TRADING_MACRO_LLM", "false").lower() == "true"
+
+# WHICH PROVIDER ANSWERS. "gemini" or "hf".
+#
+# gemini  gemini-2.5-flash on the REST endpoint. Its free tier is real -- the
+#         per-day allowance is far above the ~35 abstentions this makes -- so
+#         unlike the HF route it does not need a payment method. REST rather
+#         than the google-genai SDK ON PURPOSE: ~900MB of torch/spaCy was just
+#         removed from this box to keep the models hosted, and adding an SDK to
+#         call a hosted model would walk that back for no gain. One POST, no
+#         dependency.
+#
+# hf      meta-llama/Llama-3.1-8B-Instruct via router.huggingface.co. Measured
+#         8/8 with 0 inversions, then HTTP 402: the account is free with
+#         canPay=false and /v1/chat/completions routes to PAID providers. Worse
+#         than simply unavailable -- two runs of the same tape gave 4 topics
+#         then 3, because one call landed before the quota bit. A verdict that
+#         depends on whether credits happened to be free that hour is not a
+#         gate anyone can reason about.
+MACRO_LLM_PROVIDER = os.getenv("TRADING_MACRO_LLM_PROVIDER", "gemini").lower()
+GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("TRADING_GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
+              "{model}:generateContent")
 MACRO_LLM_URL = os.getenv("TRADING_MACRO_LLM_URL",
                           "https://router.huggingface.co/v1/chat/completions")
 MACRO_LLM_MODEL = os.getenv("TRADING_MACRO_LLM_MODEL",
@@ -476,11 +499,47 @@ def llm_direction(headline: str) -> tuple:
     latches.
     """
     global _LLM_DEAD
-    if _LLM_DEAD or not HF_TOKEN:
+    if _LLM_DEAD:
         return 0, "llm off"
     import json
     import urllib.request
 
+    if MACRO_LLM_PROVIDER == "gemini":
+        if not GEMINI_KEY:
+            _LLM_DEAD = True
+            logger.warning("GEMINI_API_KEY is not set -- rules only.")
+            return 0, "no gemini key"
+        try:
+            req = urllib.request.Request(
+                GEMINI_URL.format(model=GEMINI_MODEL) + "?key=" + GEMINI_KEY,
+                data=json.dumps({
+                    "systemInstruction": {"parts": [{"text": _LLM_SYSTEM}]},
+                    "contents": [{"parts": [{"text": headline}]}],
+                    # Deterministic, and short: one token is the whole answer,
+                    # so anything longer is the model explaining itself into a
+                    # regex that will ignore it.
+                    "generationConfig": {"temperature": 0.0,
+                                         "maxOutputTokens": 8},
+                }).encode(),
+                headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=45) as r:
+                out = json.loads(r.read())
+            txt = out["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            _LLM_DEAD = True
+            logger.warning("Gemini unavailable (%s) -- rules only for the rest "
+                           "of this run.", code)
+            return 0, f"gemini error {code}"
+        m = re.search(r"RISK_ON|RISK_OFF|NEUTRAL", txt.upper())
+        if not m:
+            return 0, "gemini unparsed"
+        tok = m.group(0)
+        return (1 if tok == "RISK_ON"
+                else -1 if tok == "RISK_OFF" else 0), "gemini"
+
+    if not HF_TOKEN:
+        return 0, "llm off"
     try:
         req = urllib.request.Request(
             MACRO_LLM_URL,

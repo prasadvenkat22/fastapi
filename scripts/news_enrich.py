@@ -553,6 +553,36 @@ def dedupe(articles: list, persist: bool = True) -> list:
         return staged
 
 
+# ------------------------------------------- 2b. promo filter (no model)
+
+
+def drop_promos(articles: list) -> tuple:
+    """Reject sponsored and personal-finance copy BEFORE any model sees it.
+
+    ORDER MATTERS AND THIS RUNS FIRST. It used to sit inside classify_macro,
+    which fires AFTER the NER request -- so every advert was paying for a model
+    round trip before being thrown away. A regex pass costs nothing and shrinks
+    the NER payload by whatever it removes.
+
+    IT CANNOT BE DONE WITH A TERM LIST, which is the point. These headlines
+    genuinely contain macro terms -- that is how they got in. On the
+    2026-09-13 tape a freight-fund advert matched "crude, oil, tariffs" and
+    scored +0.91, the second-largest contributor to the macro mean, and a
+    Social Security COLA column matched "inflation" at +0.51. Both pushed a
+    bearish tape toward neutral. The genre has to be recognised, not the terms.
+    """
+    keep, dropped = [], []
+    for a in articles:
+        blob = (a["title"] + " " + (a.get("summary") or "")).lower()
+        if any(rx.search(blob) for rx in _REJECT_RX):
+            dropped.append(a)
+        else:
+            keep.append(a)
+    if dropped:
+        logger.info("promo filter: dropped %d before any model call", len(dropped))
+    return keep, dropped
+
+
 # --------------------------------------------------- 3. text extraction
 
 
@@ -665,13 +695,9 @@ def classify_macro(a: dict, ents: list) -> tuple:
     WORD BOUNDARIES THROUGHOUT. Substring matching put "sec" into Social
     SECurity and "ppi" into shiPPIng on the first run.
     """
+    # No reject pass here: drop_promos() ran before the NER call and owns it.
     text = a.get("text") or a["title"]
     low = text.lower()
-
-    for rx in _REJECT_RX:
-        if rx.search(low):
-            return False, "", text
-
     names = {e["text"].lower().strip() for e in ents
              if e["label"] in ("ORG", "LOC", "MISC", "GPE", "NORP")}
     hit_ent = sorted({m for m in MACRO_ORGS
@@ -810,7 +836,12 @@ def main() -> None:
 
     now = datetime.now(NY)
     arts = dedupe(fetch(), persist=not args.dry_run)
-    print(f"\n{len(arts)} new article(s) inside {LOOKBACK_HOURS}h")
+    # BEFORE ANY MODEL CALL. Cheap, and it shrinks the NER payload too.
+    arts, promos = drop_promos(arts)
+    print(f"\n{len(arts)} new article(s) inside {LOOKBACK_HOURS}h "
+          f"({len(promos)} sponsored/personal-finance dropped before any model)")
+    for a in promos[:6]:
+        print(f"    promo: {a['title'][:66]}")
     if not arts:
         print("nothing new to score")
         return

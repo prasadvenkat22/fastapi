@@ -141,7 +141,29 @@ _REJECT_RX = [re.compile(p, re.I) for p in REJECT_PATTERNS]
 # those two models were doing. The HF account can be left alone or the token
 # revoked; nothing here reads it.
 MACRO_SYMBOL = os.getenv("TRADING_MACRO_SYMBOL", "QQQ")
+# TWO WINDOWS, NOT ONE, AND THE SECOND ONE IS WHY.
+#
+# FETCH is wide: 24h, so a story that broke overnight is still picked up at the
+# open. Dedupe means a re-seen article costs nothing.
+#
+# THE VERDICT WINDOW USED TO BE THE SAME 24 HOURS, AND THAT MADE THE READ
+# UNABLE TO MOVE. Measured 2026-09-14: the QQQ macro verdict printed -0.67 at
+# 09:00, 10:00, 11:00, 12:00, 13:00, 14:00 and 15:00 ET -- seven identical
+# readings -- while crude fell 3%, the 10Y turned from +2.9bp to -1.8bp, VIX
+# collapsed 4% and QQQ rose 1.13% off an 11:00 turn. One new hour of headlines
+# against twenty-three hours of yesterday's cannot shift a topic vote, so the
+# verdict was frozen by construction.
+#
+# THE CONSEQUENCE WAS WORSE THAN A STALE NUMBER: the turn gate added on
+# 2026-09-13 watches for a CHANGE from the opening verdict, and with a 24h
+# window there is no change to see. It was a gate whose input could not produce
+# the event it was built to catch.
+#
+# 4 hours: long enough that a quiet hour still votes on something, short enough
+# that a real turn shows up within one or two sweeps. At 09:12 it reaches back
+# to 05:12, which covers the pre-market tape where most overnight macro lands.
 LOOKBACK_HOURS = int(os.getenv("TRADING_MACRO_LOOKBACK_H", "24"))
+VERDICT_WINDOW_H = int(os.getenv("TRADING_MACRO_VERDICT_WINDOW_H", "4"))
 OUT_PATH = os.getenv("TRADING_NEWS_ENRICHED_PATH", "/app/data/news_enriched.jsonl")
 
 # How many macro headlines a verdict needs. One risk-off story is not a
@@ -485,7 +507,7 @@ def window_scores() -> list:
                 "SELECT rule_dir, topic FROM news_seen "
                 "WHERE rule_dir IS NOT NULL AND published IS NOT NULL "
                 "  AND published >= now() - (%s || ' hours')::interval",
-                (LOOKBACK_HOURS,))
+                (VERDICT_WINDOW_H,))
             rows = cur.fetchall()
         conn.close()
         return [{"rule_dir": d, "topic": t} for d, t in rows]
@@ -677,7 +699,7 @@ def main() -> None:
     # store is unreachable, which is strictly worse but never nothing.
     window = window_scores() or macro
     print(f"\nscored {saved} new; verdict over {len(window)} article(s) "
-          f"in the last {LOOKBACK_HOURS}h")
+          f"in the last {VERDICT_WINDOW_H}h (fetched {LOOKBACK_HOURS}h)")
     v = macro_verdict(window)
     if not v:
         print("\nNo macro verdict -- too few macro headlines. NOTHING STORED, "

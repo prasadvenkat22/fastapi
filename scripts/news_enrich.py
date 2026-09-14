@@ -472,7 +472,12 @@ MACRO_LLM = os.getenv("TRADING_MACRO_LLM", "false").lower() == "true"
 #         gate anyone can reason about.
 MACRO_LLM_PROVIDER = os.getenv("TRADING_MACRO_LLM_PROVIDER", "gemini").lower()
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("TRADING_GEMINI_MODEL", "gemini-2.5-flash")
+# gemini-2.5-flash IS LISTED BY THE MODELS ENDPOINT AND STILL 404s: "no longer
+# available to new users". The listing is not the availability check -- the only
+# reliable test is a generateContent call with the actual key. Probed
+# 2026-09-13: 3.6-flash, flash-latest and 3.5-flash all failed too;
+# 3.1-flash-lite answered.
+GEMINI_MODEL = os.getenv("TRADING_GEMINI_MODEL", "gemini-3.1-flash-lite")
 GEMINI_URL = ("https://generativelanguage.googleapis.com/v1beta/models/"
               "{model}:generateContent")
 MACRO_LLM_URL = os.getenv("TRADING_MACRO_LLM_URL",
@@ -835,7 +840,19 @@ def enrich(articles: list) -> list:
                 d, why = llm_direction(a["title"])
                 if d:
                     a["rule_dir"], a["rule_why"] = d, why
-                    a["topic"] = a.get("topic") or "other"
+                    # TOPIC FROM THE TERMS THE FILTER ALREADY MATCHED, not
+                    # "other". Dumping every LLM answer into one bucket puts
+                    # unrelated headlines in the same vote, where they cancel:
+                    # on the 2026-09-13 tape a gas-prices/rates piece and a
+                    # Treasury-yields piece both landed in "other" and silenced
+                    # each other, despite both being about rates and both
+                    # having been answered. macro_why holds the matched terms;
+                    # the first one that maps wins, same rule the driver path
+                    # uses.
+                    a["topic"] = next(
+                        (TOPIC[t] for t in
+                         (x.strip() for x in (a.get("macro_why") or "").split(","))
+                         if t in TOPIC), "other")
         try:
             for a, r in zip(macro, finbert([m["scored_text"] for m in macro])):
                 a["sentiment"] = r["label"]

@@ -210,6 +210,11 @@ OUT_PATH = os.getenv("TRADING_NEWS_ENRICHED_PATH", "/app/data/news_enriched.json
 # claim than four but an honest one; below that there is no macro read.
 MIN_TOPICS = int(os.getenv("TRADING_MACRO_MIN_TOPICS", "2"))
 
+# How many agreeing topics a FULL-STRENGTH macro reading takes. Below this the
+# score is scaled down, so VERY_BEARISH -- the only level that gates a call
+# spread -- needs breadth and not just unanimity among a handful.
+VERY_TOPICS = float(os.getenv("TRADING_MACRO_VERY_TOPICS", "5"))
+
 # How lopsided the vote must be to call a direction. 0.2 = 60/40.
 VERDICT_MARGIN = float(os.getenv("TRADING_MACRO_MARGIN", "0.20"))
 
@@ -422,7 +427,19 @@ MOVE_DOWN = {
 # learned that counting sessions rather than rows for correlated names.
 TOPIC = {}
 for _t, _ds in {
-    "energy": {"oil", "crude", "brent", "wti", "gas prices", "supply"},
+    # ENERGY INCLUDES THE GEOGRAPHY, not just the commodity. On the
+    # 2026-09-13 tape three headlines about the Strait of Hormuz fell to
+    # "other" because hormuz/strait/iran were not in this map, while the
+    # oil-price headline went to "energy" -- so ONE macro driver counted as
+    # TWO topics. Topic count sets the VERY_* threshold, so that split alone
+    # took the reading from BEARISH (gates nothing) to VERY_BEARISH (refuses
+    # every bullish entry on both books). A supply shock and the price move it
+    # causes are one fact.
+    "energy": {"oil", "crude", "brent", "wti", "gas prices", "supply",
+               "opec", "refinery", "pipeline", "tanker", "barrel",
+               "hormuz", "strait", "strait of hormuz", "suez", "red sea",
+               "iran", "saudi", "saudi arabia", "russia", "ukraine",
+               "venezuela", "middle east", "israel"},
     "rates": {"yield", "yields", "rate", "rates", "rate hike"},
     "inflation": {"inflation", "cpi", "ppi", "pce"},
     "trade": {"tariff", "tariffs", "trade war"},
@@ -961,6 +978,60 @@ def classify_macro(a: dict, ents: list) -> tuple:
 #
 # Re-measure on a weekday before revisiting: Sunday is a low-syndication tape
 # and this is a lower bound on duplicate coverage.
+def save_scores(articles: list) -> int:
+    """Write each scored article's direction back onto its news_seen row.
+
+    SCORING IS ONCE PER ARTICLE; COUNTING IS PER SWEEP. Dedupe correctly stops
+    an article being scored twice -- it is the same article. But it was also
+    stopping it being COUNTED twice, and those are different questions. The
+    09:25 sweep sees a full 24h and votes on a dozen topics; the 11:25 sweep
+    sees only what published in the last hour, falls below MIN_TOPICS, writes
+    nothing, and the gates go on reading the 09:25 row. The hourly re-grade
+    collapses to once-a-day and looks like a quiet tape rather than a closed
+    window.
+    """
+    rows = [(a.get("rule_dir"), a.get("topic"), a.get("published"), a["guid"])
+            for a in articles if a.get("rule_dir")]
+    if not rows:
+        return 0
+    try:
+        conn = psycopg2.connect(_dsn())
+        conn.autocommit = True
+        with conn, conn.cursor() as cur:
+            cur.executemany(
+                "UPDATE news_seen SET rule_dir=%s, topic=%s, published=%s, "
+                "scored_at=now() WHERE guid=%s", rows)
+        conn.close()
+        return len(rows)
+    except Exception:
+        logger.warning("Could not persist scores -- this sweep's verdict still "
+                       "stands, the next one loses this hour.", exc_info=True)
+        return 0
+
+
+def window_scores() -> list:
+    """Every article scored inside the lookback window, as {rule_dir, topic}.
+
+    This is what the verdict aggregates, so an hour with two new headlines
+    still produces a verdict from the whole window rather than from two.
+    """
+    try:
+        conn = psycopg2.connect(_dsn())
+        with conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT rule_dir, topic FROM news_seen "
+                "WHERE rule_dir IS NOT NULL AND published IS NOT NULL "
+                "  AND published >= now() - (%s || ' hours')::interval",
+                (LOOKBACK_HOURS,))
+            rows = cur.fetchall()
+        conn.close()
+        return [{"rule_dir": d, "topic": t} for d, t in rows]
+    except Exception:
+        logger.warning("Could not read the window -- falling back to this "
+                       "sweep only.", exc_info=True)
+        return []
+
+
 def macro_verdict(scored: list) -> "tuple | None":
     """(label, net in [-1,1], n_topics, per_topic) or None if too thin.
 
@@ -996,7 +1067,13 @@ def macro_verdict(scored: list) -> "tuple | None":
         net = sum(votes)
         per_topic[t] = (1 if net > 0 else -1 if net < 0 else 0, len(votes))
 
-    voting = [d for d, _ in per_topic.values() if d]
+    # "other" DOES NOT VOTE. It is the bucket for headlines whose terms map to
+    # no named topic, so its members are unrelated by construction -- summing
+    # them produces a "topic" that is really an average of leftovers, and it
+    # counts toward the topic total that sets the VERY_* threshold. Recorded
+    # and shown, never counted. If it is ever large, that is a signal the topic
+    # map has a gap, not that the tape has a fifth theme.
+    voting = [d for t, (d, _) in per_topic.items() if d and t != "other"]
     if len(voting) < MIN_TOPICS:
         logger.info("only %d directional topic(s) from %d headline(s), below "
                     "the %d minimum -- no verdict", len(voting),
@@ -1019,7 +1096,25 @@ def store(verdict: tuple, now: datetime) -> int:
     read" would have been silently answering it with FinBERT numbers for every
     QQQ row. A convenience in the writer is not worth a lie in the data.
     """
-    label, mean, n = verdict[0], verdict[1], verdict[2]
+    label, net, n = verdict[0], verdict[1], verdict[2]
+    # SCALE AGREEMENT BY EVIDENCE BEFORE STORING.
+    #
+    # net is the PROPORTION of topics agreeing, so three topics leaning one way
+    # gives -1.0 -- identical to thirty. Downstream, _verdict_from_score() maps
+    # |score| >= 0.70 to VERY_*, and VERY_BEARISH at confidence 1.00 refuses
+    # every call debit spread on both books. On the 2026-09-13 tape that is
+    # exactly what three unanimous topics would have done: a whole day of
+    # bullish entries refused on the strength of three agreeing wires.
+    #
+    # That is the August macro gate, which refused 55 of 55 cycles on a day QQQ
+    # rose $6.50 off its low. Unanimity is CHEAP when there are few topics.
+    #
+    # So the stored score is net weighted by how much evidence produced it:
+    # VERY_* now needs the tape to agree AND to have said enough to be worth
+    # believing. Three unanimous topics store -0.60 (BEARISH, conf 0.60, below
+    # the 0.70 direction-gate floor -- recorded, gating nothing). Five store
+    # -1.00, which is the genuinely rare day the tail guard exists for.
+    scaled = net * min(1.0, n / VERY_TOPICS)
     conn = psycopg2.connect(_dsn())
     conn.autocommit = True
     with conn, conn.cursor() as cur:
@@ -1030,8 +1125,8 @@ def store(verdict: tuple, now: datetime) -> int:
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (symbol, source, asof) DO NOTHING
         """, (MACRO_SYMBOL, now.replace(minute=0, second=0, microsecond=0),
-              now.date(), "finbert", label, mean, n,
-              f"rule net {mean:+.2f} over {n} directional headline(s)"))
+              now.date(), "finbert", label, scaled, n,
+              f"net {net:+.2f} over {n} topic(s), scaled {scaled:+.2f}"))
         written = cur.rowcount
     conn.close()
     return written
@@ -1095,11 +1190,15 @@ def main() -> None:
           f"({len(promos)} sponsored/personal-finance dropped before any model)")
     for a in promos[:6]:
         print(f"    promo: {a['title'][:66]}")
+    # NO EARLY RETURN ON AN EMPTY SWEEP. Nothing new to SCORE is not nothing to
+    # SAY: the window still holds the day's macro picture, and a quiet hour
+    # must re-affirm the verdict rather than leave the gates on a row that ages
+    # silently. This returned here until 2026-09-13, which meant the second
+    # sweep of any hour produced no verdict at all.
     if not arts:
-        print("nothing new to score")
-        return
+        print("nothing new to score -- verdict still recomputed from the window")
 
-    arts = enrich(arts)
+    arts = enrich(arts) if arts else []
     macro = [a for a in arts if a["is_macro"]]
     print(f"{len(macro)} macro after the NER filter "
           f"({len(arts) - len(macro)} dropped as single-name or off-topic)\n")
@@ -1109,7 +1208,15 @@ def main() -> None:
         print(f"  {d}  fb {('%+.2f' % fb) if fb is not None else '  -  '}  "
               f"[{a['rule_why'][:22]:22s}] {a['title'][:52]}")
 
-    v = macro_verdict(macro)
+    saved = save_scores(arts)
+    # THE WINDOW, NOT THIS SWEEP. window_scores() returns every article scored
+    # in the last LOOKBACK_HOURS, so a quiet hour still votes on the day's
+    # accumulated macro picture. Falls back to this sweep's articles if the
+    # store is unreachable, which is strictly worse but never nothing.
+    window = window_scores() or macro
+    print(f"\nscored {saved} new; verdict over {len(window)} article(s) "
+          f"in the last {LOOKBACK_HOURS}h")
+    v = macro_verdict(window)
     if not v:
         print("\nNo macro verdict -- too few macro headlines. NOTHING STORED, "
               "which leaves the gates on the last good verdict rather than a "
@@ -1119,7 +1226,8 @@ def main() -> None:
     print("\nBY TOPIC (one vote each, however many wires carried it):")
     for t, (d, cnt) in sorted(per_topic.items()):
         arrow = {1: "RISK_ON ", -1: "RISK_OFF", 0: "  split "}[d]
-        print(f"  {t:<10} {arrow}  from {cnt} headline(s)")
+        note = "   (not counted -- unmapped terms)" if t == "other" else ""
+        print(f"  {t:<10} {arrow}  from {cnt} headline(s){note}")
     print(f"\nMACRO VERDICT  {label.upper()}  net {net:+.3f}  over {n} topic(s)")
     if args.dry_run:
         print("DRY RUN — nothing written.")

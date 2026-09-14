@@ -70,7 +70,8 @@ import psycopg2  # noqa: E402
 from trading_engine import tradier_orders  # noqa: E402
 from trading_engine.data_feed import fetch_option_chain, fetch_spot  # noqa: E402
 from trading_engine.screener import rank  # noqa: E402
-from trading_engine.symbol_news import verdict_at  # noqa: E402
+from trading_engine.symbol_news import (classify_day,  # noqa: E402
+                                        verdict_at)
 
 logger = logging.getLogger("dte0_trade")
 NY = ZoneInfo("America/New_York")
@@ -293,18 +294,30 @@ MACRO_ORD = {"VERY_BEARISH": -2.0, "BEARISH": -1.0, "NEUTRAL": 0.0,
 def _macro_verdict() -> "tuple | None":
     """(verdict, confidence, asof, opening_verdict) for the macro name, or None.
 
-    Reads news_verdicts -- the CURRENT row, deliberately. news_watch.py
-    re-grades hourly, so a rotation entering at 12:00 is checked against the
-    12:00 macro read rather than the one written at the open. That staleness
-    was the reason the watcher went hourly.
+    READS THE SOURCE TABLE, NOT news_verdicts, and the difference is 45 minutes.
+    news_verdicts is written by news_watch once an hour at :25, while
+    macro_objective writes crude/10Y/VIX every fifteen. Going through the
+    hourly table would have capped this gate's reaction time at an hour --
+    a turn at 11:35 invisible until 12:25 -- which is most of the reason the
+    price read was chosen over the text one. classify_day() takes the latest
+    row at or before now, so the gate sees the 15-minute cadence it was armed
+    for.
+
+    Falls back to news_verdicts if the direct read yields nothing, so a symbol
+    still graded only by the hourly watcher keeps working.
     """
     try:
         day = datetime.now(NY).date()
+        g = classify_day(MACRO_SYMBOL.upper(), day)
         with psycopg2.connect(_dsn()) as c, c.cursor() as cur:
-            cur.execute("SELECT verdict, confidence, asof FROM news_verdicts "
-                        "WHERE symbol=%s AND trading_day=%s",
-                        (MACRO_SYMBOL.upper(), day))
-            cur_row = cur.fetchone()
+            cur_row = None
+            if g and g.get("graded") and g.get("headline_count"):
+                cur_row = (g["verdict"], g["confidence"], datetime.now(NY))
+            else:
+                cur.execute("SELECT verdict, confidence, asof FROM news_verdicts "
+                            "WHERE symbol=%s AND trading_day=%s",
+                            (MACRO_SYMBOL.upper(), day))
+                cur_row = cur.fetchone()
             if not cur_row:
                 return None
             # The OPENING read, for the delta. verdict_at() takes the history

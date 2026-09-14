@@ -9719,3 +9719,63 @@ dry run and invisible in review: _REJECT_RX, the promo filter's compiled
 patterns, lived beside the rules engine's regex cache; and GEMINI_KEY/URL/MODEL
 lived inside the old MACRO_LLM section. Deleting a block deletes everything
 that happened to be standing in it.
+
+
+156. THE MACRO READ COULD NOT MOVE, AND PRICES COULD  (2026-09-14)
+--------------------------------------------------------------------------------
+
+Observed from the tape, not from the code: "market is sensitive to yields and
+oil prices, today is a good example, it recovered after 11 am". Checking it
+found two things.
+
+THE TEXT READ WAS FROZEN. The QQQ macro verdict printed -0.67 at 09:00, 10:00,
+11:00, 12:00, 13:00, 14:00 and 15:00 ET. Seven identical readings, through a
+session where QQQ rose 1.13% off an 11:00 turn.
+
+Not a quiet tape -- a structural impossibility. LOOKBACK_HOURS was 24 and the
+verdict aggregated the same 24 hours it fetched. One new hour of headlines
+against twenty-three of yesterday's cannot shift a topic vote.
+
+    AND THE TURN GATE WATCHES FOR A CHANGE IN THAT NUMBER. Added the previous
+    day, section 144, to catch exactly the 11:00 case. With a 24h window there
+    is no change to see. A gate whose own input cannot produce the event it
+    was built for -- and nothing in any log would ever have said so, because
+    "no turn" and "cannot turn" print identically.
+
+Fetch stays 24h so overnight stories survive to the open; the verdict window is
+now 4h. The effect was immediate: energy flipped from RISK_OFF on 25 stale
+headlines (yesterday's Hormuz strikes) to RISK_ON on 7 recent ones (today's oil
+selloff).
+
+THE PRICES CALLED THE TURN WHILE IT HAPPENED:
+
+    10:45 ET   crude +0.13%   10Y +2.9bp   VIX +0.57%    risk-off
+    11:35 ET   crude -0.38%   10Y  0.0bp   VIX -2.87%    turning
+    12:00 ET   crude -0.91%   10Y -3.2bp   VIX -3.73%    risk-on
+    14:20 ET   crude -2.83%   10Y -1.8bp   VIX -3.27%
+
+scripts/macro_objective.py turns those three into one score and stores it beside
+the text read. They are the transmission channels rather than a description of
+them, they cannot invert the way a sentence classifier inverts, and they update
+continuously instead of in hourly text batches. First reading: objective
+POSITIVE +0.694 against the text read's NEGATIVE -0.714, on a day QQQ closed
++1.13%.
+
+IT GATES NOTHING, AND THE SECOND REASON IS THE IMPORTANT ONE.
+
+  1. One day is an anecdote.
+
+  2. THESE EXACT SERIES HAVE BEEN MEASURED AS GATES AND THEY LOST. Section 22
+     and the nodes.py comments: crude at every threshold that blocks anything
+     makes results worse -- at +0.5% the ten entries it rejects average
+     +0.15/trade against -3.48 for the twenty-six it keeps. TNX at 2bp made
+     results worse; at the live 4bp it has never fired on a trade in 49
+     sessions.
+
+     That was a ONE-SIDED RISK-OFF FILTER on MORNING entries. This is a
+     TWO-SIDED DIRECTIONAL READ updated intraday. Different claim, untested.
+     But the prior is a warning and it is why this writes a row rather than
+     refusing a trade.
+
+macro_outcome.py scores both against the session that followed. That is the
+only thing that will settle which read deserves a gate, and neither has it yet.

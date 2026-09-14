@@ -24,6 +24,7 @@ This file is the map.
 | time | job | what it does |
 |---|---|---|
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
+| every 15 min, 09:00–16:45 | `macro_objective.py` | the macro read from PRICES: crude + 10Y + VIX → one signed score. Stored beside the text read, **gates nothing** |
 | hourly at :12, 09:12–16:12 | `news_enrich.py` | macro leg: RSS → feedparser → GUID dedupe → promo regex → **one Gemini call** → topic clustering → one QQQ macro row. No HuggingFace, nothing installed |
 | hourly at :25, 09:25–16:25 | `news_watch.py` | grades everything published since the previous close, writes `news_verdicts` (current) **and `news_verdict_history` (append-only)**. Window guard 09:20–16:00, `TRADING_NEWS_HOURLY`. Unchanged headlines skip the model via the digest |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |

@@ -9304,3 +9304,248 @@ KNOBS, all live-tunable without a deploy:
     TRADING_DTE0_MACRO_DELTA_STEPS 1      steps from the open that count
     TRADING_NEWS_TURN_GATE         true   turn gate, QQQ 0DTE
     TRADING_NEWS_TURN_STEPS        1
+
+
+146. CLAUDE OUT OF THE TRADING PATH; POLYGON FOR TICKERS, RSS FOR MACRO  (2026-09-13)
+--------------------------------------------------------------------------------
+
+Instructed: no Haiku, Polygon for ticker news, RSS plus HuggingFace for macro.
+Both Claude call sites are gone. Two legs now, and they are not symmetric
+because the problem is not symmetric.
+
+    TICKER   Polygon news -> insights.sentiment, read directly, hourly.
+             No model, no key beyond Polygon's, no new dependency.
+
+    MACRO    RSS -> feedparser -> GUID dedupe -> promo filter -> NER ->
+             directional rules -> Gemini for what the rules cannot call ->
+             topic clustering -> verdict.
+
+THE TICKER LEG NEEDED NOTHING BUILT. news_hourly.py had been storing Polygon's
+aspect-based sentiment in symbol_sentiment_hourly since 09-12 -- label, score,
+article count, per ticker. classify_day() now reads that table instead of
+calling a model. Polygon is the right shape for the job: it reads the article
+body and emits a verdict PER TICKER, which is precisely what a sentence
+classifier cannot do.
+
+WHAT WAS LOST, AND IT IS NOT NOTHING. The model weighed headlines rather than
+counting them, knew a story recapping yesterday's move is already priced, and
+wrote the rationale that made a verdict auditable. On the 09-04 SanDisk case
+its value was exactly the judgement "merely lists SNDK in a round-up" -- a
+distinction a sentiment score does not draw, and the one that stops a round-up
+reading as a catalyst. Cheaper and coarser, not cheaper and better.
+
+THE GATE THRESHOLDS NOW REST ON A DIFFERENT INSTRUMENT. Sections 143-144 set
+the level gate asymmetrically because the Claude read printed BEARISH on 53% of
+sessions and BULLISH on 6%. Polygon's distribution skews neutral-positive with
+no standing bearish tilt, so that asymmetry may now be backwards. Re-derive
+once there are a few weeks of rows.
+
+
+147. WHY THE MACRO LEG IS RULES AND NOT A SENTIMENT MODEL  (2026-09-13)
+--------------------------------------------------------------------------------
+
+Ten controlled macro headlines whose direction for a long QQQ position is not
+arguable, run through everything available:
+
+    ProsusAI/finbert                2/10    8 inverted
+    distilroberta-financial-news    4/10    5 inverted
+    Llama-3.1-8B-Instruct           8/8     0 inverted, then HTTP 402
+    gemini-3.1-flash-lite           9/10    1 miss, FREE tier
+    directional rules              10/10    but FITTED to that set
+
+THE SENTENCE CLASSIFIERS ARE NOT NOISY, THEY ARE MISMATCHED. FinBERT was
+trained on earnings sentences, where "revenue falls" is bad. Macro inverts
+that: "unemployment falls" is good and "oil spikes" is bad. The economics is
+not in the text, so no prompt or threshold recovers it -- and a second model
+trained on broader financial news still inverted five. That is why the answer
+was rules rather than a better classifier.
+
+HONESTY ABOUT 10/10. The rules were written with those ten cases visible and
+two were changed to fix the last miss. That is fitting to the test set. It says
+the encoding is coherent, not that it generalises. Gemini's 9/10 is the
+stronger number: nothing was tuned to it, one prompt, first attempt.
+
+GEMINI'S ONE MISS IS DEFENSIBLE AND THE LABEL IS THE ARGUABLE HALF. It called
+"jobs report blows past expectations, unemployment falls" RISK_OFF -- the
+good-news-is-bad-news read, where a hot print keeps the Fed hawkish.
+
+RULES FIRST, GEMINI FOR THE RESIDUE. Head to head on the live tape: agreed on
+4, disagreed on 1, Gemini answered 3 the rules could not. Coverage 8 of 10
+against 5 of 10.
+
+    THE ONE DISAGREEMENT WAS A RULES BUG, AND ONLY THE MODEL COULD HAVE FOUND
+    IT. "Iran and UAE back joint BRICS statement urging restraint" -- the rules
+    voted RISK_OFF on supply risk because "restraint" was sitting in the
+    DISRUPTION set, its own opposite. Nothing else would have caught it: the
+    headline was macro, the geography matched, it was one vote among several,
+    and the verdict it fed was correct anyway. A hand-written keyword set
+    encodes whatever its author believed, and a word filed under its antonym is
+    invisible to every test that does not reason about meaning.
+
+Rules keep their place regardless: free, auditable ("oil+ rate+" says why), and
+they answer when the API does not.
+
+COST IS NOT THE DECIDING FACTOR AND SHOULD NOT BE TREATED AS ONE. Measured at
+110 input and 4 output tokens per classification. Over 21 sessions that is
+under $0.25/month for ANY of the options, and $0 for Gemini's free tier. Choose
+on accuracy and availability.
+
+THE MODEL LISTING IS NOT AN AVAILABILITY CHECK. gemini-2.5-flash appears in
+both /v1 and /v1beta and 404s on generateContent: "no longer available to new
+users". 3.6-flash, flash-latest and 3.5-flash also failed for this key. Only a
+real call tells you.
+
+
+148. FIVE FAILURE MODES IN THE MACRO PIPELINE, AND THE CHEAPEST FIX FOR EACH  (2026-09-13)
+--------------------------------------------------------------------------------
+
+Each of these was found by running the thing and reading the output, not by
+reasoning about it.
+
+ADS AND PERSONAL FINANCE, scored as macro. A freight-fund advert matched
+"crude, oil, tariffs" and contributed +0.91 -- the second-largest mover of the
+macro mean -- and a Social Security COLA column matched "inflation" at +0.51.
+Both pushed a bearish tape toward neutral. A TERM LIST CANNOT EXCLUDE THEM:
+they genuinely contain macro terms, which is how they got in. The genre has to
+be recognised. Regex pass, and it runs BEFORE any model call -- it sat inside
+classify_macro at first, which meant every advert paid for an NER round trip
+before being thrown away.
+
+SUBSTRING MATCHING. "sec" matched Social SECurity and SECretary, "ppi" matched
+shiPPIng, "fed" matched FEDeral. Whole-word via a compiled helper.
+
+LITERAL BACKSPACES. Writing the \b fix through a shell heredoc turned every one
+into 0x08, so the patterns were <BS>oil<BS> and matched nothing. The filter
+silently went from 17 macro headlines to 3 -- which LOOKS like a stricter
+filter, not a broken one. The escape now lives in one helper instead of at four
+call sites.
+
+A MEAN OF CONFIDENCES. One +0.91 advert cancelled a real -0.95 risk-off
+headline. Votes are now bounded to +/-1 and the score is a net proportion, so
+no single article can carry the aggregate by being loud.
+
+COMPOUND HEADLINES. "Shares slip in Asia as oil climbs, rate hikes loom" is
+three facts; scoring it as one string blurs them into whichever verb the model
+noticed. Split on ,/as/while/after/amid -- NOT on "on", which is a preposition
+far more often than a conjunction and cut "Tariffs on Chinese goods raised"
+between the driver and its direction.
+
+AND ONE THE LIST DID NOT COVER: supply shocks have no movement verb. "Vessel
+struck in Strait of Hormuz" is unambiguously risk-off and contains no rise or
+fall, because it is an EVENT and the price move is the consequence nobody has
+written yet. Oil geography plus a disruption word now votes risk-off, one-sided
+-- an attack is never risk-on, while "talks resume" is not reliably risk-on
+either.
+
+
+149. CLUSTERING: WHERE, AND THE MEASUREMENT THAT DECIDED IT  (2026-09-13)
+--------------------------------------------------------------------------------
+
+Raised: cluster before the scorers, so a cluster resolves once instead of per
+headline. Correctly made conditional on how much duplicate coverage the feeds
+actually produce. Measured:
+
+    10 macro headlines -> 10 distinct events, 0 carried by more than one wire
+    5 resolved by rules (free), 5 abstentions (the only paid calls)
+
+THE FREE LAYER ALREADY ABSORBS THE DUPLICATION, and that is structural rather
+than an accident of one tape. Syndicated stories are the big obvious ones -- a
+Hormuz strike, an oil move, a Fed decision -- and those are exactly what the
+rules answer for nothing. What reaches Gemini is the residue: analytical and
+opinion pieces, distinct by nature. The cost clustering would cut is the cost
+that is already zero.
+
+AND THE NAIVE VERSION IS WORSE THAN NEUTRAL. Abstentions carry no topic -- a
+topic comes from a matched driver, and abstaining means none matched -- so
+clustering them by topic drops all five into "other" and answers five unrelated
+stories with one call. The measurement script scored that as "4 calls saved".
+It is four answers destroyed, and it would have looked like a win in exactly
+the metric anyone would have checked.
+
+Sunday is a low-syndication tape, so 0 duplicates is a LOWER bound. Re-measure
+on a weekday before revisiting; scratchpad/cluster_cost.py.
+
+CLUSTERING STILL HAPPENS, just at the end: headlines aggregate WITHIN a topic,
+topics aggregate across, and nothing averages an oil headline against a
+payrolls headline as though they were two draws from one distribution. Four
+wires on one story is ONE vote. MIN_TOPICS, not MIN_ARTICLES -- a threshold
+must not be satisfiable by syndication.
+
+
+150. TWO BUGS THAT WOULD HAVE DECIDED MONDAY  (2026-09-13)
+--------------------------------------------------------------------------------
+
+Both found in the last hour before arming, both invisible in normal output.
+
+GEOGRAPHY WAS NOT ENERGY, SO ONE DRIVER COUNTED AS TWO TOPICS. Three Hormuz
+headlines fell to "other" because hormuz/strait/iran were not in the topic map,
+while the oil-price headline went to "energy". A supply shock and the price
+move it causes are ONE fact.
+
+    It mattered because TOPIC COUNT SETS THE VERY_* THRESHOLD:
+
+        4 topics -> scaled -0.80 -> VERY_BEARISH, conf 0.80
+                    every bullish entry refused on both books
+        3 topics -> scaled -0.60 -> BEARISH, conf 0.60
+                    below the 0.70 direction-gate floor, gates nothing
+
+    A mislabelled bucket, not a market judgement, was the difference between
+    trading Monday's bullish side and not.
+
+"other" no longer votes. Its members are unrelated by construction, so summing
+them produces a topic that is an average of leftovers -- and it counted toward
+the total that sets the threshold. A large "other" means the topic map has a
+gap, not that the tape has a new theme.
+
+THE SCALE ITSELF WAS WRONG, and this was the near-miss. `net` is the PROPORTION
+of agreeing topics, so three topics leaning one way scored -1.00 -- identical
+to thirty. That mapped to VERY_BEARISH at confidence 1.00 and would have
+refused the entire bullish book on the strength of three agreeing wires. That
+is section 14 again: the August macro gate that refused 55 of 55 cycles on a
+day QQQ rose $6.50 off its low. The stored score is now net scaled by evidence
+(VERY_TOPICS=5), so VERY_* needs breadth and not just unanimity among a handful.
+
+THE HOURLY RE-GRADE HAD ALREADY COLLAPSED TO ONCE-A-DAY. Found by accident: a
+second run printed "0 new article(s) -- nothing to score" and wrote no verdict.
+GUID dedupe correctly stops an article being SCORED twice; it was also stopping
+it being COUNTED twice, and those are different questions.
+
+    09:25  full 24h, a dozen topics, verdict written
+    11:25  the last hour only -- two or three articles, below MIN_TOPICS --
+           nothing written, and the gates read the 09:25 row all day
+
+The exact failure sections 143-144 set out to fix, rebuilt one layer down, and
+it would have read as a quiet tape rather than a closed window. Scores are now
+kept on the dedupe row (b4e7d13f92a6) and the verdict aggregates everything
+scored inside LOOKBACK_HOURS. Scoring once per article; counting per sweep.
+
+
+151. WHAT IS LIVE, AND WHAT IS STILL UNMEASURED  (2026-09-13)
+--------------------------------------------------------------------------------
+
+    :07  news_hourly    Polygon, 8 tickers
+    :12  news_enrich    RSS -> NER -> rules -> Gemini -> macro verdict
+    :25  news_watch     grades both legs into news_verdicts
+    */15 dte0_trade     --rotate --live --budget 1500
+
+GATES ARMED: the level gate and turn gate on single names, NEWS_DIRECTION on
+the QQQ 0DTE book. They were armed before today and inert only because QQQ had
+no verdict; putting news_enrich on cron is what switches them on.
+
+NOT ONE OF THEM HAS BEEN MEASURED AGAINST AN OUTCOME. Every number in sections
+147-150 is about whether a classifier agrees with a label someone wrote by
+hand. Whether ANY of it precedes a QQQ move is unknown, and that is the only
+question that matters for something that refuses trades. news_verdict_history
+and symbol_sentiment_hourly accumulate the rows; verdict_outcome.py and
+macro_outcome.py are what will answer it.
+
+The turn gate in particular has never fired on any historical session and
+CANNOT be backtested -- every past day holds one verdict, so there is no delta
+in the record.
+
+STILL OPEN:
+  - dte0_shadow is empty, 0 rows, so there is no paper record to test against
+  - two credentials leaked into a session transcript and need rotating: the
+    Anthropic key and part of the Postgres password
+  - gate thresholds were derived on the Claude verdict distribution and the
+    instrument has changed

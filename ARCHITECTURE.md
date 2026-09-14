@@ -24,6 +24,7 @@ This file is the map.
 | time | job | what it does |
 |---|---|---|
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
+| hourly at :12, 09:12–16:12 | `news_enrich.py` | macro leg: RSS → feedparser → GUID dedupe → promo filter → NER → rules → Gemini → topic clustering → one QQQ macro row. Two hosted API calls, nothing installed |
 | hourly at :25, 09:25–16:25 | `news_watch.py` | grades everything published since the previous close, writes `news_verdicts` (current) **and `news_verdict_history` (append-only)**. Window guard 09:20–16:00, `TRADING_NEWS_HOURLY`. Unchanged headlines skip the model via the digest |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
 | every 5 min, 09:30–16:00 | `price_alert.py` | level crossings, fires once per crossing. Live rules: `SNDK<1762`, `SNDK>1762`, `SNDK<1700`, `CRWV<95` |
@@ -177,6 +178,22 @@ CRWV list Friday expiries only and could never have traded intraday anyway.
 `symbol_sentiment_hourly`, written by `scripts/news_hourly.py` every hour
 08:00-16:30 ET. **It scores. It does not gate.**
 
+**Claude is out of the trading path (2026-09-13, sections 146–150).** Two
+legs, asymmetric because the problem is:
+
+| leg | source | model |
+|---|---|---|
+| ticker | Polygon `insights.sentiment`, stored hourly | none |
+| macro | RSS → NER → directional rules → Gemini for the residue | two hosted API calls |
+
+Nothing is installed locally — no torch, no spaCy, no transformers. NER is
+`dbmdz/bert-large-cased-finetuned-conll03-english` and sentiment is
+`ProsusAI/finbert`, both on `router.huggingface.co`; the macro DIRECTION comes
+from rules plus `gemini-3.1-flash-lite`, because sentence classifiers invert on
+macro language (finbert 2/10, distilroberta 4/10 on a controlled set — section
+147). FinBERT is still scored and stored beside every macro headline but
+decides nothing.
+
 **The RSS scrape is retired (2026-09-12).** `news_hourly.py` is the only
 fetcher; the per-minute cycle now READS the stored corpus through
 `_stored_headlines()` and makes no network call at all. It had to stop
@@ -255,9 +272,11 @@ or threshold fixes that; there is no way to tell a sentence classifier "score
 this headline FOR SanDisk".
 
 **BEING THE RIGHT SHAPE IS NOT THE SAME AS BEING RIGHT.** Polygon's read has
-never been scored against an outcome here either, so nothing gates on it.
-`verdict_outcome` grades it nightly, and Haiku's 09:30 verdict (59-60%,
-lookahead removed) remains the incumbent to beat.
+never been scored against an outcome here — and as of 2026-09-13 it IS what
+grades every ticker, Claude having been removed from the trading path entirely
+(section 146). So the thing that now feeds the gates is the thing that has
+never been measured. `verdict_outcome` grades it nightly; that is what will
+settle it.
 
 **Retention is 10 days, matching `NOVELTY_LOOKBACK_DAYS` exactly.** That is the
 binding constraint: the novelty filter asks for prior coverage over 10 days, and
@@ -351,8 +370,9 @@ ingest   nodes._scrape_headlines()
          name in TRADING_MANAGE_UNDERLYING
 store    market_news_vectors — Voyage embeddings, deduped, with `source`
 tag      symbol_news.ALIASES — the engine holds SNDK, the wires write SanDisk
-grade    classify_day() → VERY_BULLISH..VERY_BEARISH, TRADING_NEWS_MODEL,
-         SINCE THE PREVIOUS SESSION'S CLOSE. Fires on a digest change.
+grade    classify_day() → VERY_BULLISH..VERY_BEARISH. NO MODEL CALL as of
+         2026-09-13: tickers read Polygon's stored aspect score, QQQ reads the
+         RSS/rules/Gemini macro row. SINCE THE PREVIOUS SESSION'S CLOSE.
 label    news_symbol_impact — forward 1d/5d returns in percent AND in ATR
 ```
 
@@ -381,9 +401,11 @@ an exact-match rule catches nothing. Re-report share: NVDA 42%, SNDK 42%,
 MU 30%, QQQ 24%. 35 of 167 verdicts changed, `NEUTRAL` 101 → 120. **Its measured effect on
 prediction is unknown and probably unmeasurable here** — two runs at the same
 threshold gave 1-day AUC 0.551 and 0.536, and the bearish bucket changed sign
-between them (−0.11% → +0.33%). That wobble is the classifier, not the data:
-Haiku returns different verdicts on the same headlines run to run, by as much
-as any effect being tested (section 127). The filter is kept on the principle,
+between them (−0.11% → +0.33%). That wobble was the classifier, not the data:
+Haiku returned different verdicts on the same headlines run to run, by as much
+as any effect being tested (section 127). Haiku is gone as of 2026-09-13, but
+the warning survives it — Gemini is sampled too, and the rules layer is the
+only part of the macro read that is deterministic. The filter is kept on the principle,
 not on a measurement. The cost is that a genuine follow-up to a covered story
 can be dropped with it.
 

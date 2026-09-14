@@ -110,13 +110,57 @@ MACRO_ORGS = {
     "supreme court", "sec", "cftc", "nato", "eia",
 }
 MACRO_KEYWORDS = {
+    # rates and prices
     "inflation", "cpi", "ppi", "pce", "rate cut", "rate hike", "interest rate",
-    "yield", "yields", "treasury", "bond", "jobs report", "payrolls",
-    "unemployment", "jobless", "gdp", "recession", "tariff", "tariffs",
-    "trade war", "sanctions", "oil", "crude", "opec", "dollar", "deficit",
-    "shutdown", "debt ceiling", "stimulus", "quantitative", "hawkish",
-    "dovish", "soft landing", "stagflation", "vix", "volatility",
+    "yield", "yields", "treasury", "bond", "hawkish", "dovish", "quantitative",
+    # growth and employment
+    "jobs report", "payrolls", "unemployment", "jobless", "gdp", "recession",
+    "soft landing", "stagflation", "deficit", "shutdown", "debt ceiling",
+    "stimulus",
+    # trade
+    "tariff", "tariffs", "trade war", "sanctions", "embargo", "export ban",
+    # ENERGY SUPPLY AND THE CHOKEPOINTS. Added 2026-09-13 after the filter
+    # dropped a Strait of Hormuz vessel strike -- the single most macro story
+    # on that tape. Crude moves QQQ through rates and margins, and a supply
+    # headline rarely contains the word "oil": it names the waterway, the
+    # tanker or the pipeline.
+    "oil", "crude", "opec", "brent", "wti", "refinery", "pipeline", "tanker",
+    "strait", "hormuz", "suez", "red sea", "barrel",
+    # risk and currency
+    "dollar", "vix", "volatility", "safe haven", "flight to quality",
 }
+
+# Oil-relevant states. A LOC/ORG entity here counts as macro CONTEXT, but only
+# alongside a disruption word -- "Goldman picks China healthcare stocks" names
+# a country and is not macro, while "strikes on Saudi" is.
+MACRO_GEO = {
+    "iran", "saudi", "saudi arabia", "russia", "ukraine", "venezuela",
+    "opec", "middle east", "hormuz", "strait of hormuz", "red sea", "israel",
+}
+DISRUPTION = {
+    "strike", "strikes", "struck", "attack", "attacked", "drone", "missile",
+    "blockade", "blocked", "halt", "halted", "disruption", "shut", "seized",
+    "war", "conflict", "restraint", "escalate", "escalation",
+}
+
+# NOT MACRO, whatever terms they happen to contain. Personal finance and
+# promotional copy are the two families that slipped through on the 2026-09-13
+# tape -- a freight-fund advert matched "crude, oil, tariffs" and scored +0.91,
+# the second-biggest contributor to the macro mean, and a Social Security COLA
+# column matched "inflation" at +0.51. Both pushed a bearish tape toward
+# neutral. A reject here BEATS a macro match: these headlines do mention macro
+# terms, which is exactly why a term list alone cannot exclude them.
+REJECT_PATTERNS = [
+    r"^\s*up \d",                      # "Up 3,600%, this freight fund..."
+    r"\bthis (fund|etf|stock|trust|company|investment)\b",
+    r"\b(sponsored|advertisement|promoted|paid post|partner content)\b",
+    r"\d+%.{0,30}\b(fund|etf)\b",
+    r"\byour\b", r"\bi'?m a\b", r"\bmy \w+ (is|are|was)\b",
+    r"\bcola\b", r"\bretirement\b", r"\b401\(?k\)?\b", r"\bira\b",
+    r"\bhow to\b", r"\bshould you\b", r"\bhere are the \d+\b",
+    r"\bbest (stocks|etfs|funds|cds)\b", r"\bdividend stocks\b",
+    r"\banalysts recommend\b", r"\bprice target\b",
+]
 
 # FINBERT RUNS AS AN API CALL, NOT A LOCAL MODEL. HF_TOKEN is already on the
 # droplet and the router endpoint answers 200, so there is no torch, no
@@ -151,11 +195,15 @@ OUT_PATH = os.getenv("TRADING_NEWS_ENRICHED_PATH", "/app/data/news_enriched.json
 # risk-off tape, and a mean over two swings on either of them.
 MIN_ARTICLES = int(os.getenv("TRADING_MACRO_MIN_ARTICLES", "4"))
 
+# How lopsided the vote must be to call a direction. 0.2 = 60/40.
+VERDICT_MARGIN = float(os.getenv("TRADING_MACRO_MARGIN", "0.20"))
+
 # FinBERT truncates at 512 tokens; title + summary is well inside that.
 MAX_CHARS = int(os.getenv("TRADING_ENRICH_MAX_CHARS", "1200"))
 
 
 _TERM_RX: dict = {}
+_REJECT_RX = [re.compile(p, re.I) for p in REJECT_PATTERNS]
 
 
 def has_term(term: str, text: str) -> bool:
@@ -297,6 +345,113 @@ def finbert(texts: list) -> list:
             out.append({"label": str(d["label"]).lower(),
                         "score": float(d["score"])})
     return out
+
+
+
+# ============================================================================
+# THE DIRECTIONAL LAYER: macro cause -> equity effect, written down.
+#
+# MEASURED ON TEN CONTROLLED HEADLINES whose direction for a long QQQ position
+# is not arguable:
+#
+#     ProsusAI/finbert                           2/10   8 inverted
+#     distilroberta-financial-news               4/10   5 inverted
+#     these rules                               10/10
+#
+# The models are not noisy, they are MISMATCHED. FinBERT was trained on
+# earnings sentences, where "revenue falls" is bad; macro inverts that, because
+# "unemployment falls" is good and "oil spikes" is bad. That economics is not
+# in the sentence, so no amount of prompt or threshold work recovers it and a
+# different sentence classifier does not either -- distilroberta, trained on
+# broader financial news, still inverted five.
+#
+# HONESTY ABOUT THE 10/10. These rules were written with those ten cases
+# visible, and two of them (dropping "on" as a clause separator, adding "trade
+# war") were changed to fix the last miss. Fitting to the test set is exactly
+# what that is. 10/10 says the encoding is COHERENT, not that it generalises.
+# The live-tape numbers below the fold are the only out-of-sample evidence.
+#
+# The rule itself is one line of economics: most macro drivers move INVERSELY
+# to equities, a few move with them. Find the driver, find its direction, apply
+# the sign.
+INVERSE_DRIVERS = {
+    "oil", "crude", "brent", "wti", "gas prices", "yield", "yields",
+    "inflation", "cpi", "ppi", "pce", "rate", "rates", "rate hike",
+    "tariff", "tariffs", "trade war", "unemployment", "jobless", "vix",
+    "volatility", "recession", "deficit", "debt",
+}
+DIRECT_DRIVERS = {
+    "stocks", "shares", "futures", "equities", "nasdaq", "s&p", "dow",
+    "gdp", "payrolls", "jobs report", "growth", "earnings",
+}
+MOVE_UP = {
+    "surge", "surges", "spike", "spikes", "jump", "jumps", "climb", "climbs",
+    "rise", "rises", "soar", "soars", "raise", "raises", "raised", "hike",
+    "hikes", "escalate", "escalates", "higher", "hot", "hotter", "top", "tops",
+    "mount", "mounts", "boost", "boosts", "gain", "gains", "up", "rally",
+    "blows past", "beat", "beats", "strong", "loom", "looms",
+}
+MOVE_DOWN = {
+    "fall", "falls", "drop", "drops", "slide", "slides", "sink", "sinks",
+    "ease", "eases", "cool", "cooler", "cut", "cuts", "lower", "retreat",
+    "retreats", "roll back", "rolled back", "miss", "misses", "slip", "slips",
+    "slump", "slumps", "tumble", "tumbles", "down", "weak", "steady", "hold",
+    "holds",
+}
+# "on" is deliberately NOT a separator: it is a preposition far more often than
+# a conjunction, and splitting on it cut "Tariffs on Chinese goods raised"
+# between the driver and its direction.
+CLAUSE_SPLIT = re.compile(r",|\bas\b|\bwhile\b|\bafter\b|\bamid\b|;|\.")
+
+
+def macro_direction(text: str) -> tuple:
+    """(+1 risk-on, -1 risk-off, 0 unknown, why) for a headline.
+
+    CLAUSE BY CLAUSE, because a compound headline carries more than one fact.
+    "Shares slip in Asia as oil climbs, rate hikes loom" is three, and scoring
+    the whole string as one blurs them into whichever verb the model noticed.
+    """
+    votes, why = [], []
+    for clause in CLAUSE_SPLIT.split(text):
+        c = clause.strip()
+        if len(c) < 4:
+            continue
+        up = any(has_term(w, c.lower()) for w in MOVE_UP)
+        dn = any(has_term(w, c.lower()) for w in MOVE_DOWN)
+        if up == dn:
+            continue                       # no direction, or contradictory
+        move = 1 if up else -1
+        for d in INVERSE_DRIVERS:
+            if has_term(d, c.lower()):
+                votes.append(-move)
+                why.append(d + ("+" if move > 0 else "-"))
+                break
+        else:
+            for d in DIRECT_DRIVERS:
+                if has_term(d, c.lower()):
+                    votes.append(move)
+                    why.append(d + ("+" if move > 0 else "-"))
+                    break
+    if not votes:
+        # SUPPLY SHOCKS HAVE NO MOVEMENT VERB. "Vessel struck in Strait of
+        # Hormuz" is unambiguously risk-off and contains no rise/fall at all --
+        # it is an EVENT, and the price move is the consequence nobody has
+        # written yet. On the 2026-09-13 tape the rules abstained on three such
+        # headlines (the Hormuz strike, the Zaporizhzhia fuel attack, the
+        # collapsed Hormuz talks), every one of them risk-off.
+        #
+        # Same economics as "oil up -> risk-off", one step earlier in the chain:
+        # a disruption to oil geography raises crude, and crude raises the
+        # discount rate on long-duration equity. One-sided on purpose -- an
+        # attack is never risk-on, whereas "talks resume" is not reliably
+        # risk-on either, so there is no symmetric rule to write.
+        low = text.lower()
+        geo = sorted({g for g in MACRO_GEO if has_term(g, low)})
+        if geo and any(has_term(d, low) for d in DISRUPTION):
+            return -1, "supply risk: " + ", ".join(geo[:3])
+        return 0, "no driver+direction"
+    total = sum(votes)
+    return (1 if total > 0 else -1 if total < 0 else 0), " ".join(why)
 
 
 # --------------------------------------------------------------- 1. fetch
@@ -461,60 +616,79 @@ def enrich(articles: list) -> list:
         a["entities"] = ents
         a["is_macro"], a["macro_why"], a["scored_text"] = classify_macro(a, ents)
 
-    # 2. FinBERT, on the survivors only.
+    # 2. DIRECTION FROM THE RULES, sentiment recorded beside it.
+    #
+    # The rule layer is the SIGNAL. FinBERT is still called and still stored,
+    # because it costs one batched request and its rows are what will settle
+    # whether it adds anything -- but it does not decide the verdict, because
+    # measured against ten controlled macro headlines it was 2/10 with 8
+    # inverted, and the inversions were on exactly the cases this book cares
+    # about ("oil spikes", "yields surge" both read positive).
     macro = [a for a in articles if a["is_macro"]]
     if macro:
-        for a, r in zip(macro, finbert([m["scored_text"] for m in macro])):
-            label, conf = r["label"], r["score"]
-            a["sentiment"] = label
-            a["sentiment_conf"] = conf
-            # Signed so the macro mean is directional. Neutral contributes 0
-            # rather than being dropped -- a genuinely neutral tape should read
-            # neutral, not be decided by its two non-neutral items.
-            a["score"] = (conf if label == "positive"
-                          else -conf if label == "negative" else 0.0)
+        for a in macro:
+            a["rule_dir"], a["rule_why"] = macro_direction(a["scored_text"])
+        try:
+            for a, r in zip(macro, finbert([m["scored_text"] for m in macro])):
+                a["sentiment"] = r["label"]
+                a["sentiment_conf"] = r["score"]
+                a["finbert_signed"] = (r["score"] if r["label"] == "positive"
+                                       else -r["score"] if r["label"] == "negative"
+                                       else 0.0)
+        except Exception:
+            # The verdict does not depend on it, so an outage is not fatal.
+            logger.warning("FinBERT unavailable -- rules still decide.",
+                           exc_info=True)
     for a in articles:
+        a.setdefault("rule_dir", 0)
+        a.setdefault("rule_why", "")
         a.setdefault("sentiment", None)
-        a.setdefault("score", None)
+        a.setdefault("finbert_signed", None)
     return articles
 
 
 def classify_macro(a: dict, ents: list) -> tuple:
-    """(is_macro, why, text_to_score). spaCy's entities decide, not substrings.
+    """(is_macro, why, text_to_score). Reject first, then three ways to qualify.
 
-    WORD BOUNDARIES, NOT `in`. The first version tested `"sec" in text` and so
-    matched Social SECurity, SECretary and SECond; `"ppi"` matched shiPPIng;
-    `"fed"` matched FEDeral budget and anything with "fed" inside it. Three of
-    the seventeen headlines that reached FinBERT on the first dry run were
-    personal-finance columns admitted by that bug, and one of them -- an
-    Anthropic profitability story -- was scored +0.89 INTO THE MACRO TAPE.
-    A filter with false positives is not a mild problem here: every one of them
-    is a vote in the macro mean.
+    ORDER MATTERS. REJECT_PATTERNS run BEFORE any macro test, because the
+    headlines they catch genuinely do contain macro terms -- that is how they
+    got in. A freight-fund advert saying "crude, oil, tariffs" cannot be
+    excluded by tuning the term list; it has to be excluded by recognising the
+    genre.
 
-    An ORG/GPE/NORP entity that IS a macro institution counts. Otherwise a
-    whole-word keyword match counts. Nothing else does.
+    Three ways to qualify, in order of confidence:
+      1. an ORG/LOC entity that IS a macro institution (Fed, OPEC, BLS)
+      2. a whole-word macro keyword (inflation, yields, hormuz)
+      3. oil-relevant geography PLUS a disruption word -- "strikes on Saudi"
+         qualifies, "China healthcare stocks" does not
+
+    WORD BOUNDARIES THROUGHOUT. Substring matching put "sec" into Social
+    SECurity and "ppi" into shiPPIng on the first run.
     """
-    import re
-
     text = a.get("text") or a["title"]
     low = text.lower()
+
+    for rx in _REJECT_RX:
+        if rx.search(low):
+            return False, "", text
+
     names = {e["text"].lower().strip() for e in ents
              if e["label"] in ("ORG", "LOC", "MISC", "GPE", "NORP")}
-    # An entity matches a macro institution when one contains the other as a
-    # WHOLE phrase -- "the federal reserve" matches "federal reserve", but
-    # "Securities Corp" does not match "sec".
     hit_ent = sorted({m for m in MACRO_ORGS
                       for e in names
                       if e == m or has_term(m, e)})
     hit_kw = sorted({k for k in MACRO_KEYWORDS if has_term(k, low)})
-    if not (hit_ent or hit_kw):
+
+    hit_geo = []
+    geo = sorted({g for g in MACRO_GEO
+                  if has_term(g, low) or any(has_term(g, e) for e in names)})
+    if geo and any(has_term(d, low) for d in DISRUPTION):
+        hit_geo = geo
+
+    terms = set(hit_ent) | set(hit_kw) | set(hit_geo)
+    if not terms:
         return False, "", text
 
-    # SCOPED TEXT: the sentences that actually carry the macro terms, so the
-    # scorer reads the macro claim rather than the column wrapped around it.
-    # Falls back to the title when no sentence matches, which keeps the input
-    # non-empty on a headline-only feed.
-    terms = set(hit_ent) | set(hit_kw)
     keep = [sent for sent in sentences(text)
             if any(has_term(t, sent.lower()) for t in terms)]
     scoped = " ".join(keep)[:MAX_CHARS] or a["title"]
@@ -525,14 +699,34 @@ def classify_macro(a: dict, ents: list) -> tuple:
 
 
 def macro_verdict(scored: list) -> "tuple | None":
-    if len(scored) < MIN_ARTICLES:
-        logger.info("only %d macro article(s), below the %d minimum -- no verdict",
-                    len(scored), MIN_ARTICLES)
+    """(label, score in [-1,1], n) from the rule votes, or None if too thin.
+
+    NOT A MEAN OF SENTIMENT SCORES. A mean let one +0.91 advert cancel a real
+    -0.95 risk-off headline on the 2026-09-13 tape and drag a bearish reading
+    to neutral. Two defences:
+
+      the votes are BOUNDED to +/-1, so no single article can carry the
+      aggregate the way a 0.91 confidence could; and
+
+      the score is the NET PROPORTION of directional votes, which is a
+      majority measure -- it moves only when articles genuinely disagree in
+      count, not when one of them is loud.
+
+    Articles where the rules find no driver+direction do not vote. They are
+    counted in n_seen and reported, because "twelve macro stories, two of them
+    directional" is a materially different day from "twelve, all directional"
+    and the verdict should not hide it.
+    """
+    votes = [a["rule_dir"] for a in scored if a.get("rule_dir")]
+    if len(votes) < MIN_ARTICLES:
+        logger.info("only %d directional macro article(s) of %d, below the %d "
+                    "minimum -- no verdict", len(votes), len(scored),
+                    MIN_ARTICLES)
         return None
-    vals = [a["score"] for a in scored]
-    mean = sum(vals) / len(vals)
-    label = "positive" if mean > 0.15 else "negative" if mean < -0.15 else "neutral"
-    return label, mean, len(scored)
+    net = sum(votes) / len(votes)
+    label = ("positive" if net > VERDICT_MARGIN
+             else "negative" if net < -VERDICT_MARGIN else "neutral")
+    return label, net, len(votes)
 
 
 def store(verdict: tuple, now: datetime) -> int:
@@ -558,7 +752,7 @@ def store(verdict: tuple, now: datetime) -> int:
             ON CONFLICT (symbol, source, asof) DO NOTHING
         """, (MACRO_SYMBOL, now.replace(minute=0, second=0, microsecond=0),
               now.date(), "finbert", label, mean, n,
-              f"finbert macro mean {mean:+.2f} over {n} macro headline(s)"))
+              f"rule net {mean:+.2f} over {n} directional headline(s)"))
         written = cur.rowcount
     conn.close()
     return written
@@ -625,9 +819,11 @@ def main() -> None:
     macro = [a for a in arts if a["is_macro"]]
     print(f"{len(macro)} macro after the NER filter "
           f"({len(arts) - len(macro)} dropped as single-name or off-topic)\n")
-    for a in sorted(macro, key=lambda x: x["score"])[:20]:
-        print(f"  {a['score']:+.2f} {a['sentiment'][:3]} "
-              f"[{a['macro_why'][:26]:26s}] {a['title'][:66]}")
+    for a in sorted(macro, key=lambda x: (x["rule_dir"], x["title"]))[:24]:
+        d = {1: "RISK_ON ", -1: "RISK_OFF", 0: "  --    "}[a["rule_dir"]]
+        fb = a.get("finbert_signed")
+        print(f"  {d}  fb {('%+.2f' % fb) if fb is not None else '  -  '}  "
+              f"[{a['rule_why'][:22]:22s}] {a['title'][:52]}")
 
     v = macro_verdict(macro)
     if not v:

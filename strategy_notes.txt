@@ -9549,3 +9549,173 @@ STILL OPEN:
     Anthropic key and part of the Postgres password
   - gate thresholds were derived on the Claude verdict distribution and the
     instrument has changed
+
+
+152. A BLOCKED EXIT ON A LIVE 0DTE POSITION  (2026-09-14)
+--------------------------------------------------------------------------------
+
+The account held AVGO 350 and 342.5 puts BOTH LONG while the engine believed it
+held a 350/342.5 put debit spread. Every close sent buy_to_close on the 342.5 --
+covering a short that did not exist -- and Tradier refused it:
+
+    "Buy To Cover order cannot be placed unless closing a short position."
+
+THE STOP FIRED CORRECTLY AT -58% AND WAS REJECTED EIGHT TIMES, once a minute.
+Monitoring was never the failure; the exit was. And because the target, the
+stall watch and the 15:45 flatten all route through one function, the position
+had NO working exit at all on expiry day -- it would have ridden to settlement
+whichever rule fired.
+
+THE ENGINE'S BELIEF ABOUT A POSITION IS NOT AUTHORITY OVER IT. open_positions()
+already carried the line "what the BROKER thinks is open, which is the only
+authority that counts", and the close path ignored it. A close now reads the
+position signs and picks each leg's side from them:
+
+    debit spread   long +2 / short -2   sell_to_close / buy_to_close
+    credit spread  long +2 / short -2   sell_to_close / buy_to_close
+    both long      (this bug)           sell_to_close / sell_to_close
+    both short                          buy_to_close  / buy_to_close
+
+Credit and debit spreads are identical in leg sides and differ only in which
+way the money runs, which is handled separately. Previewed against the live
+account before arming, then closed the position on the next cycle for -307.
+
+IT WAS NOT THE ENGINE THAT OPENED IT. 55 filled orders that day: 53 classified
+by Tradier as "spread", 2 as "freeform" -- the broken open, and the fix closing
+it. submit_vertical hardcodes buy_to_open/sell_to_open and is the only order
+path in the codebase, the fill landed at 14:40:47 which is not a dte0_trade
+slot, and the engine logged action=HOLD that minute. The position was placed
+outside the system.
+
+WHICH IS THE POINT OF THE FIX, not an excuse. Orphan management EXISTS to adopt
+positions the engine did not open -- that is what "orphan" means. It was
+adopting them and then assuming a structure. Now it looks.
+
+
+153. SEVEN STOPS AND ONE TARGET: THE HYPOTHESIS THAT WAS WRONG  (2026-09-14)
+--------------------------------------------------------------------------------
+
+The day booked 1 target and 7 stops, about -614. The offered explanation was
+that the stop distance is wrong for this regime, since the spreads taken are
+deep ITM and their marks sit below intrinsic.
+
+THE MECHANISM IS REAL AND THE GUARD FOR IT ALREADY EXISTS.
+STOP_RESPECTS_INTRINSIC was built on 2026-09-03 for exactly this: an AVGO
+365/355 put holding its full 10.00 of intrinsic while marking 6.45, because the
+short leg still carried time premium. It is on by default and on in production.
+
+IT DID NOT BIND. Every stop that fired that day had intrinsic BELOW entry:
+
+    MU   P 910/900   entry 5.01   intrinsic 0.00
+    MU   P 905/900   entry 2.14   intrinsic 0.00
+    TSLA P 362/355   entry 2.94   intrinsic 1.04
+    AMZN C 252/258   entry 1.84   intrinsic 1.08
+    QQQ  C 712/714   entry 1.35   intrinsic 0.58
+
+Not one exception. The stop was not selling winners marked down by time value.
+The underlying had genuinely moved against the position, and the entries were
+pointed the wrong way before the stop mattered.
+
+WHAT THE TAPE ACTUALLY DID, which is where the answer was:
+
+    MU    905.81 -> 928.43   UP 2.50%
+    MSFT  497.06 -> 506.52   UP 1.90%
+    QQQ   703.33 -> 711.27   UP 1.13%
+    TSLA  359.78 -> 359.76   flat, 2.97% round trip
+
+A rising tape, and the stopped trades were overwhelmingly PUT spreads -- six on
+MU alone. Something was steering entries onto the short side of a market going
+up. See section 154.
+
+The lesson worth keeping: a plausible mechanism with a guard already built for
+it is the easiest thing to blame and the easiest to check. Checking it took one
+query and ruled it out.
+
+
+154. TWO NEWS GATES, TWO DIFFERENT RULES  (2026-09-14)
+--------------------------------------------------------------------------------
+
+    nodes.py:2836    if _nv[1] >= NEWS_DIRECTION_MIN_CONF     requires 0.70
+    dte0_trade:584   if verdict in NEWS_BEARISH               no floor at all
+
+The engine has required 0.70 confidence since it shipped. dte0_trade checked
+the verdict and ignored the confidence -- not by choice, the number never
+reached it: weekly_pick put `news` on the screener row and left `news_conf` off.
+
+WHAT THAT COST:
+
+    MU    BEARISH 0.25   every MU call debit refused    MU  +2.50% ($22)
+    TSLA  BEARISH 0.50   3 call refusals logged         TSLA flat
+    QQQ   BEARISH 0.67                                  QQQ +1.13%
+
+A BEARISH verdict makes dte0_trade refuse every CALL debit on that name. On MU
+the only side left open was puts, and MU rose all day: six MU put spreads
+stopped out. NOT ONE of those three verdicts clears 0.70 -- under the engine's
+own rule, none would have fired.
+
+A refusal now needs a contradicting verdict AND >= 0.70 confidence, read from
+the engine's own TRADING_NEWS_DIRECTION_MIN_CONF so the two cannot drift apart
+again. Below the floor it logs "ignored, not refused" rather than staying
+silent: a gate that stands down should say so.
+
+THIS DOES NOT CLAIM THE FLOOR MAKES MONEY. The news read has still never been
+scored against an outcome. It claims two gates on one signal should not
+disagree, which is true whichever threshold turns out to be right.
+
+
+155. ONE MODEL INSTEAD OF THREE STAGES  (2026-09-14)
+--------------------------------------------------------------------------------
+
+The macro leg ran NER (macro or not) -> FinBERT (sentiment) -> hand-written
+rules (direction). Each stage had its own failure mode, its own tuning surface
+and its own bugs. One Gemini call does all three; the file went 1240 -> 690
+lines and two HuggingFace dependencies went to zero.
+
+MEASURED, ON TEN CONTROLLED MACRO HEADLINES:
+
+    ProsusAI/finbert                2/10    8 inverted
+    distilroberta-financial-news    4/10    5 inverted
+    Llama-3.1-8B-Instruct           8/8     unusable -- HTTP 402, free tier
+    gemini-3.1-flash-lite           9/10    UNFITTED
+    hand-written rules             10/10    FITTED to those ten
+
+The distinction between the last two is the whole argument. The rules were
+written with those ten cases visible and two were changed to fix the last miss;
+Gemini saw them once. An unfitted 9 beats a fitted 10.
+
+AND THE SENTENCE CLASSIFIERS WERE NOT NOISY, THEY WERE MISMATCHED. FinBERT was
+trained on earnings sentences where "revenue falls" is bad; macro inverts that,
+because "unemployment falls" is good and "oil spikes" is bad. The economics is
+not in the sentence. A second model trained on broader financial news still
+inverted five, which is what ruled out "find a better classifier".
+
+GEMINI CAUGHT A RULES BUG NOTHING ELSE COULD. "Iran and UAE back joint BRICS
+statement urging restraint": the rules voted RISK_OFF because "restraint" sat
+in the DISRUPTION set, its own antonym. The headline was macro, the geography
+matched, it was one vote among several, and the verdict it fed was correct
+anyway. A hand-written keyword set encodes whatever its author believed, and a
+word filed under its opposite is invisible to every test that does not reason
+about meaning.
+
+THE PROMPT CARRIES WHAT THE PIPELINE LEARNED THE HARD WAY, because a fresh
+model makes the same mistakes: daily price roundups ("Gold prices today", "Best
+CD rates today", crypto tables) are excluded explicitly after Gemini put ten of
+them into one bucket and dragged a verdict NEGATIVE on its own; and direction is
+spelled out as economic rather than lexical.
+
+VERIFIED AGAINST WHAT IT REPLACED, on the same live tape, same hour: three
+stages read NEGATIVE net -0.667 over 6 topics, one call read the same. Evidence
+it is not worse, which is the bar for a replacement -- not proof it is better.
+
+WHAT IS GIVEN UP. The rules were free, deterministic and auditable: "oil+
+rate+" said exactly why a headline voted. This is a paid API at temperature 0,
+and when it is unreachable there is no macro verdict rather than a degraded
+one. The failure latches and unclassified articles vote on nothing, so an
+outage yields no verdict instead of a wrong one -- safe, but a real loss of
+independence.
+
+TWO DELETIONS THAT TOOK MORE THAN THEY LOOKED LIKE, both caught by the first
+dry run and invisible in review: _REJECT_RX, the promo filter's compiled
+patterns, lived beside the rules engine's regex cache; and GEMINI_KEY/URL/MODEL
+lived inside the old MACRO_LLM section. Deleting a block deletes everything
+that happened to be standing in it.

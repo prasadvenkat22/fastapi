@@ -24,7 +24,7 @@ This file is the map.
 | time | job | what it does |
 |---|---|---|
 | every minute | `run_cycle.py` | the 0DTE engine. Owns its market-hours and holiday check via `market_calendar.py` |
-| hourly at :12, 09:12–16:12 | `news_enrich.py` | macro leg: RSS → feedparser → GUID dedupe → promo filter → NER → rules → Gemini → topic clustering → one QQQ macro row. Two hosted API calls, nothing installed |
+| hourly at :12, 09:12–16:12 | `news_enrich.py` | macro leg: RSS → feedparser → GUID dedupe → promo regex → **one Gemini call** → topic clustering → one QQQ macro row. No HuggingFace, nothing installed |
 | hourly at :25, 09:25–16:25 | `news_watch.py` | grades everything published since the previous close, writes `news_verdicts` (current) **and `news_verdict_history` (append-only)**. Window guard 09:20–16:00, `TRADING_NEWS_HOURLY`. Unchanged headlines skip the model via the digest |
 | 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
 | every 5 min, 09:30–16:00 | `price_alert.py` | level crossings, fires once per crossing. Live rules: `SNDK<1762`, `SNDK>1762`, `SNDK<1700`, `CRWV<95` |
@@ -184,15 +184,24 @@ legs, asymmetric because the problem is:
 | leg | source | model |
 |---|---|---|
 | ticker | Polygon `insights.sentiment`, stored hourly | none |
-| macro | RSS → NER → directional rules → Gemini for the residue | two hosted API calls |
+| macro | RSS → promo regex → **one Gemini call** | one hosted API |
 
-Nothing is installed locally — no torch, no spaCy, no transformers. NER is
-`dbmdz/bert-large-cased-finetuned-conll03-english` and sentiment is
-`ProsusAI/finbert`, both on `router.huggingface.co`; the macro DIRECTION comes
-from rules plus `gemini-3.1-flash-lite`, because sentence classifiers invert on
-macro language (finbert 2/10, distilroberta 4/10 on a controlled set — section
-147). FinBERT is still scored and stored beside every macro headline but
-decides nothing.
+Nothing is installed locally — no torch, no spaCy, no transformers, and as of
+2026-09-14 no HuggingFace call either. `gemini-3.1-flash-lite` decides
+macro/skip, topic and direction in a single batched call.
+
+**NER, FinBERT and the rules engine were all removed (section 155).** Measured
+on ten controlled macro headlines: FinBERT 2/10 with 8 inverted, distilroberta
+4/10 with 5 inverted, hand-written rules 10/10 but *fitted* to those ten,
+Gemini **9/10 unfitted**. The sentence classifiers were not noisy — they were
+domain-mismatched, reading word polarity instead of economic implication
+("unemployment falls" is good, "oil spikes" is bad), which is why a better
+classifier was not the answer. The file went 1240 → 690 lines.
+
+What is given up: the rules were free, deterministic and auditable. This is a
+paid API, and when it is unreachable there is **no** macro verdict rather than a
+degraded one — the failure latches, unclassified articles vote on nothing, and
+the gates fall back to the last stored row.
 
 **The RSS scrape is retired (2026-09-12).** `news_hourly.py` is the only
 fetcher; the per-minute cycle now READS the stored corpus through

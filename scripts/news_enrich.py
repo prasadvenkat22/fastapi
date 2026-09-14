@@ -140,7 +140,19 @@ MACRO_GEO = {
 DISRUPTION = {
     "strike", "strikes", "struck", "attack", "attacked", "drone", "missile",
     "blockade", "blocked", "halt", "halted", "disruption", "shut", "seized",
-    "war", "conflict", "restraint", "escalate", "escalation",
+    "war", "conflict", "escalate", "escalation",
+}
+# "restraint" WAS IN THE SET ABOVE AND IS ITS OPPOSITE. Caught 2026-09-13 by
+# disagreeing with Gemini on "Iran and UAE back joint BRICS statement urging
+# restraint": the rules called it RISK_OFF on supply risk, Gemini called it
+# RISK_ON, and Gemini was right -- urging restraint is de-escalation, which
+# should lower crude, not raise it. A hand-written keyword set gets exactly
+# this wrong, and nothing in the pipeline would have caught it: the headline
+# was macro, the geography matched, the vote looked reasonable, and it voted
+# the wrong way. It took a second opinion that reasons about meaning.
+DE_ESCALATION = {
+    "restraint", "ceasefire", "truce", "de-escalate", "de-escalation",
+    "peace", "talks resume", "agreement", "accord", "resolve",
 }
 
 # NOT MACRO, whatever terms they happen to contain. Personal finance and
@@ -619,6 +631,11 @@ def macro_direction(text: str) -> tuple:
         low = text.lower()
         geo = sorted({g for g in MACRO_GEO if has_term(g, low)})
         if geo and any(has_term(d, low) for d in DISRUPTION):
+            # De-escalation beats disruption: "strikes halted after ceasefire"
+            # is not a supply shock. Abstain rather than guess the sign -- the
+            # LLM sees these next and is better at them.
+            if any(has_term(d, low) for d in DE_ESCALATION):
+                return 0, "geo, but de-escalatory", None
             return -1, "supply risk: " + ", ".join(geo[:3]), "energy"
         return 0, "no driver+direction", None
     total = sum(votes)

@@ -197,6 +197,9 @@ TARGET_PCT = float(os.getenv("TRADING_ORPHAN_TARGET_RETURN_PCT", "30.0"))
 # is the morning's news and not yesterday's -- session_headlines windows from
 # the previous close and the novelty filter drops re-reported stories.
 NEWS_VETO = os.getenv("TRADING_DTE0_NEWS_VETO", "true").lower() == "true"
+# THE SAME FLOOR THE ENGINE USES, read from the same env var on purpose. Two
+# gates consuming one news read must not apply different thresholds to it.
+NEWS_MIN_CONF = float(os.getenv("TRADING_NEWS_DIRECTION_MIN_CONF", "0.70"))
 NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
 NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
 
@@ -580,16 +583,51 @@ def main() -> None:
             if float(r["cost"]) * 100 > per_trade_cap:
                 rejects["above the per-trade budget"] += 1
                 continue
-            # The morning's news read, as a veto on direction.
+            # The news read, as a veto on direction -- ABOVE A CONFIDENCE
+            # FLOOR, which this did not have until 2026-09-14.
+            #
+            # The engine's equivalent gate (nodes.py, NEWS_DIRECTION) has
+            # required 0.70 since it shipped. This one checked the verdict and
+            # ignored the confidence entirely, so the same news read gated two
+            # books by different rules -- and the looser one is the one trading
+            # nine names.
+            #
+            # WHAT THAT COST ON 2026-09-14:
+            #
+            #     MU    BEARISH 0.25   ->  all MU call debits refused, MU +2.50%
+            #     TSLA  BEARISH 0.50   ->  3 call refusals logged, TSLA flat
+            #     QQQ   BEARISH 0.67
+            #
+            # Six MU put spreads stopped out on a name that rose $22, because
+            # the only side the veto left open was the wrong one. NONE of those
+            # three verdicts clears 0.70, so under the engine's own rule not one
+            # would have fired.
+            #
+            # This does NOT claim the floor makes money -- the news read has
+            # still never been scored against an outcome. It claims the two
+            # gates should not disagree, which is true whichever threshold is
+            # right. Shared constant so they cannot drift apart again.
             if NEWS_VETO:
                 verdict = r.get("news")
+                conf = r.get("news_conf")
                 bullish = r.get("direction") != "bearish"
-                if verdict and ((bullish and verdict in NEWS_BEARISH)
-                                or ((not bullish) and verdict in NEWS_BULLISH)):
+                contradicts = verdict and ((bullish and verdict in NEWS_BEARISH)
+                                           or ((not bullish)
+                                               and verdict in NEWS_BULLISH))
+                if contradicts and (conf or 0.0) < NEWS_MIN_CONF:
+                    logger.info("%s %s %.0f/%.0f: the read is %s but only at "
+                                "%.2f confidence, below the %.2f floor — "
+                                "ignored, not refused.", r["sym"], side.upper(),
+                                float(r["lo"]), float(r["hi"]), verdict,
+                                conf or 0.0, NEWS_MIN_CONF)
+                elif contradicts:
                     logger.info("%s %s %.0f/%.0f refused: the structure is %s "
-                                "and the 09:30 read is %s.", r["sym"], side.upper(),
-                                float(r["lo"]), float(r["hi"]),
-                                "bullish" if bullish else "bearish", verdict)
+                                "and the news read is %s (%.2f).",
+                                r["sym"], side.upper(), float(r["lo"]),
+                                float(r["hi"]),
+                                "bullish" if bullish else "bearish", verdict,
+                                conf or 0.0)
+                    rejects["against the news read"] += 1
                     continue
             # The macro tape, twice: the LEVEL as a tail guard (asymmetric --
             # see the base rates beside MACRO_VETO), and the DELTA as the
@@ -655,11 +693,12 @@ def main() -> None:
         logger.info(
             "%-5s %-4s %.0f/%.0f w%.1f x%d @ %.2f = $%.0f | Pwin %.1f%% need %.1f%% "
             "EV $%+.0f | entry %.0f%% of width, extr %.0f%%, short %.2f ATR out, "
-            "target %s %.2f (%.2f ATR) | news %s | macro %s (open %s)",
+            "target %s %.2f (%.2f ATR) | news %s (%.2f) | macro %s (open %s)",
             sym, side.upper(), long_k, short_k, w, qty, cost, cost * 100 * qty,
             r["pwin"] * 100, r["need"] * 100, r["ev_dem"], r["_ew"] * 100,
             r["_ex_pct"], r["_short_atr"], sym, r["_target_spot"], r["_move_atr"],
-            r.get("news") or "none", mv or "none", mopen or "-")
+            r.get("news") or "none", r.get("news_conf") or 0.0,
+            mv or "none", mopen or "-")
         if qty < 1:
             logger.info("   costs $%.0f, above the $%.0f per-trade budget — skipped.",
                         cost * 100, per)

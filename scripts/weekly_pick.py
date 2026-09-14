@@ -474,6 +474,12 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
                 sym=sym, lo=lo, hi=hi, w=w, cost=cost, spot=spot, atr=a14, rv=rv,
                 iv=atm_iv, exp=exp, days=fwd_days,
                 news=(nv[0] if nv else None), news_w=news_w,
+                # The CONFIDENCE, not just the verdict. Callers that gate on
+                # this need to know how strongly it was held: the engine has
+                # required 0.70 since it shipped, while dte0_trade could not
+                # check at all because the number never reached it. See
+                # TRADING_NEWS_DIRECTION_MIN_CONF.
+                news_conf=(float(nv[1]) if nv else None),
                 structure=structure, direction=direction(side, structure),
                 credit=(w - cost) if structure == "credit" else None,
                 conflict=conflict_for(side, nv[0] if nv else None, structure),

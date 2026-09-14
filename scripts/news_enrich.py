@@ -429,6 +429,86 @@ for _t, _ds in {
 CLAUSE_SPLIT = re.compile(r",|\bas\b|\bwhile\b|\bafter\b|\bamid\b|;|\.")
 
 
+# AN INSTRUCT LLM, WHEN ONE IS AFFORDABLE. Measured 2026-09-13 on the same ten
+# controlled headlines:
+#
+#     ProsusAI/finbert               2/10   8 inverted
+#     distilroberta-financial-news   4/10   5 inverted
+#     Llama-3.1-8B-Instruct          8/8    0 inverted, then HTTP 402
+#     these rules                   10/10   but FITTED to that set
+#
+# LLAMA'S 8/8 IS THE STRONGER RESULT, and the comparison should say so. Nothing
+# was tuned to it -- one prompt, first attempt -- whereas the rules were written
+# with those ten cases in view and two were changed to fix the last miss. An
+# unfitted 8/8 is better evidence than a fitted 10/10.
+#
+# It is not the default because it CANNOT RUN: the HF account is on the free
+# plan with canPay=false, and /v1/chat/completions routes to paid providers, so
+# call nine returned 402 Payment Required. FinBERT and the NER model are
+# unaffected -- those sit on hf-inference, which has its own allowance.
+#
+# So: rules decide, and the LLM is consulted ONLY where the rules abstain --
+# roughly five headlines an hour rather than twelve, which is the cheap half of
+# the problem anyway. Any failure, 402 included, falls back silently to the
+# rules' answer. Set TRADING_MACRO_LLM=true once billing exists.
+MACRO_LLM = os.getenv("TRADING_MACRO_LLM", "false").lower() == "true"
+MACRO_LLM_URL = os.getenv("TRADING_MACRO_LLM_URL",
+                          "https://router.huggingface.co/v1/chat/completions")
+MACRO_LLM_MODEL = os.getenv("TRADING_MACRO_LLM_MODEL",
+                            "meta-llama/Llama-3.1-8B-Instruct")
+_LLM_SYSTEM = (
+    "You classify the likely SAME-DAY impact of a news headline on a LONG "
+    "position in US large-cap equities (QQQ). Answer with exactly one token: "
+    "RISK_ON, RISK_OFF, or NEUTRAL. RISK_OFF means equities likely fall. "
+    "Higher oil, higher yields, higher inflation, rate hikes, tariffs and "
+    "supply disruptions are RISK_OFF; their opposites are RISK_ON. A headline "
+    "with no market-moving content is NEUTRAL."
+)
+_LLM_DEAD = False
+
+
+def llm_direction(headline: str) -> tuple:
+    """(+1/-1/0, why) from the instruct model, or (0, reason) on any failure.
+
+    ONE STRIKE AND IT STOPS FOR THE RUN. A 402 is not transient -- the credits
+    are gone until the month turns -- so retrying it once per abstained
+    headline would burn the whole sweep on identical failures. _LLM_DEAD
+    latches.
+    """
+    global _LLM_DEAD
+    if _LLM_DEAD or not HF_TOKEN:
+        return 0, "llm off"
+    import json
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            MACRO_LLM_URL,
+            data=json.dumps({
+                "model": MACRO_LLM_MODEL,
+                "messages": [{"role": "system", "content": _LLM_SYSTEM},
+                             {"role": "user", "content": headline}],
+                "max_tokens": 8, "temperature": 0.0,
+            }).encode(),
+            headers={"Authorization": "Bearer " + HF_TOKEN,
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=45) as r:
+            txt = json.loads(r.read())["choices"][0]["message"]["content"]
+    except Exception as exc:
+        code = getattr(exc, "code", None)
+        _LLM_DEAD = True
+        logger.warning("Macro LLM unavailable (%s) -- rules only for the rest "
+                       "of this run.%s", code,
+                       "  402 means the HF free credits are spent."
+                       if code == 402 else "")
+        return 0, f"llm error {code}"
+    m = re.search(r"RISK_ON|RISK_OFF|NEUTRAL", txt.upper())
+    if not m:
+        return 0, "llm unparsed"
+    tok = m.group(0)
+    return (1 if tok == "RISK_ON" else -1 if tok == "RISK_OFF" else 0), "llm"
+
+
 def macro_direction(text: str) -> tuple:
     """(+1 risk-on, -1 risk-off, 0 unknown, why) for a headline.
 
@@ -689,6 +769,14 @@ def enrich(articles: list) -> list:
         for a in macro:
             (a["rule_dir"], a["rule_why"],
              a["topic"]) = macro_direction(a["scored_text"])
+            # ONLY WHERE THE RULES ABSTAIN. The rules are free and were right
+            # on every call they made today; the LLM is for the gap, not a
+            # second opinion on answers that already exist.
+            if MACRO_LLM and not a["rule_dir"]:
+                d, why = llm_direction(a["title"])
+                if d:
+                    a["rule_dir"], a["rule_why"] = d, why
+                    a["topic"] = a.get("topic") or "other"
         try:
             for a, r in zip(macro, finbert([m["scored_text"] for m in macro])):
                 a["sentiment"] = r["label"]

@@ -421,17 +421,36 @@ def extract_text(a: dict) -> str:
 def enrich(articles: list) -> list:
     """NER FIRST, then FinBERT on what survives. Not in parallel.
 
-    THE ORDER IS THE POINT. spaCy is the gate: it decides which stories are
-    macro at all, and only those reach the scorer. Running the two in parallel
+    THE ORDER IS THE POINT, BUT NOT FOR THE REASON IT LOOKS LIKE. NER is the
+    GATE here, not a scoper: it decides which stories are macro at all, and
+    only those reach the scorer. Running the two in parallel
     scored everything and then threw most of it away -- wasted API calls, and
     worse, it invited the filter to be sloppy because nothing downstream
     depended on it. The first dry run scored "The future of retirement? Work
     until you die." and "Anthropic tells investors it will be profitable"
     (+0.89) as macro tape.
 
-    Sequential also means FinBERT sees ENTITY-SCOPED text rather than the raw
-    article, so what it reads is the macro clause and not the human-interest
-    wrapper around it.
+    SCOPING IS MEASURED AND IT IS CURRENTLY A NO-OP. Scoring the scoped text
+    against the full text on 2026-09-13's tape: 0 of 11 labels differed, and
+    the macro mean moved -0.206 -> -0.201, the same verdict. Macro RSS text is
+    effectively SINGLE-SUBJECT, so the whole-text sentiment already is the
+    subject's sentiment -- five of the eleven were multi-sentence and still
+    scored identically. Nobody should treat the scoping below as load-bearing
+    on the strength of it being there.
+
+    It is kept because it costs nothing and stops being a no-op the moment the
+    inputs get longer -- a full-body feed, or a summary covering two topics.
+    Re-run the comparison before relying on it either way.
+
+    WHAT SEQUENTIAL ACTUALLY BUYS is the call count: parallel scores all 47
+    articles and discards 36, sequential scores the 11 that survive. Identical
+    verdict, 4.3x the API calls on a free tier -- and this runs hourly with
+    nothing waiting on it, so the latency parallelism buys is worth nothing.
+
+    MULTI-SUBJECT TEXT IS THE TICKER LEG, and it never comes here. That is the
+    case where NER-first genuinely changes the answer, and it is also the case
+    FinBERT cannot do at all -- the Nike/SanDisk failure above. Polygon scores
+    tickers per-ticker natively, which is why FinBERT never sees them.
     """
     texts = [extract_text(a) for a in articles]
     for a, t in zip(articles, texts):

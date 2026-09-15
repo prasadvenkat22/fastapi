@@ -639,6 +639,25 @@ ORPHAN_SLOW_STOP_MINUTES = float(
 #
 # The clock resets when the mark recovers and when the intrinsic guard stands
 # the stop down, so only SUSTAINED weakness closes a position.
+# DEPLOYED AT 5, WHICH IS NOT WHAT THE SWEEP ABOVE SAYS. That sweep ran a -40%
+# fast stop and found 2 minutes best (+2101) with 5 minutes worse (+1621).
+# Production runs -10%, which is four times tighter, and at -10% the stop sits
+# a QUARTER POINT of QQQ from entry -- 4% of a typical day's range, inside the
+# tick noise. A confirmation window tuned for a stop four times wider does not
+# transfer, and the operator's judgement after watching it fire on wicks is the
+# better evidence available for THIS stop level.
+#
+# WHAT 5 MINUTES COSTS, and it is not free. The loss is not capped at the stop
+# level: during the wait the mark keeps moving, so an exit can land well below
+# -10%. There is no slow stop behind it either (ORPHAN_SLOW_STOP_PCT=0), so on
+# a genuine breakdown the next rule down is the 15:45 flatten.
+#
+# THE LEVEL IS STILL THE REAL ISSUE. Section 82 swept the stop itself on 39
+# structure-days and found -40% and -60% the only settings that beat holding,
+# with the WORST single loss identical (-1,932) at every setting -- tightening
+# buys nothing on the bad day and closes the good ones early. -10% is tighter
+# than anything that measured positive. Confirmation is a patch on a level that
+# wants loosening; if the stop ever moves to -40%, revisit this back to 2.
 ORPHAN_STOP_CONFIRM_MINUTES = float(
     os.getenv("TRADING_ORPHAN_STOP_CONFIRM_MINUTES", "2") or 0)
 

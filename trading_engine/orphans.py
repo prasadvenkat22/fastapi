@@ -423,6 +423,36 @@ ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
 #
 # One number cannot serve three structures. These default to the shared values
 # so nothing moves until they are set deliberately.
+# HOW LONG A PEAK MUST SIT QUIET BEFORE A GIVEBACK COUNTS AS A STALL.
+#
+# DEPLOYED AT 2 (was 5), on 2026-09-15, because 5 could not catch either of
+# that day's QQQ peaks. Both died before the clock armed:
+#
+#   705/703  peaked, then hit TARGET          -- caught, by luck of the level
+#   705/702  peaked +31.0% at 15:43, flatten at 15:45   -- 2 minutes, stall
+#            needed 5, so it closed at FORCE_CLOSE +8.3% instead of near peak
+#
+# AND THE PEAK WAS SUB-MINUTE. Reconstructed from one-minute bars, that
+# position spent ZERO minutes at or above the +30% target -- the +31.0% the
+# engine recorded never appears on per-minute closes at all. It held above
+# +25% for one minute and above +20% for four.
+#
+#   above +30%   0 min
+#   above +25%   1 min
+#   above +20%   4 min
+#
+# THAT IS THE ARGUMENT FOR A GIVEBACK RULE OVER A FIXED TARGET, and for a
+# short window on it. A target is a level you either touch or miss; a giveback
+# books whatever the peak WAS, so it does not care that the spike lasted
+# seconds -- but only if it can arm before the move is over. Five minutes is
+# longer than these peaks live.
+#
+# WHAT IT COSTS: a position that dips and recovers inside two minutes now
+# books instead of running. The five-minute window existed to let a winner
+# breathe, and two minutes gives it less room. Unmeasured -- one afternoon of
+# two trades is the evidence, which is thin. dte0_shadow began recording
+# peak_return_pct intraday the same day, so the distribution of how long peaks
+# actually hold is accumulating and should settle this properly.
 STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_STALL_MINUTES",
                                 os.getenv("TRADING_STALL_MINUTES", "0")))
 STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT",

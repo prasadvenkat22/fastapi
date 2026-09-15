@@ -425,34 +425,35 @@ ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
 # so nothing moves until they are set deliberately.
 # HOW LONG A PEAK MUST SIT QUIET BEFORE A GIVEBACK COUNTS AS A STALL.
 #
-# DEPLOYED AT 2 (was 5), on 2026-09-15, because 5 could not catch either of
-# that day's QQQ peaks. Both died before the clock armed:
+# 5, AND IT WAS BRIEFLY 2 ON 2026-09-15 BEFORE THE DATA SAID OTHERWISE.
 #
-#   705/703  peaked, then hit TARGET          -- caught, by luck of the level
-#   705/702  peaked +31.0% at 15:43, flatten at 15:45   -- 2 minutes, stall
-#            needed 5, so it closed at FORCE_CLOSE +8.3% instead of near peak
+# The argument for 2 was real: a QQQ 705/702 peaked +31.0% two minutes before
+# the 15:45 flatten and the stall could not arm, so it closed at +8.3%. Peaks
+# that day lasted 1-4 minutes and the sub-minute spike never appeared on
+# per-minute closes at all.
 #
-# AND THE PEAK WAS SUB-MINUTE. Reconstructed from one-minute bars, that
-# position spent ZERO minutes at or above the +30% target -- the +31.0% the
-# engine recorded never appears on per-minute closes at all. It held above
-# +25% for one minute and above +20% for four.
+# REPLAYING EVERY QQQ POSITION OF THAT SESSION AGAINST THE ENGINE'S OWN LOGGED
+# MARKS SAID THE OPPOSITE. Six positions, exits simulated on the marks the
+# engine actually saw:
 #
-#   above +30%   0 min
-#   above +25%   1 min
-#   above +20%   4 min
+#     tgt30 stop-35 cf5 stall 5min    -152
+#     tgt30 stop-35 cf5 stall 2min    -210
 #
-# THAT IS THE ARGUMENT FOR A GIVEBACK RULE OVER A FIXED TARGET, and for a
-# short window on it. A target is a level you either touch or miss; a giveback
-# books whatever the peak WAS, so it does not care that the spike lasted
-# seconds -- but only if it can arm before the move is over. Five minutes is
-# longer than these peaks live.
+# The difference is one position, and it is not luck. QQQ 705/703 peaked +9.4%,
+# fell to +1.9%, sat flat for six minutes, then ran to the +30% target:
 #
-# WHAT IT COSTS: a position that dips and recovers inside two minutes now
-# books instead of running. The five-minute window existed to let a winner
-# breathe, and two minutes gives it less room. Unmeasured -- one afternoon of
-# two trades is the evidence, which is thin. dte0_shadow began recording
-# peak_return_pct intraday the same day, so the distribution of how long peaks
-# actually hold is accumulating and should settle this properly.
+#     18:42:52   +1.9%   peak +9.4%, 2.1 min ago   <- a 2-min stall books here
+#     18:43-45   +1.9% to +7.5%   flat
+#     18:48:09  +30.2%   TARGET, +165 booked
+#
+# Two minutes books that at +1.9%. Five lets it recover. THE WAITING IS THE
+# POINT: a giveback rule that fires while a position is merely resting turns
+# every pause into an exit, and pauses are what winners do.
+#
+# The 705/702 case that prompted the change is still real -- a peak two minutes
+# before a flatten cannot be caught by any stall with a longer window. That is
+# an argument about the FLATTEN boundary, not about the stall, and it should
+# not be fixed by making the stall fire on rests.
 STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_STALL_MINUTES",
                                 os.getenv("TRADING_STALL_MINUTES", "0")))
 STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT",

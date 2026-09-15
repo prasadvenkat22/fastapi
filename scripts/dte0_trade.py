@@ -532,6 +532,40 @@ def main() -> None:
     exp = args.expiry or date.today().isoformat()
     now = datetime.now(NY)
 
+    # DOES A CONTRACT EVEN EXIST TODAY? Ask before doing anything else.
+    #
+    # QQQ has daily expiries; single names do not. On 2026-09-15, a Tuesday,
+    # QQQ listed 09-15/16/17/18 while NVDA, TSLA, AAPL, MU and AVGO all started
+    # at 09-16 -- so there was no 0DTE contract on any of the nine names.
+    #
+    # The run still did the full sweep and reported "No chain was tight enough
+    # to trade today", which reads as a LIQUIDITY judgement about a market that
+    # was examined. Nothing was examined; the contracts do not exist. A wrong
+    # explanation for a quiet day is worse than no explanation, because it gets
+    # believed -- someone reading that line would go looking at spread widths.
+    #
+    # This does not change what trades. It changes what the log claims, and it
+    # skips a pointless sweep of empty chains.
+    if not args.expiry:
+        try:
+            have = [x for x in syms
+                    if (not tradier_orders.expirations(x))       # cannot tell
+                    or exp in tradier_orders.expirations(x)]
+            if not have:
+                logger.info("No %s expiry exists for any of %s. Single names "
+                            "list Mon/Wed/Fri-style expiries, not daily; QQQ "
+                            "is the one that trades every session. Nothing to "
+                            "do today — this is the calendar, not the market.",
+                            exp, ",".join(syms))
+                return
+            if len(have) < len(syms):
+                logger.info("%d of %d names have a %s expiry: %s",
+                            len(have), len(syms), exp, ",".join(have))
+                syms = have
+        except Exception:
+            logger.warning("Could not check expiries — continuing with all "
+                           "names.", exc_info=True)
+
     if args.rotate:
         if not ROTATE_ENABLED:
             logger.warning("--rotate given but TRADING_DTE0_ROTATE is not true "

@@ -285,6 +285,43 @@ def occ_root(symbol: str) -> str:
     return sym[:-15] if len(sym) > 15 else sym
 
 
+_EXPIRY_CACHE: dict = {}
+
+
+def expirations(underlying: str) -> list:
+    """Expiry dates listed for this underlying, as ISO strings. [] on failure.
+
+    WHY THIS IS NEEDED AT ALL: not every name expires every day. QQQ carries
+    daily expiries; single names carry Mon/Wed/Fri-style ones. Asking for a
+    chain on a date a name does not list returns empty, which is
+    indistinguishable from an illiquid chain unless something checks.
+
+    Cached per process. The expiry calendar does not change inside one run, and
+    this is called once per symbol before a sweep.
+
+    RETURNS [] ON FAILURE, DELIBERATELY. The caller treats an empty list as
+    "cannot tell" and proceeds rather than skipping the name -- a Tradier
+    hiccup must not silently stand the book down.
+    """
+    key = underlying.upper()
+    if key in _EXPIRY_CACHE:
+        return _EXPIRY_CACHE[key]
+    try:
+        r = httpx.get(f"{_base()}/markets/options/expirations",
+                      headers=_headers(), params={"symbol": key}, timeout=10.0)
+        if r.status_code >= 400:
+            return []
+        rows = ((r.json() or {}).get("expirations") or {}).get("date") or []
+        if isinstance(rows, str):
+            rows = [rows]
+        out = [str(x) for x in rows]
+    except Exception:
+        logger.warning("Could not read expirations for %s", key, exc_info=True)
+        return []
+    _EXPIRY_CACHE[key] = out
+    return out
+
+
 def open_positions() -> list:
     """What the BROKER thinks is open, which is the only authority that counts.
 

@@ -1337,13 +1337,42 @@ def _book(st: dict, value: float, ret_pct: float, reason: str,
         pnl = ((entry - value) if st["credit"] else (value - entry)) * n * 100
         db = SessionLocal()
         try:
+            # THE LABEL HAS TO NAME THE SIDE, and this one did not.
+            #
+            # It read `"CALL_CREDIT_SPREAD" if credit else "BULL_CALL_SPREAD"`,
+            # which distinguishes credit from debit and nothing else -- so
+            # EVERY debit spread was booked as BULL_CALL_SPREAD, put debits
+            # included. On 2026-09-14 that made the whole day's history read as
+            # bull call spreads: AVGO 350/342 puts, MU 930/925 puts, TSLA
+            # 365/358 puts, all labelled bullish calls.
+            #
+            # It is not cosmetic. It is the column anyone groups by to ask
+            # "how did put spreads do against call spreads", which was exactly
+            # the question that day raised, and the answer it gave was
+            # "there were no put spreads". st["right"] has carried C/P the
+            # whole time.
+            call = st["right"].upper() == "C"
+            strategy = ("CALL_CREDIT_SPREAD" if (call and st["credit"])
+                        else "PUT_CREDIT_SPREAD" if st["credit"]
+                        else "BULL_CALL_SPREAD" if call
+                        else "BEAR_PUT_SPREAD")
             db.add(TradeHistory(
-                strategy=("CALL_CREDIT_SPREAD" if st["credit"] else "BULL_CALL_SPREAD"),
+                strategy=strategy,
                 underlying=st["root"], quantity=n,
                 long_strike=st["long_strike"], short_strike=st["short_strike"],
                 entry_net_debit=entry, exit_net_value=value,
                 realized_pnl_dollars=round(pnl, 2), realized_pnl_pct=round(ret_pct, 2),
                 close_reason=reason, playbook="MANUAL",
+                # OPENED_AT WAS NEVER PASSED, so every row had a close time and
+                # no open time. Without it a trade cannot be placed in the
+                # session -- "what did entries taken after 11:00 do" is
+                # unanswerable, and on 2026-09-14 it had to be reconstructed
+                # from log timestamps and could not be pinned.
+                #
+                # st["opened"] is None for an INFERRED pairing, where the
+                # engine matched two legs it did not open. None is the honest
+                # answer there; a guess would be worse than a null.
+                opened_at=st.get("opened"),
             ))
             db.commit()
             logger.info("ORPHAN booked to history: %s %.0f/%.0f x%d %+.2f (%s)",

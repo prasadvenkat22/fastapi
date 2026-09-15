@@ -47,6 +47,7 @@ macro_outcome.py is what will settle it: rows here, realized QQQ moves there.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -85,6 +86,37 @@ VIX_FULL_PCT = float(os.getenv("TRADING_MACRO_VIX_FULL_PCT", "5.0"))
 # "mixed". 0.34 means at least one channel fully committed, or two half.
 MARGIN = float(os.getenv("TRADING_MACRO_OBJ_MARGIN", "0.34"))
 
+# TWO MEASURES PER CHANNEL, NOT ONE.
+#
+# LEVEL is the change from the session open: where the day sits.
+# DRIFT is the change over the last DRIFT_MINUTES: where it is going.
+#
+# LEVEL ALONE CANNOT SEE AN INTRADAY REVERSAL. Yields opening at 5.00%, spiking
+# to 5.10% by 11:00 and easing to 5.05% by 14:00 still read +5bp from the open,
+# so they still read risk-off -- after three hours of falling. The hour that
+# actually turned good for a call debit is invisible to a from-open measure,
+# because the reversal never crossed back through the open.
+#
+# Blended rather than switched. Level carries the day's position and stops a
+# single quiet hour flipping the read; drift carries the turn. 50/50 means a
+# reversal registers at half strength immediately and at full strength once the
+# level follows it -- which is the behaviour wanted: early, but not hair-trigger.
+#
+# A channel with no history yet (first run of the day, or a gap) scores on
+# LEVEL alone rather than assuming zero drift, because "no reading an hour ago"
+# is not "no change".
+DRIFT_MINUTES = int(os.getenv("TRADING_MACRO_DRIFT_MIN", "60"))
+# A prior reading younger than this is not a drift measurement, it is noise.
+DRIFT_MIN_AGE = int(os.getenv("TRADING_MACRO_DRIFT_MIN_AGE", "30"))
+DRIFT_WEIGHT = float(os.getenv("TRADING_MACRO_DRIFT_WEIGHT", "0.5"))
+
+# Full-vote sizes for the DRIFT leg. Smaller than the level thresholds because
+# an hour is a fraction of a session: a 1% crude move inside one hour is a
+# bigger statement than 1% across the whole day.
+CRUDE_DRIFT_FULL_PCT = float(os.getenv("TRADING_MACRO_CRUDE_DRIFT_PCT", "1.0"))
+TNX_DRIFT_FULL_BPS = float(os.getenv("TRADING_MACRO_TNX_DRIFT_BPS", "2.5"))
+VIX_DRIFT_FULL_PCT = float(os.getenv("TRADING_MACRO_VIX_DRIFT_PCT", "3.0"))
+
 
 def _dsn() -> str:
     url = os.getenv("DATABASE_URL", "")
@@ -94,6 +126,44 @@ def _dsn() -> str:
 
 def _clamp(x: float) -> float:
     return max(-1.0, min(1.0, x))
+
+
+def prior_levels() -> dict:
+    """Raw levels from roughly DRIFT_MINUTES ago, for the drift leg.
+
+    Returns (levels, minutes_ago).
+
+    TWO GUARDS, BOTH LEARNED FROM GETTING IT WRONG FIRST.
+
+    The row must be at least DRIFT_MIN_AGE old. Nearest-to-target alone picks
+    whatever exists, and early in a session that is the row from fifteen
+    minutes ago -- so "drift in 60m" would actually be a quarter hour's move,
+    labelled and scaled as an hour's.
+
+    And the ACTUAL age comes back with it, so the caller scales the threshold
+    by how much time really elapsed. A 30-minute move judged against a
+    60-minute bar reads as half the move it is.
+    """
+    try:
+        conn = psycopg2.connect(_dsn())
+        with conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT raw, EXTRACT(EPOCH FROM (now() - asof))/60.0
+                FROM symbol_sentiment_hourly
+                WHERE symbol=%s AND source=%s AND raw IS NOT NULL
+                  AND trading_day = CURRENT_DATE
+                  AND asof <= now() - (%s || ' minutes')::interval
+                ORDER BY abs(EXTRACT(EPOCH FROM
+                          (asof - (now() - (%s || ' minutes')::interval))))
+                LIMIT 1
+            """, (MACRO_SYMBOL, SOURCE, DRIFT_MIN_AGE, DRIFT_MINUTES))
+            row = cur.fetchone()
+        conn.close()
+        return ((row[0] or {}), float(row[1])) if row else ({}, 0.0)
+    except Exception:
+        logger.warning("No prior levels — scoring on level alone.",
+                       exc_info=True)
+        return {}, 0.0
 
 
 def read() -> "tuple | None":
@@ -111,26 +181,50 @@ def read() -> "tuple | None":
         logger.warning("data_feed unavailable", exc_info=True)
         return None
 
+    prior, prior_age = prior_levels()
     ch: dict = {}
+    raw: dict = {}
+
+    def add(name, level_move, full, drift_full, now_level, unit):
+        """One channel: level vote, drift vote, blended. Signed risk-on positive."""
+        raw[name] = now_level
+        lvl = _clamp(-level_move / full)
+        was = prior.get(name)
+        if was is None or not prior_age:
+            ch[name] = (lvl, f"{level_move:+.2f}{unit} from open (no prior)")
+            return
+        # Scale the drift bar to the time that actually elapsed, so a 30-minute
+        # gap is judged against 30 minutes' worth of movement.
+        scale = max(0.25, min(2.0, prior_age / DRIFT_MINUTES))
+        # bp channels are already in the unit we want; % channels need the
+        # move expressed against the prior level, not the open.
+        d_raw = (now_level - was) if unit == "bp" else (
+            (now_level - was) / was * 100.0 if was else 0.0)
+        drift = _clamp(-d_raw / (drift_full * scale))
+        ch[name] = (lvl * (1 - DRIFT_WEIGHT) + drift * DRIFT_WEIGHT,
+                    f"{level_move:+.2f}{unit} from open, {d_raw:+.2f}{unit} in "
+                    f"{prior_age:.0f}m")
+
     try:
         oil = fetch_oil()
         if oil is not None:
-            ch["crude"] = (_clamp(-oil.change_pct / CRUDE_FULL_PCT),
-                           f"{oil.change_pct:+.2f}%")
+            add("crude", oil.change_pct, CRUDE_FULL_PCT, CRUDE_DRIFT_FULL_PCT,
+                oil.level, "%")
     except Exception:
         logger.warning("crude unreadable", exc_info=True)
     try:
         tnx = fetch_tnx()
         if tnx is not None:
-            ch["rates"] = (_clamp(-tnx.change_bps / TNX_FULL_BPS),
-                           f"{tnx.change_bps:+.1f}bp")
+            # stored as bp-equivalent so the drift arithmetic is in basis points
+            add("rates", tnx.change_bps, TNX_FULL_BPS, TNX_DRIFT_FULL_BPS,
+                tnx.level * 100.0, "bp")
     except Exception:
         logger.warning("10Y unreadable", exc_info=True)
     try:
         vix = fetch_vix()
         if vix is not None:
-            ch["vix"] = (_clamp(-vix.change_pct / VIX_FULL_PCT),
-                         f"{vix.change_pct:+.2f}%")
+            add("vix", vix.change_pct, VIX_FULL_PCT, VIX_DRIFT_FULL_PCT,
+                vix.level, "%")
     except Exception:
         logger.warning("VIX unreadable", exc_info=True)
 
@@ -142,10 +236,11 @@ def read() -> "tuple | None":
     score = sum(v for v, _ in ch.values()) / len(ch)
     label = ("positive" if score > MARGIN
              else "negative" if score < -MARGIN else "neutral")
-    return score, label, ch
+    return score, label, ch, raw
 
 
-def store(score: float, label: str, ch: dict, now: datetime) -> int:
+def store(score: float, label: str, ch: dict, raw: dict,
+          now: datetime) -> int:
     conn = psycopg2.connect(_dsn())
     conn.autocommit = True
     detail = " ".join(f"{k}{v[0]:+.2f}({v[1]})" for k, v in sorted(ch.items()))
@@ -153,13 +248,13 @@ def store(score: float, label: str, ch: dict, now: datetime) -> int:
         cur.execute("""
             INSERT INTO symbol_sentiment_hourly
                 (symbol, asof, trading_day, source, label, score,
-                 headline_count, rationale)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                 headline_count, rationale, raw)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (symbol, source, asof) DO UPDATE SET
                 label=EXCLUDED.label, score=EXCLUDED.score,
-                rationale=EXCLUDED.rationale
+                rationale=EXCLUDED.rationale, raw=EXCLUDED.raw
         """, (MACRO_SYMBOL, now.replace(second=0, microsecond=0), now.date(),
-              SOURCE, label, score, len(ch), detail))
+              SOURCE, label, score, len(ch), detail, json.dumps(raw)))
         n = cur.rowcount
     conn.close()
     return n
@@ -207,16 +302,16 @@ def main() -> None:
     if not r:
         print("no objective macro read available — nothing stored.")
         return
-    score, label, ch = r
+    score, label, ch, raw = r
     print(f"OBJECTIVE MACRO  {label.upper()}  score {score:+.3f}  "
           f"({now:%H:%M %Z})")
-    for k, (v, raw) in sorted(ch.items()):
+    for k, (v, why) in sorted(ch.items()):
         arrow = "risk-on " if v > 0 else "risk-off" if v < 0 else "flat    "
-        print(f"   {k:<7} {raw:>9}  ->  {v:+.2f}  {arrow}")
+        print(f"   {k:<7} {why:<34}  ->  {v:+.2f}  {arrow}")
     if args.dry_run:
         print("DRY RUN — nothing written.")
         return
-    print(f"wrote {store(score, label, ch, now)} row(s)")
+    print(f"wrote {store(score, label, ch, raw, now)} row(s)")
 
 
 if __name__ == "__main__":

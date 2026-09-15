@@ -198,9 +198,24 @@ TARGET_PCT = float(os.getenv("TRADING_ORPHAN_TARGET_RETURN_PCT", "30.0"))
 # is the morning's news and not yesterday's -- session_headlines windows from
 # the previous close and the novelty filter drops re-reported stories.
 NEWS_VETO = os.getenv("TRADING_DTE0_NEWS_VETO", "true").lower() == "true"
-# THE SAME FLOOR THE ENGINE USES, read from the same env var on purpose. Two
-# gates consuming one news read must not apply different thresholds to it.
-NEWS_MIN_CONF = float(os.getenv("TRADING_NEWS_DIRECTION_MIN_CONF", "0.70"))
+# A FLOOR SUITED TO THE POLYGON SCALE, which is its own instrument.
+#
+# This shared TRADING_NEWS_DIRECTION_MIN_CONF (0.70) on the principle that two
+# gates reading ONE signal must not disagree. That principle still holds, and
+# it no longer applies: the engine's gate now reads the OBJECTIVE macro score
+# (crude/10Y/VIX, floor 0.25) and this one reads Polygon ticker sentiment.
+# Different signals, different scales, different floors -- sharing a number
+# across them was the mistake, not the fix.
+#
+# AND 0.70 IS UNREACHABLE ON THE CORRECTED SCALE. Polygon scores are now shrunk
+# by sample size, so a lone article cannot print 1.00. Across all 92 rows
+# recorded: 12 cleared 0.70 raw, ZERO clear it shrunk, 3 clear 0.50 and 5 clear
+# 0.40. Keeping 0.70 would leave the veto as dead code that reads as an armed
+# guard.
+#
+# 0.50 fires on roughly 3% of readings -- rare, which is what a veto on an
+# unmeasured signal should be, and reachable, which it was not.
+NEWS_MIN_CONF = float(os.getenv("TRADING_DTE0_NEWS_MIN_CONF", "0.50"))
 NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
 NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
 

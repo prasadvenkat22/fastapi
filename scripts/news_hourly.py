@@ -58,6 +58,7 @@ verdict_outcome grades it nightly.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -128,6 +129,10 @@ RETAIN_DAYS = int(os.getenv("TRADING_NEWS_RETAIN_DAYS", "10"))
 # 0.125. Fresh news dominates, old news fades without vanishing, and a name
 # with one article still gets a score.
 HALFLIFE_HOURS = float(os.getenv("TRADING_NEWS_HALFLIFE_H", "4"))
+
+# Sample-size shrinkage constant. 3 means one article keeps a quarter of its
+# score, three keep half, fifteen keep 83%.
+SHRINK_K = float(os.getenv("TRADING_NEWS_SHRINK_K", "3"))
 
 
 def _dsn() -> str:
@@ -224,11 +229,34 @@ def polygon_sentiment(articles: list, symbol: str) -> "tuple | None":
                 reasons.append(f"[{s}] {ins['sentiment_reasoning']}")
     if not vals or den <= 0:
         return None
-    score = num / den
+    raw = num / den
+
+    # SHRINK TOWARD ZERO BY SAMPLE SIZE, because a mean of one article is not
+    # a confident reading -- it is an unmeasured one.
+    #
+    # Polygon's score is the mean of per-article verdicts, so a name with ONE
+    # article scores 1.00 and a name with fifteen regresses toward zero as its
+    # coverage disagrees. Measured 2026-09-15: DELL 1.00 on 1 article and TSLA
+    # -1.00 on 1, against NVDA 0.28 on 18 and GOOGL 0.46 on 13. The veto floor
+    # then systematically preferred the LEAST-covered name, which is backwards:
+    # thin coverage is the one case where a strong number means least.
+    #
+    # score * n/(n+k) with k=3: one article keeps a quarter of its score, three
+    # keep half, fifteen keep 83%. A veto now needs volume AND agreement.
+    #
+    # THE RAW SCORE AND THE COUNT ARE KEPT in the raw column, so this is
+    # auditable and reversible -- and so rows written before 2026-09-15, which
+    # are unshrunk, can be told apart from rows written after.
+    eff_n = den
+    score = raw * eff_n / (eff_n + SHRINK_K)
     label = "positive" if score > 0.15 else "negative" if score < -0.15 else "neutral"
     fresh = f", newest {min(ages):.1f}h" if ages else ""
-    note = (f"(recency-weighted, {HALFLIFE_HOURS:.0f}h half-life{fresh}) ")
-    return label, score, (note + " | ".join(reasons))[:1500], len(vals)
+    note = (f"(recency-weighted {HALFLIFE_HOURS:.0f}h half-life{fresh}; "
+            f"raw {raw:+.2f} over {len(vals)} article(s), shrunk to "
+            f"{score:+.2f}) ")
+    return (label, score, (note + " | ".join(reasons))[:1500], len(vals),
+            {"raw_score": round(raw, 4), "n": len(vals),
+             "effective_n": round(eff_n, 2), "shrink_k": SHRINK_K})
 
 
 def _store_corpus(articles: list) -> None:
@@ -300,19 +328,20 @@ def sweep(now: "datetime | None" = None) -> int:
             p = polygon_sentiment(arts, sym)
             if p:
                 rows.append(("polygon",) + p)
-            for source, label, score, rationale, n in rows:
+            for source, label, score, rationale, n, meta in rows:
                 cur.execute("""
                     INSERT INTO symbol_sentiment_hourly
                         (symbol, asof, trading_day, source, label, score,
-                         headline_count, rationale)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                         headline_count, rationale, raw)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (symbol, source, asof) DO NOTHING
                 """, (sym, now.replace(minute=0, second=0, microsecond=0),
-                      now.date(), source, label, score, n, rationale))
+                      now.date(), source, label, score, n, rationale,
+                      json.dumps(meta)))
                 written += cur.rowcount
             logger.info("%-5s %2d articles | %s", sym, len(titles),
                         "  ".join(f"{s}={l} {sc:+.2f}"
-                                  for s, l, sc, _, _ in rows) or "no score")
+                                  for s, l, sc, _, _, _ in rows) or "no score")
 
         # THE MACRO TAPE, which Polygon structurally cannot supply. Measured
         # 2026-09-12: ticker=QQQ returns ETF comparisons over 12 days, and

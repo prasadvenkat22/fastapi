@@ -169,6 +169,17 @@ def polygon_sentiment(articles: list, symbol: str) -> "tuple | None":
     averages, so it lands on the same scale as FinBERT's and the two compare.
     """
     now = datetime.now(timezone.utc)
+    # Hours since today's 09:30 ET open, or None outside a session.
+    _session_open_age_h = None
+    try:
+        from zoneinfo import ZoneInfo
+
+        ny = now.astimezone(ZoneInfo("America/New_York"))
+        op = ny.replace(hour=9, minute=30, second=0, microsecond=0)
+        if ny >= op:
+            _session_open_age_h = (ny - op).total_seconds() / 3600.0
+    except Exception:
+        pass
     num = den = 0.0
     vals, reasons, ages = [], [], []
     for a in articles:
@@ -181,7 +192,24 @@ def polygon_sentiment(articles: list, symbol: str) -> "tuple | None":
                     str(pub).replace("Z", "+00:00"))).total_seconds() / 3600.0)
             except ValueError:
                 age_h = None
-        w = 0.5 ** (age_h / HALFLIFE_HOURS) if age_h is not None else 1.0
+        # AGE FROM THE OPEN, NOT FROM PUBLICATION, FOR ANYTHING PRE-MARKET.
+        #
+        # Wall-clock decay treats overnight news as stale, and it is not: it is
+        # UNPRICED. Everything published between yesterday's close and today's
+        # bell gets priced together at the open, so at 09:30 a story from 22:00
+        # and one from 08:00 are equally live. Decaying them separately made a
+        # 20-hour-old article worth 0.03 at a 4h half-life -- one fresh story
+        # outweighing five overnight ones by six times, which would have
+        # scored SNDK's Friday-22:11 S&P 100 inclusion at roughly nothing on
+        # the Monday it mattered.
+        #
+        # So pre-open articles age from the OPEN and intraday articles age from
+        # publication. Overnight news dominates early and fades through the
+        # session; fresh news dominates late. That is how the tape treats them.
+        eff = age_h
+        if eff is not None and _session_open_age_h is not None:
+            eff = min(eff, _session_open_age_h)
+        w = 0.5 ** (eff / HALFLIFE_HOURS) if eff is not None else 1.0
         for ins in (a.get("insights") or []):
             if (ins.get("ticker") or "").upper() != symbol:
                 continue

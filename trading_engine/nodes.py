@@ -287,6 +287,27 @@ NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
 # stand down a setup the tape supports.
 NEWS_DIRECTION_MIN_CONF = float(os.getenv("TRADING_NEWS_DIRECTION_MIN_CONF", "0.70"))
 
+# A SEPARATE FLOOR FOR THIS GATE, BECAUSE ITS INPUT CHANGED INSTRUMENT.
+#
+# 0.70 was set when the QQQ verdict was a Claude confidence score -- a model's
+# stated certainty, where 0.70 is a meaningful bar. Since 2026-09-14 the QQQ
+# verdict comes from crude/10Y/VIX (source='objective') and "confidence" is
+# just |score|, the average of three clamped price channels. Those are not the
+# same quantity and 0.70 does not mean the same thing in both.
+#
+# WHAT THE OLD NUMBER DID TO THIS GATE. Every objective reading on 2026-09-14
+# scored between 0.57 and 0.69: enough to refuse put spreads on all nine single
+# names, and not one of them enough to gate QQQ. The two books were reading the
+# same macro read and acting on it at different strengths, so the day's clearest
+# signal reached one book and not the other.
+#
+# 0.25 is the BULLISH/BEARISH verdict boundary itself, so this gate now fires
+# whenever the verdict is directional at all -- which is what the verdict levels
+# already encode. The strength test lives in the score->verdict mapping, not in
+# a second threshold on top of it.
+MACRO_DIRECTION_MIN_CONF = float(
+    os.getenv("TRADING_MACRO_DIRECTION_MIN_CONF", "0.25"))
+
 # THE TAPE TURNING, as distinct from the tape's level.
 #
 # The gate above is a LEVEL gate and it is symmetric, so it already refuses a
@@ -2833,7 +2854,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # NEWS_DIRECTION for what it is gated on and why it is off by default.
         if NEWS_DIRECTION and tier is not None:
             _nv = _qqq_news_verdict()
-            if _nv and _nv[1] >= NEWS_DIRECTION_MIN_CONF:
+            if _nv and _nv[1] >= MACRO_DIRECTION_MIN_CONF:
                 _v, _c = _nv
                 if bullish and _v in NEWS_BEARISH:
                     logger.info(
@@ -2852,9 +2873,9 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                                 "the %s %s setup.", _v, _c, tier,
                                 "bullish" if bullish else "bearish")
             elif _nv:
-                logger.info("QQQ macro news reads %s at %.2f confidence, below "
-                            "the %.2f the direction gate requires — ignored.",
-                            _nv[0], _nv[1], NEWS_DIRECTION_MIN_CONF)
+                logger.info("QQQ macro reads %s at %.2f, below the %.2f the "
+                            "direction gate requires — ignored.",
+                            _nv[0], _nv[1], MACRO_DIRECTION_MIN_CONF)
 
         # THE TURN, which the level gate above cannot see. A read that has been
         # BEARISH since 09:30 has said nothing new by 14:00; a read that was

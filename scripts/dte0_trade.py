@@ -253,8 +253,34 @@ MACRO_SYMBOL = os.getenv("TRADING_DTE0_MACRO_SYMBOL", "QQQ")
 # sessions and BULLISH on 1, so refusing puts into a bullish tape costs 5.9%
 # of sessions while refusing calls into a bearish one costs 52.9%. A level
 # gate on the call side is therefore held at VERY_BEARISH.
+# SYMMETRIC AS OF 2026-09-15, BECAUSE THE INSTRUMENT CHANGED UNDER IT.
+#
+# This was asymmetric -- puts refused on BULLISH+, calls only on VERY_BEARISH --
+# and the reason was specific: the TEXT read printed BEARISH on 53% of
+# sessions, so refusing calls at plain BEARISH would have stood the book down
+# on half of all days. That is the August macro gate, which refused 55 of 55
+# cycles on a day QQQ rose $6.50.
+#
+# THAT READ NO LONGER DRIVES THIS GATE. The source is now crude/10Y/VIX
+# (source='objective'), and arithmetic on three prices has no reason to lean
+# bearish the way a doom-weighted keyword list did. Its first 6 readings were
+# all BULLISH -- one rising afternoon, not a distribution, but the tilt the
+# asymmetry was built to survive is gone with the thing that produced it.
+#
+# So the gate now says what a macro read should say: good macro favours call
+# debits, bad macro favours put spreads.
+#
+#     BULLISH / VERY_BULLISH   ->  put debits refused
+#     BEARISH / VERY_BEARISH   ->  call debits refused
+#     NEUTRAL                  ->  both allowed
+#
+# NEUTRAL is a real band, not a knife edge: the objective score averages three
+# clamped channels and only commits past +/-0.25, so an ordinary day leaves
+# both sides open. If this turns out to refuse too much, the lever is the
+# MARGIN in macro_objective.py, not a return to asymmetry -- the asymmetry was
+# a workaround for a biased instrument, not a principle.
 MACRO_REFUSE_BEARISH_ON = {"BULLISH", "VERY_BULLISH"}
-MACRO_REFUSE_BULLISH_ON = {"VERY_BEARISH"}
+MACRO_REFUSE_BULLISH_ON = {"BEARISH", "VERY_BEARISH"}
 
 # DELTA -- THE TAPE TURNING, WHICH IS THE CASE A LEVEL GATE CANNOT SEE.
 #
@@ -629,6 +655,41 @@ def main() -> None:
             if float(r["cost"]) * 100 > per_trade_cap:
                 rejects["above the per-trade budget"] += 1
                 continue
+            # GATE ORDER: MACRO FIRST, THEN THE NAME'S OWN NEWS.
+            #
+            # Both are hard refusals, so the order cannot change WHICH trades
+            # survive -- but it decides which reason gets logged and counted,
+            # and that is what anyone reads afterwards to understand a quiet
+            # day. Macro is the wider claim: if the tape is against the
+            # structure, that is the more useful thing to have been told than
+            # a single name's headline sentiment.
+            #
+            # The macro tape, twice: the LEVEL as a tail guard (asymmetric --
+            # see the base rates beside MACRO_VETO), and the DELTA as the
+            # intraday-turn guard (symmetric -- a turn is a turn either way).
+            bullish = r.get("direction") != "bearish"
+            if MACRO_VETO and mv:
+                if mv in (MACRO_REFUSE_BULLISH_ON if bullish
+                          else MACRO_REFUSE_BEARISH_ON):
+                    logger.info("%s %s %.0f/%.0f refused: the structure is %s "
+                                "and the %s tape is %s.", r["sym"], side.upper(),
+                                float(r["lo"]), float(r["hi"]),
+                                "bullish" if bullish else "bearish",
+                                MACRO_SYMBOL, mv)
+                    rejects["against the macro tape"] += 1
+                    continue
+            if MACRO_DELTA_GATE and abs(mdelta) >= MACRO_DELTA_STEPS:
+                # A bullish structure dies on a bearish turn and vice versa.
+                if (bullish and mdelta <= -MACRO_DELTA_STEPS) or                    ((not bullish) and mdelta >= MACRO_DELTA_STEPS):
+                    logger.info("%s %s %.0f/%.0f refused: the structure is %s "
+                                "and %s TURNED %s since the open (%s -> %s).",
+                                r["sym"], side.upper(), float(r["lo"]),
+                                float(r["hi"]), "bullish" if bullish else "bearish",
+                                MACRO_SYMBOL,
+                                "bullish" if mdelta > 0 else "bearish",
+                                mopen, mv)
+                    rejects["the macro tape turned against it"] += 1
+                    continue
             # The news read, as a veto on direction -- ABOVE A CONFIDENCE
             # FLOOR, which this did not have until 2026-09-14.
             #
@@ -674,32 +735,6 @@ def main() -> None:
                                 "bullish" if bullish else "bearish", verdict,
                                 conf or 0.0)
                     rejects["against the news read"] += 1
-                    continue
-            # The macro tape, twice: the LEVEL as a tail guard (asymmetric --
-            # see the base rates beside MACRO_VETO), and the DELTA as the
-            # intraday-turn guard (symmetric -- a turn is a turn either way).
-            bullish = r.get("direction") != "bearish"
-            if MACRO_VETO and mv:
-                if mv in (MACRO_REFUSE_BULLISH_ON if bullish
-                          else MACRO_REFUSE_BEARISH_ON):
-                    logger.info("%s %s %.0f/%.0f refused: the structure is %s "
-                                "and the %s tape is %s.", r["sym"], side.upper(),
-                                float(r["lo"]), float(r["hi"]),
-                                "bullish" if bullish else "bearish",
-                                MACRO_SYMBOL, mv)
-                    rejects["against the macro tape"] += 1
-                    continue
-            if MACRO_DELTA_GATE and abs(mdelta) >= MACRO_DELTA_STEPS:
-                # A bullish structure dies on a bearish turn and vice versa.
-                if (bullish and mdelta <= -MACRO_DELTA_STEPS) or                    ((not bullish) and mdelta >= MACRO_DELTA_STEPS):
-                    logger.info("%s %s %.0f/%.0f refused: the structure is %s "
-                                "and %s TURNED %s since the open (%s -> %s).",
-                                r["sym"], side.upper(), float(r["lo"]),
-                                float(r["hi"]), "bullish" if bullish else "bearish",
-                                MACRO_SYMBOL,
-                                "bullish" if mdelta > 0 else "bearish",
-                                mopen, mv)
-                    rejects["the macro tape turned against it"] += 1
                     continue
             if r.get("conflict"):
                 logger.info("%s %s refused: %s", r["sym"], side.upper(), r["conflict"])

@@ -71,6 +71,10 @@ NY = ZoneInfo("America/New_York")
 
 # Mon/Wed/Fri names plus QQQ. SNDK and CRWV are absent because their chains
 # carry Friday expiries only -- verified, not assumed.
+# The live book's target, so the shadow answers the question the live
+# rules actually pose rather than a different one.
+TARGET_PCT = float(os.getenv("TRADING_ORPHAN_TARGET_RETURN_PCT", "30.0"))
+
 SYMBOLS = [s.strip().upper() for s in os.getenv(
     "TRADING_DTE0_SYMBOLS", "QQQ,NVDA,TSLA,AAPL,AMZN,MSFT,META,GOOGL,AVGO").split(",") if s.strip()]
 
@@ -252,6 +256,125 @@ def _intrinsic(variant: str, structure: str, long_s: float, short_s: float,
     return iv if structure == "DEBIT" else width - iv
 
 
+def mark(now: "datetime | None" = None) -> int:
+    """Mark every unsettled row to the live chain, and remember the extremes.
+
+    WHY THIS EXISTS: THE RECORD HAD ENDPOINTS AND NO PATH. open_session() wrote
+    the entry and settle() wrote the expiry value, so the table could say what
+    a structure was worth at 09:46 and at the bell and nothing in between. That
+    answers "does this structure work held to expiry" and cannot answer the
+    questions actually being asked of it:
+
+        would the +30% target have been hit intraday?
+        would the -10% stop have fired first?
+        how far underwater did a winner go before it came back?
+
+    Those are questions about the EXIT RULES, not about the structures, and
+    they are exactly what a live book with 1 target and 7 stops needs answered.
+    Without a path the shadow can only ever argue for buy-and-hold.
+
+    MARKS OFF THE CHAIN, NOT OFF INTRINSIC. settle() uses intrinsic because at
+    expiry that IS the value; intraday it is not -- the mark is what you could
+    actually close at, and the gap between them is precisely what makes an ITM
+    debit spread look like a loser while it is winning. Falls back to intrinsic
+    only when the chain has no usable quote.
+
+    peak and worst are monotonic: they only ever widen, so a row carries the
+    whole session's range however often this runs.
+    """
+    now = now or datetime.now(NY)
+    n = 0
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, symbol, variant, structure, long_strike, short_strike,
+                   entry_mid, width, expiration, peak_return_pct,
+                   worst_return_pct, target_hit_at
+            FROM dte0_shadow
+            WHERE expiry_return_pct IS NULL
+        """)
+        rows = cur.fetchall()
+        chains: dict = {}
+        for (rid, sym, variant, structure, lo, sh, entry, width, expiry,
+             peak, worst, hit_at) in rows:
+            entry = float(entry or 0)
+            if not entry:
+                continue
+            key = (sym, expiry)
+            if key not in chains:
+                try:
+                    chains[key] = fetch_option_chain(expiry, sym) or {}
+                except Exception:
+                    chains[key] = {}
+            val = _mark_value(chains[key], variant, structure,
+                              float(lo), float(sh), float(width))
+            if val is None:
+                try:
+                    spot = float(fetch_spot(sym) or 0)
+                except Exception:
+                    spot = 0.0
+                if not spot:
+                    continue
+                val = _intrinsic(variant, structure, float(lo), float(sh), spot)
+            if structure == "DEBIT":
+                ret = (val - entry) / entry * 100.0
+            else:
+                ret = (entry - (float(width) - val)) / entry * 100.0
+            new_peak = ret if peak is None else max(float(peak), ret)
+            new_worst = ret if worst is None else min(float(worst), ret)
+            # First crossing only -- when the target was FIRST reachable is the
+            # useful fact; re-stamping it on every later mark would lose it.
+            hit = hit_at or (now if ret >= TARGET_PCT else None)
+            cur.execute("""
+                UPDATE dte0_shadow
+                SET last_marked_at=%s, last_value=%s, last_return_pct=%s,
+                    peak_return_pct=%s, worst_return_pct=%s,
+                    target_hit_at=%s, target_return_pct=COALESCE(target_return_pct,
+                        CASE WHEN %s IS NULL AND %s >= %s THEN %s ELSE NULL END)
+                WHERE id=%s
+            """, (now, val, ret, new_peak, new_worst, hit,
+                  hit_at, ret, TARGET_PCT, ret, rid))
+            n += 1
+    logger.info("%d row(s) marked", n)
+    return n
+
+
+def _mark_value(chain, variant: str, structure: str, long_s: float,
+                short_s: float, width: float) -> "float | None":
+    """What the vertical is worth RIGHT NOW off the chain, or None.
+
+    Priced at the MID of each leg. The natural would be more honest about
+    exit cost, but the live book records entry at the natural already, and
+    marking a position at the natural too would double-count the spread --
+    the shadow would show a loss on every structure from the first tick.
+    """
+    # THE CHAIN IS A DICT KEYED (option_type, strike) -> OptionQuote, which is
+    # what chain_vertical and the rest of this module already consume. The
+    # first version of this read it as Tradier's raw list-of-dicts, found
+    # nothing, and silently fell through to intrinsic -- so every mark equalled
+    # the expiry value and the "path" this function exists to record was the
+    # endpoints again. It looked like it worked: rows updated, numbers landed,
+    # and both QQQ credit spreads read exactly 100% because that IS their
+    # intrinsic. A fallback that cannot fail is a fallback that hides the bug.
+    want = "call" if variant == "CALL" else "put"
+    legs = {}
+    for k in (long_s, short_s):
+        q = chain.get((want, float(k))) if isinstance(chain, dict) else None
+        if q is None:
+            return None
+        b = float(getattr(q, "bid", 0) or 0)
+        a = float(getattr(q, "ask", 0) or 0)
+        if b <= 0 or a <= 0:
+            return None
+        legs[float(k)] = (b + a) / 2.0
+
+    if long_s not in legs or short_s not in legs:
+        return None
+    lo, hi = min(long_s, short_s), max(long_s, short_s)
+    near, far = (legs[lo], legs[hi]) if variant == "CALL" else (legs[hi], legs[lo])
+    spread = abs(near - far)
+    return spread if structure == "DEBIT" else max(0.0, width - spread)
+
+
 def settle(now: "datetime | None" = None) -> int:
     now = now or datetime.now(NY)
     done = 0
@@ -325,6 +448,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--settle", action="store_true")
+    ap.add_argument("--mark", action="store_true",
+                    help="mark open rows to the live chain and "
+                         "record peak/worst/target-hit")
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="ignore the clock and the trading-day check")
@@ -342,6 +468,9 @@ def main() -> None:
             print(f"{now:%Y-%m-%d %H:%M %Z} — not a trading day.")
             return
 
+    if args.mark:
+        mark(now)
+        return
     if args.settle:
         settle(now)
         return

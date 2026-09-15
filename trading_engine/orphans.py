@@ -614,8 +614,33 @@ ORPHAN_SLOW_STOP_MINUTES = float(
 # The clock resets when the mark recovers AND when the intrinsic guard stands
 # the stop down, so a position that dips through the level and comes back
 # starts over rather than accumulating.
+# DEFAULT 2, NOT 0. The measurement above says 2 and the code shipped with 0 --
+# the feature was built, measured positive, and then deployed switched off, in
+# the code default AND in .env.production.
+#
+# WHAT THAT COST, LIVE, 2026-09-15. A QQQ 708/703 put debit, entry 2.46, peaked
+# +15.7% and then printed -10.8% for ONE CYCLE on a five-minute wick:
+#
+#     12:50   QQQ 705.89   spread -14%    the wick
+#     12:53   STOP_LOSS fired, booked -154 across two fills
+#     12:55   QQQ 705.45   spread  +4%
+#     13:00   QQQ 704.78   spread +31%    past the +30% target
+#     13:20   QQQ 704.57   spread +39%
+#
+# It would have hit its target seven minutes after being closed. One print, no
+# persistence, and the position was gone.
+#
+# A CAVEAT THE NUMBERS ABOVE DO NOT COVER: that sweep ran a -40% fast stop and
+# production runs -10%. A stop four times tighter fires on more noise, which
+# argues the confirmation matters MORE here, not less -- but it also means two
+# minutes of a genuine breakdown costs more at -10% than it did at -40%.
+# Yesterday's QQQ 710/714 went -7.8% to -16.5% in two minutes, so this is not
+# free. It is the right trade on the evidence available; it is not a free win.
+#
+# The clock resets when the mark recovers and when the intrinsic guard stands
+# the stop down, so only SUSTAINED weakness closes a position.
 ORPHAN_STOP_CONFIRM_MINUTES = float(
-    os.getenv("TRADING_ORPHAN_STOP_CONFIRM_MINUTES", "0") or 0)
+    os.getenv("TRADING_ORPHAN_STOP_CONFIRM_MINUTES", "2") or 0)
 
 # THE BAND WHERE NOTHING FIRES, IN DOLLARS OF INTRINSIC GIVEN BACK.
 #

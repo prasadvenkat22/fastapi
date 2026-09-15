@@ -62,7 +62,7 @@ import logging
 import os
 import sys
 import time
-from datetime import date, datetime, time as dtime, timedelta
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -105,6 +105,30 @@ LOOKBACK_HOURS = int(os.getenv("TRADING_HOURLY_LOOKBACK_H", "24"))
 # session return, not the headlines, so the measurement survives the purge.
 RETAIN_DAYS = int(os.getenv("TRADING_NEWS_RETAIN_DAYS", "10"))
 
+# RECENCY WEIGHTING, NOT A SHORTER WINDOW, AND THE DATA DECIDED WHICH.
+#
+# This averaged every article in the 24h fetch equally, so one new story
+# against twenty-three hours of yesterday's barely moved the score -- the same
+# defect the macro text read had before its verdict window was cut to 4h. MU
+# read -0.40 on a morning where the coverage driving it was the previous day's
+# AI selloff.
+#
+# A HARD SHORT WINDOW IS THE WRONG FIX HERE, because ticker news is sparse in a
+# way the RSS macro tape is not. Measured 2026-09-15 across nine tickers:
+#
+#     window   1h   4h   8h   24h
+#     articles  2   15   21    42        TSLA: ONE article in 24 hours
+#
+# A 1h cutoff leaves almost every name ungraded and a 4h cutoff silences the
+# thin ones entirely -- and "no news" then reads as neutral, which is a verdict
+# nobody produced.
+#
+# Exponential decay keeps every article and lets age decide its weight: at a 4h
+# half-life a story an hour old counts 0.84, four hours 0.50, twelve hours
+# 0.125. Fresh news dominates, old news fades without vanishing, and a name
+# with one article still gets a score.
+HALFLIFE_HOURS = float(os.getenv("TRADING_NEWS_HALFLIFE_H", "4"))
+
 
 def _dsn() -> str:
     return (os.getenv("DATABASE_URL", "")
@@ -144,20 +168,39 @@ def polygon_sentiment(articles: list, symbol: str) -> "tuple | None":
     The signed score counts each article's ticker-level verdict as +1/-1/0 and
     averages, so it lands on the same scale as FinBERT's and the two compare.
     """
-    vals, reasons = [], []
+    now = datetime.now(timezone.utc)
+    num = den = 0.0
+    vals, reasons, ages = [], [], []
     for a in articles:
+        # AGE FIRST, because it decides how much this article counts.
+        age_h = None
+        pub = a.get("published_utc")
+        if pub:
+            try:
+                age_h = max(0.0, (now - datetime.fromisoformat(
+                    str(pub).replace("Z", "+00:00"))).total_seconds() / 3600.0)
+            except ValueError:
+                age_h = None
+        w = 0.5 ** (age_h / HALFLIFE_HOURS) if age_h is not None else 1.0
         for ins in (a.get("insights") or []):
             if (ins.get("ticker") or "").upper() != symbol:
                 continue
             s = (ins.get("sentiment") or "").lower()
-            vals.append(1.0 if s == "positive" else -1.0 if s == "negative" else 0.0)
+            v = 1.0 if s == "positive" else -1.0 if s == "negative" else 0.0
+            vals.append(v)
+            num += v * w
+            den += w
+            if age_h is not None:
+                ages.append(age_h)
             if ins.get("sentiment_reasoning") and len(reasons) < 3:
                 reasons.append(f"[{s}] {ins['sentiment_reasoning']}")
-    if not vals:
+    if not vals or den <= 0:
         return None
-    score = sum(vals) / len(vals)
+    score = num / den
     label = "positive" if score > 0.15 else "negative" if score < -0.15 else "neutral"
-    return label, score, " | ".join(reasons)[:1500], len(vals)
+    fresh = f", newest {min(ages):.1f}h" if ages else ""
+    note = (f"(recency-weighted, {HALFLIFE_HOURS:.0f}h half-life{fresh}) ")
+    return label, score, (note + " | ".join(reasons))[:1500], len(vals)
 
 
 def _store_corpus(articles: list) -> None:

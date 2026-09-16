@@ -322,6 +322,39 @@ STALL_RESPECTS_INTRINSIC = os.getenv(
 STALL_MUST_BOOK_A_GAIN = os.getenv(
     "TRADING_ORPHAN_STALL_MUST_BOOK_GAIN", "true").lower() == "true"
 
+# AND "A GAIN" HAS TO MEAN SOMETHING. The rule above stops at zero: any
+# positive number passes, including eight cents.
+#
+# 2026-09-16, six stall closes in one session, every one of them legitimate by
+# its own logic and none of them worth taking:
+#
+#     NVDA 212/218 x2   +0.3%   +$2    off a +20.6% peak
+#     QQQ  710/712 x3   +3.9%   +$12   off a +46.1% peak
+#     INTC 101/103 x5   +2.9%   +$15   off a +46.2% peak
+#     INTC  98/102 x5   +2.6%   +$40   off a +32.5% peak
+#     SNDK 1530/1550    +6.3%   +$60   off a +95.6% peak
+#     SNDK 1520/1550    +1.3%   +$20   off a +83.6% peak
+#
+# A rule that exists to PROTECT A GAIN, firing to bank 1.5% of the peak it
+# armed on, is not protecting anything -- it is closing the position and
+# calling the fee a profit.
+#
+# MEASURED ON THE MARK, deliberately, because the mark is what the exit
+# actually realises. The stall DECIDES on intrinsic and that is right -- it is
+# what tells a reversal from decay -- but the question here is a different
+# one: is the money you would walk away with worth walking away for. Mixing
+# the two bases is what produced this whole family of bugs (see
+# ORPHAN_MAX_DRAG_WIDTH), so this half is priced where it is paid.
+#
+# THIS DOES NOT PROTECT THE POSITION, and that is the trade. A winner that
+# fades past the floor now runs on to the stop or the flatten instead of
+# banking a token amount on the way down. That is the intent: the alternative
+# on every one of the six above was worth more than the exit taken.
+#
+# 0 restores the old behaviour -- any gain, however small.
+STALL_MIN_GAIN_PCT = float(
+    os.getenv("TRADING_ORPHAN_STALL_MIN_GAIN_PCT", "8") or 0)
+
 # THE STALL FOR POSITIONS THAT EXPIRE LATER.
 #
 # The 0DTE stall is deliberately unarmed -- any positive peak starts it --
@@ -1728,11 +1761,19 @@ def review(engine_symbols: "set | None" = None) -> list:
                 intrinsic_ok = (parts_iv[0] < abs(st["entry"]) if st["credit"]
                                 else parts_iv[0] > abs(st["entry"]))
 
-            # Would selling right now, at the mark, actually realise a profit?
-            # See STALL_MUST_BOOK_A_GAIN.
+            # Would selling right now, at the mark, realise a profit WORTH
+            # TAKING? See STALL_MUST_BOOK_A_GAIN and STALL_MIN_GAIN_PCT.
+            #
+            # Computed here rather than read off ret_pct because the credit
+            # sign convention is hand-rolled in this module and a silent
+            # inversion on credit structures is the exact bug class that hit
+            # _decompose and intrinsic_ok on 2026-09-03 -- same idea, two
+            # places, both reachable only on credits.
+            _gain_abs = ((abs(st["entry"]) - value) if st["credit"]
+                         else (value - abs(st["entry"])))
+            _gain_pct = (_gain_abs / entry_abs * 100.0) if entry_abs else 0.0
             books_a_gain = (not STALL_MUST_BOOK_A_GAIN) or (
-                (abs(st["entry"]) - value) > 0 if st["credit"]
-                else (value - abs(st["entry"])) > 0)
+                _gain_abs > 0 and _gain_pct >= STALL_MIN_GAIN_PCT)
 
             # Computed once per structure so the log line below can say the
             # rules are waiting rather than just omitting them.
@@ -1872,20 +1913,45 @@ def review(engine_symbols: "set | None" = None) -> list:
                 and drag is not None and _w > 0
                 and drag > _w * ORPHAN_MAX_DRAG_WIDTH)
 
-            stall_later_ready = (
+            stall_later_armed = (
                 (not zero_dte) and past_hold and ORPHAN_LATER_STALL_MINUTES > 0
                 and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
-                and quiet >= ORPHAN_LATER_STALL_MINUTES and books_a_gain
+                and quiet >= ORPHAN_LATER_STALL_MINUTES
                 and stall_pct <= rec["peak"] - _giveback_points(
                     st["root"], entry_abs, rec["peak"], None,
                     abs(st["short_strike"] - st["long_strike"])))
 
-            stall_ready = (
+            stall_armed = (
                 zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0
-                and quiet >= STALL_MINUTES and books_a_gain
+                and quiet >= STALL_MINUTES
                 and stall_pct <= rec["peak"] - _giveback_points(
                     st["root"], entry_abs, rec["peak"], STALL_GIVEBACK_PCT,
                     abs(st["short_strike"] - st["long_strike"])))
+
+            if (stall_armed or stall_later_armed) and not books_a_gain:
+                if _gain_abs <= 0:
+                    logger.info(
+                        "ORPHAN %s %.0f/%.0f gave back to %+.1f%% from a "
+                        "%+.1f%% peak, but the mark is %.2f against a %.2f "
+                        "entry — closing books a LOSS of %+.1f%%, and the "
+                        "stall does not realise losses. That is the stop's "
+                        "job and it is intrinsic-aware.",
+                        st["root"], st["long_strike"], st["short_strike"],
+                        stall_pct, rec["peak"], value, entry_abs, _gain_pct,
+                    )
+                else:
+                    logger.info(
+                        "ORPHAN %s %.0f/%.0f gave back to %+.1f%% from a "
+                        "%+.1f%% peak, but closing at %.2f books only "
+                        "%+.1f%% — under the %.0f%% floor, so it is not worth "
+                        "taking and the position runs on to the stop or the "
+                        "flatten.",
+                        st["root"], st["long_strike"], st["short_strike"],
+                        stall_pct, rec["peak"], value, _gain_pct,
+                        STALL_MIN_GAIN_PCT,
+                    )
+            stall_ready = stall_armed and books_a_gain
+            stall_later_ready = stall_later_armed and books_a_gain
 
             if drag_blocks and (later_target_hit or stall_later_ready
                                 or stall_ready):

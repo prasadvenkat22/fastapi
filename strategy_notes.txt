@@ -10336,3 +10336,51 @@ as one, and it costs whatever the afternoon would have made.
 REVERT FOR THE NEXT SESSION: drop the TRADING_EVENT_BLACKOUT line and restore
 crontab from /root/crontab.bak-fomc. 09-16 is the only September date in
 FOMC_2026, so nothing else trips it.
+
+
+165. A GAIN THAT IS NOT WORTH TAKING IS NOT A GAIN  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Six stall closes in one session, every one legitimate by its own logic and
+none of them worth taking:
+
+    NVDA 212/218 x2   +0.3%   +$2    off a +20.6% peak
+    QQQ  710/712 x3   +3.9%   +$12   off a +46.1% peak
+    INTC 101/103 x5   +2.9%   +$15   off a +46.2% peak
+    INTC  98/102 x5   +2.6%   +$40   off a +32.5% peak
+    SNDK 1530/1550    +6.3%   +$60   off a +95.6% peak
+    SNDK 1520/1550    +1.3%   +$20   off a +83.6% peak
+
+STALL_MUST_BOOK_A_GAIN stops at zero. Any positive number passes, including
+eight cents. A rule whose purpose is to PROTECT A GAIN, firing to bank 1.5% of
+the peak it armed on, is not protecting anything -- it is closing the position
+and calling the fee a profit.
+
+    That knob was itself the fix for a related failure on 2026-09-03, where
+    the stall sold three winners at a LOSS for about -263. It correctly
+    established that the exit must book a gain and then stopped at the sign.
+    Half a guard, and the half it was missing took a session to show.
+
+STALL_MIN_GAIN_PCT = 8, measured ON THE MARK. Deliberately: the stall DECIDES
+on intrinsic and that is right -- intrinsic is what tells a reversal from
+decay -- but this asks a different question, whether the money you would walk
+away with is worth walking away for, and that money is the mark. Mixing the
+two bases is what produced this entire family of bugs; see section 162 and
+ORPHAN_MAX_DRAG_WIDTH. Each half is priced where it is paid.
+
+Replayed: all six above BLOCKED, and a spread up +30% from a +35% peak still
+fires. It caught a live case in its first cycle.
+
+THIS DOES NOT PROTECT THE POSITION AND THAT IS THE TRADE. A winner that fades
+past the floor now runs on to the stop or the flatten instead of banking a
+token amount on the way down. On every one of the six above the alternative
+was worth more than the exit taken -- but that is six observations on one
+session, and a tape that reverses hard will make this look wrong.
+TRADING_ORPHAN_STALL_MIN_GAIN_PCT=0 restores the old behaviour.
+
+A LOG THAT NAMED THE WRONG RULE, fixed within the cycle. The first message
+reported both refusals as "under the floor", including QQQ 706/709 closing at
+-8.5% -- which is a LOSS, refused by STALL_MUST_BOOK_A_GAIN, not by the new
+floor at all. Two rules now get two messages. A line that sends the next
+reader to the wrong knob is worse than no line, and this file has three
+entries already that begin with a log telling a small lie.

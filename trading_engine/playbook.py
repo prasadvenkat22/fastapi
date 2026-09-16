@@ -673,6 +673,35 @@ WINDOWS = (
         # when it did not, and the looser tiers are what open it on the days
         # that lose. A window with no measured record of its own has no claim
         # to a looser entry than the one that has.
+        # DEPLOYED AS CLEAN,ZONE FROM 2026-09-15. The code default stays CLEAN.
+        #
+        # CLEAN-only meant this window never fired on 09-15: the tier ladder
+        # produced 38 ZONE/bear cycles and the 5 CLEAN/bear ones arrived at
+        # 12:00 ET, half an hour after this window shut. A bearish book that
+        # cannot take the tier the ladder actually produces is a book that does
+        # not trade.
+        #
+        # ZONE MEASURED NEGATIVE ON ITS OWN -- -21, -13, -25 a trade across
+        # three arms. That is real and is the reason this is an experiment
+        # rather than a correction. But the note recording it also records why
+        # it is not the whole answer:
+        #
+        #     "THE ZONE TIER, macro gate off. Its own trades measured negative
+        #      on every arm and THE MACRO DIMENSION IS UNMEASURABLE, because
+        #      the harness pins market_sentiment to GOOD.
+        #      Read: did it enter on a morning CLEAN refused? What did those
+        #      trades do?"
+        #
+        # ZONE was measured with no macro gate. This window is gated by
+        # TRADING_NEWS_DIRECTION, which since 2026-09-14 reads crude/10Y/VIX --
+        # so a ZONE/bear entry here needs the PRICES to agree that the tape is
+        # risk-off, which is a condition the original measurement could not
+        # express. Different configuration, and the open question the note
+        # asks is exactly this one.
+        #
+        # dte0_shadow now marks intraday, so these entries leave a record with
+        # peak and worst rather than only an outcome. Revert with
+        # TRADING_MORNING_PUT_TIERS=CLEAN, no deploy.
         entry_tiers=_env_tiers("TRADING_MORNING_PUT_TIERS", frozenset({"CLEAN"})),
         close_by=time(11, 30),
         note="Put debit spread for a morning the macro news read calls "

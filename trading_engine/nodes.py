@@ -9,6 +9,7 @@ above into a final trading decision.
 
 import logging
 import os
+import time
 import time as _time          # the module; `time` is datetime.time here
 from dataclasses import replace as _dc_replace
 from datetime import datetime, time as dtime, timezone
@@ -929,6 +930,11 @@ STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-20.0"))
 # WORSE ON A RISK-OFF DAY: RISK_OFF_STOP_LOSS_PCT is -13%, tighter still, and
 # fires whenever macro reads BAD -- 482 of that session's cycles.
 STOP_CONFIRM_MINUTES = float(os.getenv("TRADING_STOP_CONFIRM_MINUTES", "5"))
+
+# See the headline-read block in the indicator node. Cooldown, not a kill, so
+# a raised quota recovers without a restart.
+EMBED_COOLDOWN_S = float(os.getenv("TRADING_EMBED_COOLDOWN_S", "1800"))
+_EMBED_DEAD_UNTIL = 0.0
 _stop_since: dict = {}
 
 
@@ -1878,21 +1884,44 @@ async def market_signals_agent(state: TradingState) -> dict:
         # Degrades to no headlines rather than no cycle. The verdict then
         # rests on breadth, VIX and yields, which is where the evidence in
         # this file says the signal actually lives.
-        try:
-            headlines = _stored_headlines()
-            embeddings = VoyageEmbeddings()
-            if headlines:
-                await store_headlines(headlines, embeddings)
-            similar_past_headlines = (
-                await query_similar_headlines(headlines, embeddings, top_k=3)
-                if headlines else []
-            )
-        except Exception:
-            logger.exception(
-                "Headline read failed — continuing on the objective macro terms. "
-                "The cycle is NOT abandoned."
-            )
+        # AND IT LATCHES, because degrading gracefully once a minute is still
+        # once a minute. Voyage's free tier allows 3 requests a minute; this
+        # block makes two per cycle and news_hourly embeds its corpus on top,
+        # so the quota is structurally unreachable and every refusal arrived
+        # as a full traceback: 71 of them in one session, burying the four
+        # lines that actually mattered.
+        #
+        # The retry could never succeed either. A rate limit that is a
+        # PLAN limit does not clear in sixty seconds, so the call was paying
+        # latency on every cycle to be refused again.
+        #
+        # So: one warning, then quiet for EMBED_COOLDOWN_S. The read is
+        # observational -- the comment above says the objective terms decide
+        # the macro verdict regardless -- so standing it down costs context
+        # and nothing else. It re-arms on its own rather than needing a
+        # restart, which matters if the quota is ever raised mid-session.
+        global _EMBED_DEAD_UNTIL
+        if time.time() < _EMBED_DEAD_UNTIL:
             headlines, similar_past_headlines = [], []
+        else:
+            try:
+                headlines = _stored_headlines()
+                embeddings = VoyageEmbeddings()
+                if headlines:
+                    await store_headlines(headlines, embeddings)
+                similar_past_headlines = (
+                    await query_similar_headlines(headlines, embeddings, top_k=3)
+                    if headlines else []
+                )
+            except Exception as exc:
+                _EMBED_DEAD_UNTIL = time.time() + EMBED_COOLDOWN_S
+                logger.warning(
+                    "Headline read failed (%s) — standing it down for %.0f "
+                    "minutes and continuing on the objective macro terms. "
+                    "The cycle is NOT abandoned.",
+                    type(exc).__name__, EMBED_COOLDOWN_S / 60.0,
+                )
+                headlines, similar_past_headlines = [], []
 
     # $TICKQ is intentionally not used — confirmed live against both Tradier
     # sandbox and production that this symbol doesn't exist in their catalog,

@@ -265,17 +265,44 @@ def _reconcile(open_row) -> None:
                 p for p in tradier_orders.open_positions()
                 if tradier_orders.occ_root(p.get("symbol")) == ENGINE_UNDERLYING
             ]
-            if held:
+            # ADOPTED IS NOT DIVERGED, and this is the second half of the
+            # 2026-08-28 filter above rather than a new idea. That filter
+            # stopped OTHER underlyings raising ERROR once a minute; it left
+            # manual QQQ spreads doing exactly that, because ENGINE_UNDERLYING
+            # is QQQ and the engine is flat whenever it did not open them.
+            #
+            # Observed 2026-09-16: two hand-opened QQQ spreads raised ERROR on
+            # every cycle for hours while orphans.review() marked and managed
+            # both on the same cycle. The condition the line describes -- a
+            # position nobody is watching -- was not the condition it fired
+            # on, and that is the failure mode the comment above already
+            # names: a genuine divergence arriving inside a stream of alerts
+            # known to be noise.
+            #
+            # review() runs FIRST now and returns what it adopted. A leg it
+            # holds is managed, so it is reported as state. A leg it does not
+            # is unwatched, and that is what ERROR is for.
+            reported = orphans.review() or []
+            adopted = {sym for st in reported
+                       for sym in (st.get("long"), st.get("short")) if sym}
+            loose = [p for p in held if p.get("symbol") not in adopted]
+            if loose:
                 logger.error(
-                    "RECONCILE: the engine believes it is flat, the broker holds %d %s position(s): %s",
-                    len(held), ENGINE_UNDERLYING, [p.get("symbol") for p in held],
+                    "RECONCILE: the engine believes it is flat and %d %s leg(s) "
+                    "are managed by nobody: %s",
+                    len(loose), ENGINE_UNDERLYING,
+                    [p.get("symbol") for p in loose],
                 )
-            # ... and say what the exit ladder WOULD do about them. The error
-            # above has been the whole of the response since it was written:
-            # on 2026-09-02 it fired 34 times at once a minute while a manual
-            # spread ran unmanaged all morning. Observation only -- orphans.py
-            # places no orders.
-            orphans.review()
+            elif held:
+                logger.info(
+                    "RECONCILE: the engine is flat; the broker's %d %s leg(s) "
+                    "are all adopted by the orphan manager — state, not "
+                    "divergence.", len(held), ENGINE_UNDERLYING,
+                )
+            # review() above says what the exit ladder WOULD do about them.
+            # The error line was the whole of the response until 2026-09-02,
+            # when it fired 34 times at once a minute while a manual spread
+            # ran unmanaged all morning.
             return
         # A just-submitted order is not a divergence. Tradier's position list
         # lags its own order acknowledgement by more than the second between

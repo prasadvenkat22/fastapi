@@ -72,6 +72,17 @@ ALIASES: Dict[str, List[str]] = {
     #
     # The covered set is the UNION of what every book trades, not any one
     # book's list.
+    # ADDED WITH THE SYMBOL ITSELF, WHICH IS THE POINT. INTC went into the
+    # three trading lists on 2026-09-16 and not into this one, so
+    # _aliases_for("INTC") fell back to ["intc"] -- and the wires write
+    # "Intel". That afternoon CNBC carried "Intel, SK Hynix shares jump on
+    # report they're discussing U.S. memory chip manufacturing", the Reuters
+    # story that took INTC up 5.2% pre-market, and nothing in the engine could
+    # match it to the symbol it was holding five lots of.
+    #
+    # A name added to a trading list and not to this one is invisible to every
+    # text feed. Add both together, always.
+    "INTC": ["intel", "intc"],
     "SNDK": ["sandisk", "sndk"],
     "STX": ["seagate", "stx technology"],
     "WDC": ["western digital", "wdc"],
@@ -301,6 +312,15 @@ MAX_HEADLINES = int(os.getenv("TRADING_NEWS_MAX_HEADLINES", "45"))
 # Kept as a note because the idea will occur to someone again: it costs
 # nothing, buys nothing, and correlates four memory names into one verdict.
 # Polygon's ticker-tagged articles make the whole question moot.
+#
+# THAT LAST SENTENCE WAS WRONG, 2026-09-16. Polygon carried ZERO
+# mentions of the SK Hynix / Intel story across 618 articles in 72
+# hours -- the Reuters scoop that opened INTC +5.2% -- while CNBC's
+# feed had it in news_seen by 09:12 ET. Ticker coverage is not a given,
+# and a wire service getting there first is the ordinary case. The
+# vocabulary point above still stands; the conclusion drawn from it did
+# not. news_hourly now pools RSS headlines that name a symbol into that
+# symbol's read, which is why these patterns matter again.
 
 
 def patterns_for(symbol: str) -> List[str]:
@@ -658,6 +678,23 @@ GRADE_SOURCE = {os.getenv("TRADING_MACRO_SYMBOL", "QQQ").upper():
                 os.getenv("TRADING_MACRO_GRADE_SOURCE", "objective")}
 DEFAULT_GRADE_SOURCE = "polygon"
 
+# POOLED ROWS ARE WRITTEN UNDER A DIFFERENT SOURCE, ON PURPOSE.
+#
+# news_hourly now pools Polygon's ticker articles with the RSS headlines that
+# name the same company, and a pooled read is not a Polygon read. Writing it
+# as "polygon" would have made every later question of the form "how accurate
+# is Polygon on this name" silently answer itself with a different corpus --
+# the exact mistake news_enrich.store() documents about labelling a FinBERT
+# macro verdict as Polygon's.
+#
+# So the writer is honest and the READER accepts either, newest first. A run
+# with no RSS match still writes plain "polygon", so the two interleave
+# through a session and the newest row wins whichever it is.
+def _grade_sources(symbol: str) -> list:
+    base = GRADE_SOURCE.get(symbol.upper(), DEFAULT_GRADE_SOURCE)
+    return [base, base + "+rss"] if base == "polygon" else [base]
+
+
 
 def _polygon_grade(symbol: str, day: date, cutoff: Optional[dtime]) -> Optional[dict]:
     """The stored Polygon aspect sentiment for this symbol, as a verdict.
@@ -679,11 +716,24 @@ def _polygon_grade(symbol: str, day: date, cutoff: Optional[dtime]) -> Optional[
             cur.execute(
                 "SELECT label, score, headline_count, rationale, asof "
                 "FROM symbol_sentiment_hourly "
-                "WHERE symbol=%s AND source=%s AND trading_day=%s "
+                "WHERE symbol=%s AND source = ANY(%s) AND trading_day=%s "
                 "  AND asof <= %s "
-                "ORDER BY asof DESC LIMIT 1",
+                # BOTH SOURCES STAMP THE SAME asof -- the hour the sweep ran
+                # -- so asof alone is a TIE, and Postgres resolved it by
+                # whichever row it happened to reach first. Caught the minute
+                # this shipped: INTC had a fresh polygon+rss row at +0.40 and
+                # the reader kept handing back the polygon-only +0.29 beside
+                # it. A tie-break that is left to the planner is not a
+                # tie-break, it is a coin toss that looks deterministic in
+                # testing.
+                #
+                # The pooled row is strictly more evidence over the same
+                # window, so it wins the tie.
+                "ORDER BY asof DESC, "
+                "  CASE WHEN source LIKE '%%+rss' THEN 0 ELSE 1 END "
+                "LIMIT 1",
                 (symbol.upper(),
-                 GRADE_SOURCE.get(symbol.upper(), DEFAULT_GRADE_SOURCE),
+                 _grade_sources(symbol),
                  day, at))
             row = cur.fetchone()
     except Exception:

@@ -10204,3 +10204,90 @@ WHAT IS NOT MEASURED. One afternoon, two positions, and the drag ceiling of
 cannot see intrinsic, so it cannot judge this as it stands -- extending it to
 parse the [intrinsic N, extrinsic N] the ORPHAN line already carries is the
 next step, and would let the ceiling be swept properly instead of picked.
+
+
+163. THE STORY THAT MOVED THE STOCK WAS IN THE DATABASE ALL DAY  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Raised from the tape: "there was news INTC and korean firm skhynix are
+partnering is that missing." It was, and the engine had it.
+
+Reuters broke that SK Hynix was in talks with Intel to make memory chips in
+the US -- taking part of the Ohio fab, or a JV with cloud buyers. INTC opened
++5.2% on it. CNBC's feed carried it and dedupe stored it at 09:12 ET, eighteen
+minutes before the bell:
+
+    news_seen  guid 108363489  source cnbc-finance  first_seen 13:12:03 UTC
+    "Intel, SK Hynix shares jump on report they're discussing U.S. memory
+     chip manufacturing"
+
+POLYGON NEVER HAD IT. Not thin coverage -- absent. Scanned the whole feed, not
+just the ticker: ZERO mentions of "hynix" across 618 articles in 72 hours, and
+INTC's own feed held six, the newest a GPU-shipments press release. So INTC
+graded "positive +0.29" off an industry PR and two articles recommending TI
+and NVIDIA, while the catalyst sat on the other leg.
+
+    The reply given before checking was "there is no INTC-specific news
+    today -- a sector drift, not a catalyst." That was the PER-TICKER leg
+    answering, and the answer was in the same database on the macro leg. A
+    feed that is silent is not the same as an event that did not happen, and
+    the difference is one query.
+
+THE SPLIT WAS RIGHT AND THE ASSUMPTION UNDER IT WAS NOT. Macro from RSS,
+tickers from Polygon is a clean division that assumes Polygon covers ticker
+news. It does not always. Section 159's note says "Polygon's ticker-tagged
+articles make the whole question moot" -- that is the sentence this day
+disproves.
+
+TWO INDEPENDENT REASONS IT COULD NOT CROSS OVER:
+
+  1. INTC WAS NOT IN ALIASES. It went into the three trading lists that
+     morning and not into the alias table, so patterns_for("INTC") fell back
+     to ["intc"] and the wires write "Intel". A name added to a trading list
+     and not to that one is invisible to every text feed. Now ["intel",
+     "intc"]; INTC was the only gap across all 18 traded names.
+
+  2. THERE WAS NO RSS-TO-TICKER PATH AT ALL. news_enrich classifies into
+     MACRO topics and leaves rule_dir NULL on anything else. Of 175 RSS rows
+     that day, 43 were scored, and every company-specific headline was among
+     the 132 that were not. The rows were stored and the judgement was never
+     made.
+
+BUILT: matched headlines are scored per company in one Gemini call per sweep,
+then POOLED WITH POLYGON'S ARTICLES and run through polygon_sentiment()
+unchanged.
+
+    POOLED, NOT AVERAGED, and that is the whole design. The half-life, the
+    pre-open ageing and the n/(n+k) shrinkage were each argued in against a
+    live loss; a second scoring path would drift from them silently. One
+    specific story against three generic ones should not be a separate
+    opinion, it should be part of one sample.
+
+    WORD-BOUNDARY MATCHING, because "intel" inside "artificial intelligence"
+    would make every AI headline an Intel story and the feeds carry a great
+    many. Verified against the real corpus: "Artificial Intelligence (AI)
+    Development" does not match INTC, "Meta-analysis" does not match META.
+
+FIRST LIVE SWEEP: 13 headlines matched, 13 scored, 8 names picked up RSS.
+INTC +0.29 -> +0.40, newest article 6.3h -> 2.8h.
+
+A BUG CAUGHT IN THE MINUTE IT SHIPPED, worth recording as a class. Both
+sources stamp the SAME asof -- the hour the sweep ran -- so "ORDER BY asof
+DESC LIMIT 1" was a TIE, resolved by whichever row Postgres reached first.
+The reader kept handing back the polygon-only +0.29 while the pooled +0.40 sat
+beside it. A tie-break left to the planner is not a tie-break; it is a coin
+toss that looks deterministic in testing. The pooled row is strictly more
+evidence over the same window, so it now wins the tie explicitly.
+
+THE SOURCE LABEL IS "polygon+rss", NOT "polygon". Same rule news_enrich.store()
+already states: a pooled read is not a Polygon read, and writing it as one
+would make every later "how accurate is Polygon on this name" answer itself
+with a different corpus. The reader accepts either and takes the newest.
+
+REVERSIBLE WITHOUT A DEPLOY: TRADING_NEWS_RSS_TICKER=false and restart. A
+Gemini outage already falls back to Polygon alone -- an outage must produce no
+opinion, never a wrong one.
+
+WHAT IS NOT MEASURED. One day, one story. The open question is how often RSS
+carries a ticker catalyst Polygon misses; 853 rows already sit in news_seen
+and can answer it offline without risking a session.

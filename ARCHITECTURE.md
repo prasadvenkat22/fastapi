@@ -174,7 +174,7 @@ CRWV list Friday expiries only and could never have traded intraday anyway.
 
 ---
 
-## Hourly per-symbol sentiment, from Polygon
+## Hourly per-symbol sentiment, from Polygon and RSS
 
 `symbol_sentiment_hourly`, written by `scripts/news_hourly.py` every hour
 08:00-16:30 ET. **It scores. It does not gate.**
@@ -184,8 +184,32 @@ legs, asymmetric because the problem is:
 
 | leg | source | model |
 |---|---|---|
-| ticker | Polygon `insights.sentiment`, stored hourly | none |
+| ticker | Polygon `insights.sentiment` **+ RSS headlines naming the symbol** | one hosted API |
 | macro | RSS → promo regex → **one Gemini call** | one hosted API |
+
+**The ticker leg gained an RSS half on 2026-09-16 (section 163).** Reuters
+broke the SK Hynix / Intel story, INTC opened +5.2%, CNBC's feed had it in
+`news_seen` by 09:12 ET — and Polygon carried **zero** mentions across 618
+articles in 72 hours. "Macro from RSS, tickers from Polygon" assumed Polygon
+covers ticker news; a wire service getting there first is the ordinary case.
+
+RSS headlines matching a symbol's `patterns_for()` aliases (word-boundary, so
+"artificial intelligence" is not an Intel story) are scored per company in
+**one Gemini call per sweep** and then **pooled with Polygon's articles** —
+not averaged with Polygon's score. Pooling is the point: the recency
+half-life, the pre-open ageing and the `n/(n+k)` shrinkage all act on the
+union, so one specific story sits inside one sample rather than forming a
+second opinion.
+
+Pooled rows are written as source **`polygon+rss`**, never `polygon` — a
+pooled read is not a Polygon read, and mislabelling it would make every later
+"how accurate is Polygon here" answer itself with a different corpus. The
+reader accepts either and takes the newest, breaking an equal-`asof` tie
+toward the pooled row explicitly.
+
+`TRADING_NEWS_RSS_TICKER=false` reverts it with a restart. A Gemini outage
+already falls back to Polygon alone: an outage must produce no opinion, never
+a wrong one.
 
 Nothing is installed locally — no torch, no spaCy, no transformers, and as of
 2026-09-14 no HuggingFace call either. `gemini-3.1-flash-lite` decides

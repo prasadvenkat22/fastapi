@@ -61,6 +61,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 from datetime import date, datetime, time as dtime, timedelta, timezone
@@ -303,6 +304,149 @@ def _store_corpus(articles: list) -> None:
                        len(titles), exc_info=True)
 
 
+# THE RSS TICKER LEG.
+#
+# WHY IT EXISTS, 2026-09-16. Reuters broke that SK Hynix was in talks with
+# Intel to make memory chips in the US. INTC opened +5.2% on it. CNBC's feed
+# carried it and dedupe stored it at 09:12 ET, eighteen minutes before the
+# bell -- and Polygon never had it: ZERO mentions of "hynix" across 618
+# articles in 72 hours, and INTC's own ticker feed held six articles, the
+# newest a GPU-shipments press release.
+#
+# So the engine graded INTC "positive +0.29" off an industry PR and two
+# articles recommending other companies, while the story that moved the stock
+# sat in news_seen on the macro leg.
+#
+# THE SPLIT WAS RIGHT AND THE ASSUMPTION UNDER IT WAS NOT. Macro from RSS,
+# tickers from Polygon is a clean division -- but it assumes Polygon covers
+# ticker news. It does not always, and a wire service scooping it is the
+# normal case, not the exception.
+#
+# WHY news_seen's OWN SCORE CANNOT BE REUSED. news_enrich classifies into
+# MACRO topics -- rates, growth, trade -- and anything that is not macro keeps
+# rule_dir NULL. Of 175 RSS rows that day, 43 were scored, and every
+# company-specific headline was among the 132 that were not. The rows are
+# stored; the judgement was never made.
+#
+# SO THESE ARE SCORED HERE, per company, and then POOLED WITH POLYGON'S
+# ARTICLES rather than averaged with Polygon's score. Pooling is what makes
+# the existing machinery apply unchanged: the recency half-life, the pre-open
+# ageing and the n/(n+k) shrinkage all act on the union, so one strong
+# specific story sits against three generic ones and the sample-size discount
+# counts them together.
+#
+# ONE GEMINI CALL PER SWEEP for every matched headline across every symbol,
+# not one per symbol. A failure returns nothing and the sweep falls back to
+# Polygon alone -- an outage must produce no opinion, never a wrong one.
+#
+# TRADING_NEWS_RSS_TICKER=false turns it off with a restart and no deploy.
+RSS_TICKER = os.getenv("TRADING_NEWS_RSS_TICKER", "true").lower() == "true"
+RSS_TICKER_MAX = int(os.getenv("TRADING_NEWS_RSS_TICKER_MAX", "60"))
+
+_RSS_SYSTEM = (
+    "You rate financial headlines for ONE named company each. For every "
+    "numbered line, given as 'TICKER :: headline', decide the sentiment of "
+    "that headline FOR THAT COMPANY'S SHARE PRICE. Return JSON: a list of "
+    "objects with keys i (the number), s (positive, negative or neutral) and "
+    "why (at most 20 words). Judge only the company named before '::'. A "
+    "headline about the sector, or one where the company is listed in passing "
+    "among others, is neutral unless it says something specific about that "
+    "company. Advertising, sponsored content and 'top N stocks to buy' "
+    "listicles are neutral."
+)
+
+
+def _rss_candidates(cur, since: datetime) -> list:
+    """(symbol, guid, title, when) for every alias hit in the window.
+
+    Matched on a word boundary so "intel" does not fire on "intelligence" --
+    without that, every AI headline the feeds carry would read as an Intel
+    story, and the feeds carry a great many.
+    """
+    from trading_engine.symbol_news import patterns_for
+
+    cur.execute(
+        "SELECT guid, title, first_seen, published FROM news_seen "
+        "WHERE COALESCE(published, first_seen) >= %s "
+        "ORDER BY COALESCE(published, first_seen) DESC",
+        (since,))
+    rows = cur.fetchall()
+    out = []
+    for sym in SYMBOLS:
+        pats = [re.compile(r"(?<![a-z0-9])" + re.escape(a) + r"(?![a-z0-9])")
+                for a in patterns_for(sym)]
+        for guid, title, first_seen, published in rows:
+            low = (title or "").lower()
+            if any(p.search(low) for p in pats):
+                out.append((sym, guid, title, published or first_seen))
+    return out[:RSS_TICKER_MAX]
+
+
+def _rss_sentiment(cands: list) -> dict:
+    """{(symbol, guid): (sentiment, why)} from one Gemini call, or {}."""
+    if not cands:
+        return {}
+    import json as _json
+    import urllib.request
+
+    key = os.getenv("GEMINI_API_KEY", "")
+    if not key:
+        logger.warning("GEMINI_API_KEY unset -- RSS ticker leg scores nothing.")
+        return {}
+    model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           + model + ":generateContent?key=" + key)
+    lines = []
+    for i, (sym, _guid, title, _when) in enumerate(cands):
+        lines.append(str(i) + ". " + sym + " :: " + str(title))
+    body = _json.dumps({
+        "systemInstruction": {"parts": [{"text": _RSS_SYSTEM}]},
+        "contents": [{"parts": [{"text": chr(10).join(lines)}]}],
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 4096,
+                             "responseMimeType": "application/json"},
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            url, data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=90) as r:
+            out = _json.loads(r.read())
+        rows = _json.loads(out["candidates"][0]["content"]["parts"][0]["text"])
+    except Exception as exc:
+        logger.warning("RSS ticker scoring unavailable (%s) -- Polygon alone "
+                       "this sweep.", type(exc).__name__, exc_info=True)
+        return {}
+    got = {}
+    for row in rows:
+        try:
+            sym, guid, _t, _w = cands[int(row["i"])]
+        except (KeyError, ValueError, IndexError, TypeError):
+            continue
+        sent = str(row.get("s") or "neutral").lower()
+        if sent not in ("positive", "negative", "neutral"):
+            sent = "neutral"
+        got[(sym, guid)] = (sent, str(row.get("why") or "")[:180])
+    return got
+
+
+def _as_polygon_article(sym: str, title: str, when, sent: str,
+                        why: str) -> dict:
+    """An RSS headline wearing Polygon's shape, so one aggregator serves both.
+
+    Deliberately NOT a second scoring path. polygon_sentiment() carries the
+    half-life, the pre-open ageing and the n/(n+k) shrinkage, and every one of
+    those was argued into place against a live loss. A parallel implementation
+    would drift from them silently.
+    """
+    return {
+        "title": title,
+        "published_utc": (when.isoformat() if hasattr(when, "isoformat")
+                          else str(when)),
+        "publisher": {"name": "rss"},
+        "insights": [{"ticker": sym, "sentiment": sent,
+                      "sentiment_reasoning": "[rss] " + why}],
+    }
+
+
 def sweep(now: "datetime | None" = None) -> int:
     now = now or datetime.now(NY)
     since = now.astimezone(ZoneInfo("UTC")) - timedelta(hours=LOOKBACK_HOURS)
@@ -315,10 +459,40 @@ def sweep(now: "datetime | None" = None) -> int:
     # articles are accumulated and embedded once at the end instead.
     corpus: list = []
     with conn, conn.cursor() as cur:
+        # MATCHED AND SCORED ONCE, BEFORE THE PER-SYMBOL LOOP. One Gemini call
+        # for the whole sweep; inside the loop it would be one per symbol.
+        rss_by_sym: dict = {}
+        if RSS_TICKER:
+            try:
+                cands = _rss_candidates(cur, since)
+                scored = _rss_sentiment(cands)
+                for sym, guid, title, when in cands:
+                    hit = scored.get((sym, guid))
+                    if not hit:
+                        continue
+                    rss_by_sym.setdefault(sym, []).append(
+                        _as_polygon_article(sym, title, when, hit[0], hit[1]))
+                if cands:
+                    logger.info("RSS ticker leg: %d headline(s) matched a "
+                                "symbol, %d scored, across %d name(s)",
+                                len(cands), len(scored), len(rss_by_sym))
+            except Exception:
+                # Never let the new leg take the sweep down. Polygon alone is
+                # the behaviour this replaced and it is a safe fallback.
+                logger.warning("RSS ticker leg failed -- Polygon alone.",
+                               exc_info=True)
+                rss_by_sym = {}
         for i, sym in enumerate(SYMBOLS):
             if i:
                 time.sleep(PACE_SECONDS)     # between every call, not every 4th
             arts = polygon_news(sym, since)
+            extra = rss_by_sym.get(sym) or []
+            # POOLED, NOT AVERAGED. One aggregator sees the union, so the
+            # half-life, the pre-open ageing and the shrinkage all count both
+            # corpora together -- which is the point: a single specific story
+            # against three generic ones should not be a separate opinion, it
+            # should be part of one sample.
+            arts = list(arts) + extra
             titles = [a["title"] for a in arts if a.get("title")]
             if not titles:
                 logger.info("%-5s no articles in the last %dh", sym, LOOKBACK_HOURS)
@@ -327,8 +501,15 @@ def sweep(now: "datetime | None" = None) -> int:
             rows = []
             p = polygon_sentiment(arts, sym)
             if p:
-                rows.append(("polygon",) + p)
+                # THE SOURCE LABEL SAYS WHICH CORPUS PRODUCED THE NUMBER.
+                # A pooled read is not a Polygon read, and calling it one
+                # would make "how accurate is Polygon on this name" answer
+                # itself with a different corpus for ever after.
+                rows.append(("polygon+rss" if extra else "polygon",) + p)
             for source, label, score, rationale, n, meta in rows:
+                if extra and isinstance(meta, dict):
+                    meta = dict(meta, rss_n=len(extra),
+                                polygon_n=len(arts) - len(extra))
                 cur.execute("""
                     INSERT INTO symbol_sentiment_hourly
                         (symbol, asof, trading_day, source, label, score,
@@ -339,7 +520,8 @@ def sweep(now: "datetime | None" = None) -> int:
                       now.date(), source, label, score, n, rationale,
                       json.dumps(meta)))
                 written += cur.rowcount
-            logger.info("%-5s %2d articles | %s", sym, len(titles),
+            logger.info("%-5s %2d articles%s | %s", sym, len(titles),
+                        (" (+%d rss)" % len(extra)) if extra else "",
                         "  ".join(f"{s}={l} {sc:+.2f}"
                                   for s, l, sc, _, _, _ in rows) or "no score")
 

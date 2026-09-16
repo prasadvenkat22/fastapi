@@ -410,6 +410,63 @@ ORPHAN_STALL_GIVEBACK_BAND = float(
 ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
     os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK", "3.3"))
 
+# WHAT A WEEKLY EXIT FORFEITS BY CLOSING AT THE MARK.
+#
+# THE BUG THIS EXISTS FOR, LIVE 2026-09-16. Two SNDK call debits expiring
+# 09-18, both deep in the money, were closed by STALL_LATER for +60 and +20:
+#
+#     1530/1550  entry  9.50  closed 10.10  intrinsic 16.85   drag  6.75
+#     1520/1550  entry 15.40  closed 15.60  intrinsic 25.37   drag  9.77
+#
+# Eighty dollars booked against roughly 1,378 of intrinsic. Nothing
+# malfunctioned: the stall ARMS and FIRES on intrinsic -- peaks of +95.6% and
+# +83.6%, given back as SNDK slid 1548 to 1544 -- and then CLOSES at the mark.
+# Two different bases for one decision.
+#
+# On 0DTE the two converge into the bell, which is why this never appeared
+# before. On a deep ITM spread with two days left the short leg sits nearer
+# the money and carries more time premium, so the mark sits a third of a width
+# below intrinsic and that gap IS the position.
+#
+# STALL_MUST_BOOK_A_GAIN did not catch it because it asks only whether the
+# mark beats the entry -- 15.60 against 15.40 is a gain, and passes, while
+# 9.77 of intrinsic goes out of the door with it.
+#
+# So: a later-expiry structure does not close while doing so forfeits more
+# than this share of its WIDTH in extrinsic drag. Width, not entry, for the
+# reason ORPHAN_STALL_GIVEBACK_BAND gives -- width is fixed by the structure
+# at the moment it is opened and means the same thing on two positions, while
+# an entry-anchored number is silently re-tuned by every roll.
+#
+# THE GUARD RELEASES ITSELF. Extrinsic goes to zero at expiry, so the drag
+# shrinks as the week runs out and a genuinely finished position becomes
+# closeable exactly when closing stops costing anything. It also shrinks when
+# BOTH legs go deep ITM, which is the case the target is for.
+#
+# IT DOES NOT SUPPRESS LOSS PROTECTION. The later stop is gated separately on
+# intrinsic_ok, which is false the moment intrinsic falls below the entry --
+# a position that stops being profitable-at-expiry re-arms the stop whatever
+# this says. The guard declines to bank a token gain; it never declines to cut
+# a loss.
+#
+# 0 disables it and restores the 2026-09-16 behaviour.
+ORPHAN_LATER_MAX_DRAG_WIDTH = float(
+    os.getenv("TRADING_ORPHAN_LATER_MAX_DRAG_WIDTH", "0.15") or 0)
+
+# WHICH SERIES THE LATER TARGET READS.
+#
+# It was measured on the mark, and on the same two SNDK spreads that made it
+# unreachable: 0.90 of width is 27.00 and 18.00, against marks of 15.60 and
+# 10.10 -- while intrinsic was ALREADY 25.37 and 16.85. A target the mark
+# reaches only as extrinsic dies is a target that fires at expiry, by which
+# point it has nothing left to do.
+#
+# Intrinsic is what the structure is worth if held, which is the question the
+# target is actually asking. Paired with the drag guard above: the target says
+# the position is finished, the guard says whether closing it realises that.
+LATER_TARGET_ON_INTRINSIC = os.getenv(
+    "TRADING_ORPHAN_LATER_TARGET_ON_INTRINSIC", "true").lower() == "true"
+
 # THE STALL, WITH ITS OWN GIVEBACK.
 #
 # TRADING_STALL_GIVEBACK_PCT is shared by the morning ride, the afternoon
@@ -1776,15 +1833,50 @@ def review(engine_symbols: "set | None" = None) -> list:
             if (ORPHAN_LATER_TARGET_PCT > 0 and not expires_today):
                 width = abs(st["short_strike"] - st["long_strike"])
                 if width > 0:
+                    # See LATER_TARGET_ON_INTRINSIC. Falls back to the mark
+                    # whenever intrinsic cannot be computed, which is the old
+                    # behaviour and never worse than having no target at all.
+                    basis = (parts_iv[0] if (LATER_TARGET_ON_INTRINSIC
+                                             and parts_iv) else value)
                     # For a credit structure the profit is the cost to close
                     # FALLING, so the target is the mirror of the debit case.
                     later_target_hit = (
-                        value <= width * (1.0 - ORPHAN_LATER_TARGET_PCT)
+                        basis <= width * (1.0 - ORPHAN_LATER_TARGET_PCT)
                         if st["credit"] else
-                        value >= width * ORPHAN_LATER_TARGET_PCT)
+                        basis >= width * ORPHAN_LATER_TARGET_PCT)
+
+            # HOW MUCH INTRINSIC CLOSING RIGHT NOW WOULD THROW AWAY.
+            # See ORPHAN_LATER_MAX_DRAG_WIDTH.
+            _w = abs(st["short_strike"] - st["long_strike"])
+            drag = (parts_iv[0] - value) if parts_iv else None
+            drag_blocks = (
+                ORPHAN_LATER_MAX_DRAG_WIDTH > 0 and not zero_dte
+                and drag is not None and _w > 0
+                and drag > _w * ORPHAN_LATER_MAX_DRAG_WIDTH)
+
+            stall_later_ready = (
+                (not zero_dte) and past_hold and ORPHAN_LATER_STALL_MINUTES > 0
+                and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
+                and quiet >= ORPHAN_LATER_STALL_MINUTES and books_a_gain
+                and stall_pct <= rec["peak"] - _giveback_points(
+                    st["root"], entry_abs, rec["peak"], None,
+                    abs(st["short_strike"] - st["long_strike"])))
+
+            if drag_blocks and (later_target_hit or stall_later_ready):
+                logger.info(
+                    "ORPHAN %s %.0f/%.0f would close on %s at %.2f, but "
+                    "intrinsic is %.2f — closing now forfeits %.2f, which is "
+                    "%.0f%% of the %.0f width and above the %.0f%% ceiling. It "
+                    "expires %s and extrinsic goes to zero by then, so it "
+                    "holds.",
+                    st["root"], st["long_strike"], st["short_strike"],
+                    "LATER_TARGET" if later_target_hit else "STALL_LATER",
+                    value, parts_iv[0], drag, drag / _w * 100.0, _w,
+                    ORPHAN_LATER_MAX_DRAG_WIDTH * 100.0, st.get("expiry"),
+                )
 
             reason = None
-            if later_target_hit:
+            if later_target_hit and not drag_blocks:
                 reason = "LATER_TARGET"
             elif floor_breached:
                 # Ahead of every other rule, and deliberately blind to expiry,
@@ -1845,12 +1937,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
                 reason = "STALL"
-            elif ((not zero_dte) and past_hold and ORPHAN_LATER_STALL_MINUTES > 0
-                  and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
-                  and quiet >= ORPHAN_LATER_STALL_MINUTES and books_a_gain
-                  and stall_pct <= rec["peak"] - _giveback_points(
-                      st["root"], entry_abs, rec["peak"], None,
-                      abs(st["short_strike"] - st["long_strike"]))):
+            elif stall_later_ready and not drag_blocks:
                 # Armed by a real profit, booked on a small giveback. See the
                 # knobs above for why arming is what makes the tight giveback
                 # safe on a position that has days left.

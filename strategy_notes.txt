@@ -10291,3 +10291,48 @@ opinion, never a wrong one.
 WHAT IS NOT MEASURED. One day, one story. The open question is how often RSS
 carries a ticker catalyst Polygon misses; 853 rows already sit in news_seen
 and can answer it offline without risking a session.
+
+
+164. THE FOMC STANDDOWN NEEDED TWO SWITCHES, NOT ONE  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Decided from the tape: "i would rather not trade markets will have wild swings
+after 2 and well before 11 they may be up in morning." Armed for the 14:00 ET
+decision.
+
+THERE ARE TWO LIVE ENTRY PATHS AND THE CALENDAR GATE ONLY COVERED ONE.
+trading_engine/nodes.py had blackout_active(); scripts/dte0_trade.py -- its own
+cron, every fifteen minutes, nine single names -- never asked. So arming
+TRADING_EVENT_BLACKOUT alone would have stood down the engine and left the
+0DTE script trading through the announcement: the protection READS as armed
+and half the book ignores it, which is worse than leaving it off. Gated, and
+placed before the chain fetch so a stood-down day costs no API calls.
+
+BOTH SWITCHES, and they are not interchangeable:
+
+    crontab   dte0_trade commented out       stops the nine single names,
+                                             the whole session, immediately
+    env       TRADING_EVENT_BLACKOUT=        stops the engine's own QQQ
+              afternoon                      entries from 13:00 ET
+
+The cron edit alone leaves the ENGINE free to open QQQ, and AFTERNOON_CREDIT
+runs 14:00-15:00 -- directly on the announcement. The env edit alone leaves
+the script free. Neither is the standdown by itself.
+
+WHY 13:00 AND NOT 14:00, from the module's own comment: a credit spread opened
+at 13:30 is still open when the decision lands, so blocking only the minutes
+after the announcement protects nothing.
+
+WHAT IT DOES NOT DO. It refuses NEW entries. Open positions stay managed by the
+full ladder -- stops, stall, the 15:45 flatten. Four 0DTE long-side spreads
+were open when it was armed and it did not touch them, which is correct and is
+worth knowing before relying on it to make you flat. It will not.
+
+MEASURED: no. The sweep holds two FOMC days and the note on event-day
+behaviour says plainly that the event-specific version cannot be measured from
+it. This is a judgement call made on the operator's read of the day, recorded
+as one, and it costs whatever the afternoon would have made.
+
+REVERT FOR THE NEXT SESSION: drop the TRADING_EVENT_BLACKOUT line and restore
+crontab from /root/crontab.bak-fomc. 09-16 is the only September date in
+FOMC_2026, so nothing else trips it.

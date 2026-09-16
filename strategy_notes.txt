@@ -10620,3 +10620,61 @@ there are moments when it will not fire whatever the number says -- because
 the short leg has no usable market at that instant. On a weekly that is rarer
 than on a 0DTE, but it is not zero, and the operator could not previously see
 it happening.
+
+
+171. A GLOBAL BAND HAD QUIETLY MADE THE TWO STALLS ONE RULE  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Asked whether the weekly stall really gave back 40%, as the config implied. It
+did not. It never had.
+
+_giveback_points tries four bases and the first match wins:
+
+    ORPHAN_STALL_GIVEBACK_BAND = 0.15   <- set, always wins
+    ORPHAN_STALL_GIVEBACK_FRACTION = 0
+    ORPHAN_LATER_STALL_GIVEBACK_ATR = 0
+    flat: ORPHAN_LATER_STALL_GIVEBACK_PCT = 40   <- never reached
+
+The band was GLOBAL, so it overrode both callers and a weekly gave back
+exactly what a same-day position gave back -- while
+TRADING_ORPHAN_LATER_STALL_GIVEBACK=40 sat in .env.production looking as
+though it were in force. It had never fired once.
+
+    Confirmed against the live log, which is where the arithmetic is checkable:
+        SNDK 1510/1550  entry 17.25 width 40    0.15*22.75/17.25 = 19.8   log 19.8
+        QQQ  706/709    entry  2.01 width  3    0.15* 0.99/ 2.01 =  7.4   log  7.4
+        NVDA 215/217.5  entry  0.83 width 2.5   0.15* 1.67/ 0.83 = 30.2   log 30.2
+
+THAT IS THE OPPOSITE OF WHAT THE LATER-STALL KNOBS WERE BUILT FOR, and the
+file says so a few lines above them: a multi-day position is ALLOWED TO PAUSE
+without that meaning it is finished. The band silently deleted that.
+
+    The docstring even advertises the split that no longer existed: "`flat`
+    lets each caller keep its own -- the 0DTE stall and the later stall read
+    different settings and always have." A comment describing behaviour the
+    code stopped having is worse than no comment.
+
+FIXED BY MAKING THE BAND PER-CALLER, exactly as `flat` already was, and set at
+the operator's judgement:
+
+    weekly   20 minutes quiet, 20% of band   ->  26.4 pts on that SNDK
+    0DTE      5 minutes quiet, 15% of band   ->  unchanged
+
+The reasoning given, and it matches the module's own: a weekly has days for
+the underlying to come back and its intrinsic moves slowly, so the giveback
+that reads as a reversal on a same-day position reads as an afternoon on a
+weekly.
+
+NOT MEASURED, and cannot be yet: exit_backtest still cannot settle a weekly,
+which needs the EXPIRY date's close, and for an open position that does not
+exist. Recorded as a judgement.
+
+THE 40 IS STILL DEAD and left in place, because clearing the band would make
+it live again and that is the safer failure. It is still misleading sitting
+there, and it is the whole reason the question got asked.
+
+A SECOND LOSSY THING FOUND ALONGSIDE: the ORPHAN line prints strikes with
+%.0f, so NVDA 215/217.5 renders as "215/218". exit_backtest parses strikes
+FROM THE LOG, so it computes width 3.0 where the engine used 2.5 -- skewing
+the band, the drag ceiling and the settled intrinsic on every half-strike
+position. The engine is right and the record of it is not.

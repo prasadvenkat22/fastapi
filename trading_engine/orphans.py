@@ -488,6 +488,31 @@ ORPHAN_STALL_GIVEBACK_FRACTION = float(
 ORPHAN_STALL_GIVEBACK_BAND = float(
     os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_BAND", "0") or 0)
 
+# THE SAME BAND FRACTION, BUT FOR POSITIONS THAT DO NOT EXPIRE TODAY.
+#
+# WHY THIS HAD TO EXIST, 2026-09-16. ORPHAN_STALL_GIVEBACK_BAND was global and
+# it SILENTLY ERASED THE 0DTE/WEEKLY SPLIT. _giveback_points tries the band
+# before the flat percent, so both callers were overridden and a weekly gave
+# back exactly what a same-day position gave back -- while the flat
+# TRADING_ORPHAN_LATER_STALL_GIVEBACK=40 sat in .env.production looking as
+# though it were in force. It never fired once.
+#
+# That is the opposite of the reasoning the later-stall knobs were built on,
+# stated in their own comment: a multi-day position is ALLOWED TO PAUSE
+# without that meaning it is finished. A weekly has days for the underlying to
+# come back and its intrinsic moves slowly; the same giveback that reads as a
+# reversal on a 0DTE reads as an afternoon on a weekly.
+#
+# Falls back to the 0DTE band when unset, so an existing deployment behaves
+# exactly as before.
+#
+# NOT MEASURED. exit_backtest cannot settle a weekly -- that needs the EXPIRY
+# date's close, which for an open position does not exist yet -- so this is an
+# operator judgement about how a multi-day position moves, recorded as one.
+_later_band = os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK_BAND")
+ORPHAN_LATER_STALL_GIVEBACK_BAND = float(
+    _later_band if _later_band is not None else ORPHAN_STALL_GIVEBACK_BAND or 0)
+
 ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
     os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK", "3.3"))
 
@@ -1004,7 +1029,8 @@ def _atr_for(root: str) -> "float | None":
 
 
 def _giveback_points(root: str, entry_abs: float, peak_pct: float = 0.0,
-                     flat: "float | None" = None, width: float = 0.0) -> float:
+                     flat: "float | None" = None, width: float = 0.0,
+                     band: "float | None" = None) -> float:
     """Points of RETURN that count as a give-back for this structure.
 
     THREE BASES, tried in the order of how well each travels between
@@ -1027,8 +1053,12 @@ def _giveback_points(root: str, entry_abs: float, peak_pct: float = 0.0,
     caller keep its own -- the 0DTE stall and the later stall read different
     settings and always have.
     """
-    if ORPHAN_STALL_GIVEBACK_BAND > 0 and entry_abs and width > entry_abs:
-        return ORPHAN_STALL_GIVEBACK_BAND * (width - entry_abs) / entry_abs * 100.0
+    # `band` per caller for the same reason `flat` is: the 0DTE stall and the
+    # later stall are different rules and always were, and a single global
+    # band quietly made them one.
+    _band = ORPHAN_STALL_GIVEBACK_BAND if band is None else band
+    if _band > 0 and entry_abs and width > entry_abs:
+        return _band * (width - entry_abs) / entry_abs * 100.0
     if ORPHAN_STALL_GIVEBACK_FRACTION > 0 and peak_pct > 0:
         return peak_pct * ORPHAN_STALL_GIVEBACK_FRACTION
     if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0 and entry_abs:
@@ -1996,7 +2026,8 @@ def review(engine_symbols: "set | None" = None) -> list:
                 and quiet >= ORPHAN_LATER_STALL_MINUTES
                 and stall_pct <= rec["peak"] - _giveback_points(
                     st["root"], entry_abs, rec["peak"], None,
-                    abs(st["short_strike"] - st["long_strike"])))
+                    abs(st["short_strike"] - st["long_strike"]),
+                    ORPHAN_LATER_STALL_GIVEBACK_BAND))
 
             stall_armed = (
                 zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0

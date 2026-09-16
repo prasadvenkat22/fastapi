@@ -10060,3 +10060,59 @@ A CAVEAT THAT APPLIES TO THE WHOLE DAY: every exit configuration tested on that
 session LOST money, from -110 to -620 across six positions. The session was bad
 for this strategy whatever the exits or the windows did, and widening coverage
 increases activity in both directions.
+
+
+161. THE DAY'S CHANGES, REPLAYED AGAINST THE DAY'S MARKS  (2026-09-15)
+--------------------------------------------------------------------------------
+
+Every exit change made that day, run against the engine's own logged marks for
+the six QQQ 0DTE positions it managed:
+
+    live before          tgt30 stop-10 cf0 stall5/20     -246
+    LIVE NOW             tgt30 stop-35 cf5 stall5/20     -152   <- deployed
+                         tgt30 stop-35 cf2 stall5/20     -532
+                         tgt30 stop-35 cf5 stall2/20     -210
+                         tgt30 stop-25 cf5 stall5/20     -472
+                         tgt40 stop-35 cf5 stall5/20     -227
+                         no exits, ride to the last mark -257
+
++94 against the morning's settings, and best of the seven arms.
+
+THE TWO CHANGES ONLY WORK TOGETHER, which is the result worth keeping. Either
+alone is WORSE than doing nothing:
+
+    stop -35% with only 2 minutes of confirmation   -532
+    stop -25% with 5 minutes                        -472
+    both, as deployed                               -152
+
+A wider stop without the wait gets hit by the same wicks further out; the wait
+without the width spends it on a level that sits inside the noise. Neither is
+the fix. Their combination is.
+
+ACROSS ALL 11 POSITIONS of the session, weeklies included, -1575 -> -1142. That
+number is softer than it looks: SNDK and MU exit through the LATER stop
+(-10%/15min), which the replay does not model, so only the QQQ figure is clean.
+
+THREE THINGS IT DOES NOT SAY.
+
+  EVERY CONFIGURATION STILL LOST. From -152 to -532, and holding to the last
+  mark loses -257. The session was bad for this strategy whatever the exits
+  did. These changes reduce a loss; they do not make a gain.
+
+  TRUNCATION UNDERSTATES THE PATIENT ARMS. A rule that would have held past the
+  real exit has no data beyond it and is scored at the last mark. Three of six
+  positions truncate under the deployed settings and six of six under "no
+  exits" -- so the ride-to-the-end row is the least trustworthy of all.
+
+  IT REPLAYS EXITS, NOT ENTRIES. ITM_GRINDER, the ZONE tier on MORNING_PUT and
+  the engine-side stop confirmation are all invisible here: the first two
+  change which trades are TAKEN, and a trade never taken leaves no marks, while
+  the third sits on a path no position touched that day because every position
+  was opened by hand. Roughly half of the day's changes have no backtest at
+  all, and the next session is their first evidence.
+
+scripts/exit_backtest.py takes a date and an optional symbol, and reads the
+ROTATED logs as well as the live one -- logrotate compresses the engine log
+several times a day here, and the first version read only the live file, which
+on a quiet evening held forty lines and none of the session. A backtest that
+silently sees a tenth of the data is worse than none.

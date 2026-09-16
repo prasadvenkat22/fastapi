@@ -628,9 +628,21 @@ by losing money to its opposite in the week of 2026-09-08:
 | flatten | 15:45 | |
 | `STOP_RESPECTS_INTRINSIC` | on | stands the stop down while intrinsic exceeds entry |
 
-`scripts/exit_backtest.py` replays a session's positions against the engine's
-own logged marks. Use it before moving any of these — the stall was changed on
-one trade's evidence and the replay reversed it the same evening.
+`scripts/exit_backtest.py <date> [symbol]` replays a session's positions against
+the engine's own logged marks, rotated logs included. Use it before moving any
+of these — the stall was changed on one trade's evidence and the replay
+reversed it the same evening.
+
+On 2026-09-15's six QQQ positions the deployed pair beat all six alternatives
+(−152 against −246 before), **and neither half works alone**: stop −35% with a
+2-minute wait gives −532, stop −25% with 5 minutes gives −472. A wider stop
+without the wait meets the same wicks further out; the wait without the width
+spends it on a level inside the noise.
+
+It replays **exits only**. `ITM_GRINDER`, the ZONE tier and the engine-side stop
+confirmation change which trades are *taken* or sit on a path no position
+touched that day, so roughly half of that day's changes have no backtest behind
+them.
 
 ```
 entry 30-65% of width     above 65% the +30% target is arithmetically

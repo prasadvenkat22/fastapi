@@ -355,6 +355,54 @@ STALL_MUST_BOOK_A_GAIN = os.getenv(
 STALL_MIN_GAIN_PCT = float(
     os.getenv("TRADING_ORPHAN_STALL_MIN_GAIN_PCT", "8") or 0)
 
+# THE UNDERLYING STOP. Close a debit spread that is OUT OF THE MONEY.
+#
+# WHY IT EXISTS, 2026-09-16. A QQQ 710/714 x6 stopped out for -716 while QQQ
+# moved 0.3% and the spread mark moved 130%, then reversed six minutes later
+# to a value worth -228. Near expiry the mark is a gamma-amplified, noisy
+# rendering of the underlying, and a percentage stop on it is a stop on noise:
+# it sat above -35% for twenty minutes while QQQ drifted, gapped 1.17 -> 1.00
+# without the underlying doing anything dramatic, and the five-minute
+# confirmation then ran while the mark halved again.
+#
+# intrinsic == 0 on a debit spread says exactly one thing, with no noise in
+# it: THE UNDERLYING IS AT OR BEYOND THE LONG STRIKE. Nothing but premium is
+# left and only a move in the underlying can bring it back.
+#
+# WHAT THE MEASUREMENT ACTUALLY SAID, 181 positions over 9 sessions, and it is
+# not what was expected:
+#
+#     LIVE  tgt30 stop-35 cf5              -26,215
+#     + OTM 0min, any OTM spread           -25,152   <- the only one that wins
+#     + OTM 0min, only if it WAS itm       -26,848
+#     + OTM 2min, only if it WAS itm       -26,871
+#     + OTM 2min, any                      -28,108
+#     + OTM 5min, any                      -27,634
+#
+# So the rule that earns its place is NOT "it was working and broke" -- that
+# version loses to holding. It is the blunter one: DO NOT HOLD AN OUT-OF-THE-
+# MONEY DEBIT SPREAD. And it must act immediately; every delayed variant is
+# worse than no rule at all, which is the opposite of how the mark stop
+# behaves and is the reason this is a separate rule rather than a tuning.
+#
+# THE EDGE IS SMALL AND CONCENTRATED. +1,063 over 181 positions is about six
+# dollars each, and per session it is better on one, identical on four and
+# WORSE on three -- including the session that motivated it. Deployed at the
+# operator's explicit instruction after that was put to them twice. It is one
+# environment variable to undo.
+#
+# THE RISK IT CARRIES, named because the backtest cannot see it: a spread
+# ENTERED out of the money is closed on its next cycle. The entry band
+# (30-75% of width) permits such entries, so this can churn one. Watch for an
+# OTM_STOP firing within a minute of an entry -- that is this, and it is the
+# first thing to check if the rule looks wrong.
+ORPHAN_OTM_STOP = os.getenv(
+    "TRADING_ORPHAN_OTM_STOP", "true").lower() == "true"
+ORPHAN_OTM_STOP_MINUTES = float(
+    os.getenv("TRADING_ORPHAN_OTM_STOP_MINUTES", "0") or 0)
+ORPHAN_OTM_STOP_FLOOR = float(
+    os.getenv("TRADING_ORPHAN_OTM_STOP_FLOOR", "0") or 0)
+
 # THE STALL FOR POSITIONS THAT EXPIRE LATER.
 #
 # The 0DTE stall is deliberately unarmed -- any positive peak starts it --
@@ -1866,6 +1914,22 @@ def review(engine_symbols: "set | None" = None) -> list:
             else:
                 rec.pop("later_stop_since", None)
 
+            # THE UNDERLYING STOP's clock. See ORPHAN_OTM_STOP. Cleared the
+            # moment intrinsic returns, so it measures a continuous stretch
+            # out of the money rather than a total.
+            otm_held = False
+            if (ORPHAN_OTM_STOP and not st["credit"] and past_hold
+                    and parts_iv is not None):
+                if parts_iv[0] <= ORPHAN_OTM_STOP_FLOOR:
+                    rec.setdefault("otm_since", now.isoformat())
+                    _oheld = (now - datetime.fromisoformat(
+                        rec["otm_since"])).total_seconds() / 60.0
+                    otm_held = _oheld >= ORPHAN_OTM_STOP_MINUTES
+                else:
+                    rec.pop("otm_since", None)
+            else:
+                rec.pop("otm_since", None)
+
             slow_held = False
             if ORPHAN_SLOW_STOP_PCT < 0 and zero_dte and past_hold:
                 if ret_pct <= ORPHAN_SLOW_STOP_PCT:
@@ -1978,6 +2042,11 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # whether a POSITION is working; this one has already decided
                 # the account is not.
                 reason = "ACCOUNT_FLOOR"
+            elif otm_held:
+                # NO CONFIRMATION, deliberately. The mark stops wait to tell a
+                # wick from a trend; this is not reading the mark at all, and
+                # every delayed variant measured WORSE than having no rule.
+                reason = "OTM_STOP"
             elif zero_dte and ret_pct <= stop_pct and not past_hold:
                 # AHEAD OF THE INTRINSIC GUARD, because this holds for a
                 # different reason. That guard declines to stop a position

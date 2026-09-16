@@ -10384,3 +10384,133 @@ reported both refusals as "under the floor", including QQQ 706/709 closing at
 floor at all. Two rules now get two messages. A line that sends the next
 reader to the wrong knob is worse than no line, and this file has three
 entries already that begin with a log telling a small lie.
+
+
+166. THE UNDERLYING STOP: MEASURED, DEPLOYED, MEASURED AGAIN, REVERTED  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Raised from the tape after a QQQ 710/714 stopped out for -716: the spread mark
+is not the instrument to stop on.
+
+    QQQ spot     ~709 -> ~708 -> 710.07     about 0.3%
+    spread mark   1.17 ->  0.61 ->   1.42   about 130%
+
+Near expiry the mark is a gamma-amplified rendering of the underlying. It sat
+above -35% for twenty minutes while QQQ drifted, gapped 1.17 -> 1.00 without
+the underlying doing anything, and the five-minute confirmation then ran while
+the mark halved again. intrinsic == 0 on a debit spread says the same thing
+with no noise in it: THE UNDERLYING IS AT OR BEYOND THE LONG STRIKE.
+
+WHAT THE SWEEP SAID, 181 positions over 9 sessions:
+
+    LIVE  tgt30 stop-35 cf5              -26,215
+    + OTM 0min, any OTM spread           -25,152   <- only variant that wins
+    + OTM 0min, only if it WAS itm       -26,848
+    + OTM 2min, only if it WAS itm       -26,871
+    + OTM 2min, any                      -28,108
+
+The rule that earns a place is NOT "it was working and broke" -- that version
+loses to holding. It is the blunter "do not hold an out-of-the-money debit
+spread", acting immediately. Every delayed variant is worse than no rule.
+
+    THE EDGE WAS THIN AND CONCENTRATED: +1,063 over 181 positions, about six
+    dollars each, better on ONE session, identical on four, worse on three
+    including the session that motivated it. That was put to the operator
+    twice and deployed at their instruction.
+
+THEN TODAY'S OWN DATA, once the afternoon's marks had accumulated:
+
+    LIVE  (morning settings)              -151    H6  L12 P2 T2
+    LIVE NOW, no OTM stop                 -330    H13 L2  P3 T4
+    *LIVE NOW  +OTM0 +gain8 +drag15       -876    H8  O11    T3
+
+THE STRUCTURAL FINDING IS WORSE THAN THE NUMBER. Read the fire mix on the
+deployed row: ZERO stalls, ZERO stops. OTM_STOP fired on 11 of 22 positions
+and sits above everything but ACCOUNT_FLOOR, so it PREEMPTED THE WHOLE LADDER.
+Three variants scored identically at -876 -- gain floor 15, drag guard 5%, no
+drag guard -- because with no stalls left to gate, both of the afternoon's
+guards had become dead code.
+
+Reverted: TRADING_ORPHAN_OTM_STOP=false.
+
+    A rule that silently disables two other rules is not a tuning. If it is
+    ever revisited, it belongs BELOW the stall and stop as a backstop, not
+    above them as a preemption -- and that ordering has not been measured.
+
+AND THE HARNESS HIT ITS LIMIT, which is the most useful thing learned. On the
+9-session run the guards look catastrophic:
+
+    LIVE (no guards)          -24,784    82 of 182 HELD
+    LIVE NOW, no OTM stop     -27,357   128 of 182 HELD
+
+The guards work by CONVERTING EXITS INTO HOLDS. A HELD run has no data past
+the real exit and is scored at the last observed mark, which for an expiring
+0DTE is near its worst. 128 truncated against 82 is not a fair comparison, and
+most of that 2,573 is the artifact. The script warns about this in its own
+docstring and it was still under-weighted when today's -876 was first read.
+
+    WHAT THE HARNESS CAN STILL SETTLE -- comparisons at equal truncation:
+        gain8 + drag15   -26,957   H116
+        gain0 + drag15   -28,947   H97    floor off, worse
+        gain8 + drag0    -30,599   H107   drag off, much worse
+    Both guards help. That comparison is sound; the one against no-guards is
+    not.
+
+    THE FIX: score HELD 0DTE runs at their EXPIRY INTRINSIC rather than the
+    last mark. The intrinsic is already on every log line. Until then this
+    instrument cannot rank a patient rule against an eager one.
+
+
+167. THE INTRINSIC GIVEBACK, FINALLY MEASURED  (2026-09-16)
+--------------------------------------------------------------------------------
+
+ORPHAN_INTRINSIC_GIVEBACK_PCT shipped at 0 with the note "it is a real exit
+rule, not a correctness fix, and it has not been through the harness". Asked
+whether that was right. It now has been:
+
+    baseline (no giveback)      -25,152    23 OTM fires
+    giveback  5% of width       -27,399    18 giveback fires
+    giveback 10%                -27,335    16
+    giveback 15%                -27,048    12
+    giveback 20%                -26,896    11
+    giveback 30%                -25,177     6
+
+MONOTONIC: THE LESS IT FIRES, THE BETTER. Extrapolate to zero fires and it is
+the baseline exactly. That is the cleanest possible negative -- not noise, not
+a tuning problem. There is no threshold at which the rule adds value.
+
+WHY IT LOSES. It fires when a structure profitable-at-expiry gives back
+intrinsic, and deliberately skips the must-book-a-gain test, accepting a small
+loss now against a larger one later. The larger loss mostly does not arrive:
+intrinsic on a 0DTE oscillates around the strikes all session -- QQQ 710/714
+printed 0.10, 0.06, 0.15, 0.03, 0.00 in sixteen minutes -- and a rule that
+exits on intrinsic retreating books those wobbles as reversals.
+
+Left at 0. The measurement is recorded beside the knob so the next reader who
+sees 0.0 and assumes an oversight finds the answer instead of re-deriving it.
+
+
+168. FED DAY, AND WHERE THE EARLY EXIT WAS RIGHT  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Observed from the tape: "fed day will have large variations, now qqq is way
+down so taking an early loss is correct." Correct, and the record is clean.
+
+QQQ closed the afternoon at 701.35 against 710-711 through the decision. Every
+call spread on the book expired worthless:
+
+                        exited at    worth at 19:20    saved
+    QQQ 709/712 x4        0.65           0.01          +256    manual close
+    QQQ 711/712 x2        0.13           0.005          +25    manual close
+    QQQ 710/714 x6   stop 0.61           0.00          +364    STOP_LOSS
+
+THE STOP THAT LOOKED WORST WAS WORTH 364. It was criticised in the moment --
+"the 5-minute confirmation cost 114 and it sold the low" -- and six minutes
+later the mark had recovered to 1.42, which appeared to confirm that. The
+recovery was a wobble on a tape that went on to take the spread to zero. The
+analysis at 18:44 weighted the reversal and not the trend, and the day settled
+it the other way.
+
+    A REVERSAL SIX MINUTES AFTER AN EXIT IS NOT EVIDENCE THE EXIT WAS WRONG.
+    It is one observation of the same series, and on an expiring contract the
+    only observation that settles anything is the last one.

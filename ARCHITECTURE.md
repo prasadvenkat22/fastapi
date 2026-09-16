@@ -465,16 +465,22 @@ QQQ macro news read            5/10 on next-session direction
 QQQ mornings down >0.25%       -0.41% by 10:30, -0.16% by 11:30, n=8
 ```
 
-`MORNING_PUT` is the structure: ITM put debit, 09:45-11:30, width 4, CLEAN
-tiers only, **closing at 11:30 rather than the 13:25 the other morning windows
-use**. That last part is the only thing the evidence supports -- the
+`MORNING_PUT` is the structure: ITM put debit, 09:45-11:30, width 4,
+**CLEAN,ZONE tiers as of 2026-09-15** (code default is still CLEAN), **closing
+at 11:30 rather than the 13:25 the other morning windows use**. That last part is the only thing the evidence supports -- the
 continuation measured about 45 minutes long and gone by lunch, and holding is
 what turned both previous attempts at a bearish morning into losses.
 
-`TRADING_NEWS_DIRECTION` is the gate: the morning's QQQ macro verdict **vetoes
-the side it contradicts**, above `TRADING_NEWS_DIRECTION_MIN_CONF` (0.70).
-NEUTRAL never gates -- it is the verdict for "nothing new since the close",
-which is most mornings.
+`TRADING_NEWS_DIRECTION` is the gate: the QQQ macro verdict **vetoes the side
+it contradicts**, above `TRADING_MACRO_DIRECTION_MIN_CONF` (0.25). NEUTRAL
+never gates.
+
+**That verdict is no longer a news read.** Since 2026-09-14 it comes from
+crude/10Y/VIX (`source='objective'`), not from headlines — the text read
+printed seven identical values through a session that turned, and the price
+read called the turn while it happened (section 156). The floor moved from 0.70
+to 0.25 with it: 0.70 was a Claude confidence score, and `|score|` on three
+clamped price channels is not the same quantity.
 
 **IT NEVER INVENTS AN ENTRY.** A tier still has to fire on the technicals, and
 if none does there is no trade whatever the news says. The failure mode of
@@ -489,9 +495,28 @@ post-fix evidence at all yet. `news_verdict_outcomes` accumulates that
 nightly.
 
 ```
-TRADING_ENABLED_WINDOWS=MORNING_DRIFT,MORNING_PUT,AFTERNOON_CREDIT
+TRADING_ENABLED_WINDOWS=MORNING_DRIFT,MORNING_PUT,ITM_GRINDER,AFTERNOON_CREDIT
 TRADING_NEWS_DIRECTION=true
+TRADING_MORNING_PUT_TIERS=CLEAN,ZONE
 ```
+
+**Bearish coverage across the session** (section 160). `ITM_GRINDER` was
+enabled 2026-09-15 because 11:30-13:30 had no book that could go short —
+`MORNING_PUT` and `MORNING_CREDIT` both shut at 11:30 and `MORNING_DRIFT` is
+long-only, so five valid CLEAN/bear setups at 12:00 ET were refused with
+*"MORNING_DRIFT is long-only"*:
+
+| window | hours | tiers | side |
+|---|---|---|---|
+| `MORNING_PUT` | 09:45–11:30 | CLEAN,ZONE | bearish |
+| `MORNING_DRIFT` | 10:15–12:30 | CLEAN | long |
+| `ITM_GRINDER` | 11:30–13:30 | ALL | both |
+| `AFTERNOON_CREDIT` | 14:00–15:00 | ALL | both |
+
+Both enablements are **experiments, not corrections**: ZONE measured −21/−13/−25
+a trade on its own, and `ITM_GRINDER` has two live trades of record. The case
+for trying them is that ZONE was measured *with the macro gate off*, and that
+gate now reads prices.
 
 ---
 

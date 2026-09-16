@@ -9960,3 +9960,103 @@ names do not -- on that Tuesday QQQ listed 09-15 while NVDA, TSLA, AAPL, MU and
 AVGO all started at 09-16. There was no 0DTE contract to assess. The run
 reported a liquidity judgement instead, which sends the next reader hunting for
 a spread-width problem that does not exist.
+
+
+160. A BEARISH SETUP WITH NOWHERE TO GO, AND TWO EXPERIMENTS  (2026-09-15)
+--------------------------------------------------------------------------------
+
+Raised from the tape: everything fell as yields and oil went up, and the engine
+took nothing. True, and it took nothing for three separate reasons.
+
+WHAT THE LADDER PRODUCED THAT SESSION:
+
+    tier=NONE        233 cycles
+    tier=ZONE/bear    38
+    tier=ZONE/bull    10
+    tier=CLEAN/bear    5     at 12:00-12:04 ET
+
+WHAT REFUSED IT:
+
+    482  Macro BAD -- refused by: breadth       (one-sided; does not block shorts)
+     61  MORNING_DRIFT is long-only -- refusing the bearish CLEAN setup
+     30  MORNING_DRIFT does not accept the ZONE tier
+     14  MORNING_PUT does not accept the ZONE tier
+
+THE MACRO READ WAS NOT THE PROBLEM AND IS WORTH RECORDING AS A SUCCESS. It went
+POSITIVE at the open, then NEGATIVE from 10:15 as crude turned:
+
+    09:00  positive +0.60   crude -1.54%  10Y -1.0bp  VIX -3.87%
+    10:15  negative -0.46   crude +2.19% in 60m
+    11:00  negative -0.51   crude +0.92% in 60m
+
+That is the drift component from section 156 doing exactly what it was added
+for: crude was still NEGATIVE from the open at 10:15 (-0.05%) while RISING fast
+inside the hour, and the blend caught the turn the from-open measure could not.
+
+THE FIRST HOLE: 11:30-13:30 HAD NO BEARISH BOOK.
+
+    MORNING_PUT     09:45-11:30  CLEAN  bearish   -- shut
+    MORNING_CREDIT  10:15-11:30  ALL    bearish   -- shut, and off (measured
+                                                     -57.64 a trade over 32)
+    MORNING_DRIFT   10:15-12:30  CLEAN  LONG ONLY -- the only one open
+
+Five valid CLEAN/bear cycles arrived at 12:00 ET into that hole.
+
+ITM_GRINDER already covers exactly 11:30-13:30, in both directions, at ALL
+tiers, and was simply not in TRADING_ENABLED_WINDOWS. Enabled.
+
+    NOT BY EXTENDING THE MORNING, which has been measured three times from
+    three directions and loses every time -- section 27's start time, section
+    32's relaxation, and the sweep finding that morning entries to 15:00 "does
+    not capture the afternoon, it dilutes the morning".
+
+    ITS EVIDENCE IS TWO TRADES: +86.67, +43.34 each, 1 win. Positive and
+    meaningless at that count. What it does not have is a NEGATIVE
+    measurement, unlike MORNING_CREDIT beside it in the same file. That is the
+    whole case -- a gap with no rule, and the rule built for the gap has
+    nothing against it.
+
+THE SECOND HOLE: THE MORNING BEARISH BOOK COULD NOT TAKE THE TIER THE LADDER
+ACTUALLY PRODUCES. 38 ZONE/bear cycles against 5 CLEAN/bear, and MORNING_PUT
+was CLEAN-only. A bearish book that only accepts a tier the session rarely
+produces is a book that does not trade.
+
+    ZONE MEASURED NEGATIVE ON ITS OWN: -21, -13, -25 a trade across three arms.
+    That is real and it is why this is an experiment.
+
+    WHAT CHANGES THE CONFIGURATION IS THE MACRO GATE, and the note recording
+    that measurement says so itself:
+
+        "THE ZONE TIER, macro gate off. Its own trades measured negative on
+         every arm and THE MACRO DIMENSION IS UNMEASURABLE, because the harness
+         pins market_sentiment to GOOD.
+         Read: did it enter on a morning CLEAN refused? What did those trades
+         do?"
+
+    ZONE was measured with no macro gate. MORNING_PUT is gated by
+    TRADING_NEWS_DIRECTION, which now reads crude/10Y/VIX -- so a ZONE/bear
+    entry needs the PRICES to agree the tape is risk-off, a condition the
+    original measurement could not express. The open question that note asks is
+    exactly this arm.
+
+BOTH ARE EXPERIMENTS, NOT CORRECTIONS, and the distinction matters against the
+rest of this day's work. The stop firing on one print, the history label
+inverting the re-entry cooldown, dte0_shadow having no path, Polygon preferring
+thin coverage -- those were defects, and fixing them needed no new bet. These
+two widen what the engine will take, on thin or adverse evidence, because the
+alternative is a book that declines every setup the session offers.
+
+    Revert either without a deploy:
+        TRADING_ENABLED_WINDOWS   drop ITM_GRINDER
+        TRADING_MORNING_PUT_TIERS=CLEAN
+
+WHAT WILL SETTLE THEM. dte0_shadow began marking intraday the same day, so
+entries now leave peak_return_pct and worst_return_pct behind rather than only
+an outcome, and scripts/exit_backtest.py replays a session against the engine's
+own logged marks. That pairing is what caught and reversed the stall change
+within an hour of making it; it is the same instrument that should judge these.
+
+A CAVEAT THAT APPLIES TO THE WHOLE DAY: every exit configuration tested on that
+session LOST money, from -110 to -620 across six positions. The session was bad
+for this strategy whatever the exits or the windows did, and widening coverage
+increases activity in both directions.

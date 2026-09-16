@@ -912,6 +912,50 @@ TAKE_PROFIT_PCT = float(os.getenv("TRADING_TAKE_PROFIT_PCT", "30.0"))
 # playbook.py widen this further where the volatility regime demands it.
 STOP_LOSS_PCT = float(os.getenv("TRADING_STOP_LOSS_PCT", "-20.0"))
 
+# THE SAME CONFIRMATION THE ORPHAN STOP GOT, ON THE PATH THE ENGINE USES FOR
+# ITS OWN POSITIONS.
+#
+# 2026-09-15 fixed the orphan stop: it fired on one print and closed a QQQ
+# spread that was +31% seven minutes later. That fix landed in orphans.py,
+# which manages positions the engine did NOT open. Positions the engine opens
+# itself exit through THIS file, and these stops had no confirmation at all --
+# one cycle below the level and they sell.
+#
+# THE GAP WAS INVISIBLE because that whole session's positions were manual, so
+# every stop in the log came from the orphan path and this one was never
+# exercised. With MORNING_PUT and ITM_GRINDER enabled the engine opens its own
+# again, and would have used the unfixed one.
+#
+# WORSE ON A RISK-OFF DAY: RISK_OFF_STOP_LOSS_PCT is -13%, tighter still, and
+# fires whenever macro reads BAD -- 482 of that session's cycles.
+STOP_CONFIRM_MINUTES = float(os.getenv("TRADING_STOP_CONFIRM_MINUTES", "5"))
+_stop_since: dict = {}
+
+
+def _stop_confirmed(underlying: str, return_pct: float, stop_pct: float) -> bool:
+    """True when the stop level has HELD for STOP_CONFIRM_MINUTES.
+
+    Keyed per underlying and RESET the moment the mark recovers above the
+    level, so only sustained weakness closes a position -- a wick starts the
+    count and is forgotten. Logs the wait itself, so a position sitting below
+    its stop says why it is still open rather than looking like a missed rule.
+
+    0 disables, restoring the fire-on-first-print behaviour.
+    """
+    if STOP_CONFIRM_MINUTES <= 0:
+        return True
+    now = datetime.now(timezone.utc)
+    first = _stop_since.setdefault(underlying, now)
+    held = (now - first).total_seconds() / 60.0
+    if held >= STOP_CONFIRM_MINUTES:
+        return True
+    logger.info(
+        "%s is %+.1f%%, past the %+.1f%% stop, but only for %.1f of the %.0f "
+        "minutes needed to confirm — holding.",
+        underlying, return_pct, stop_pct, held, STOP_CONFIRM_MINUTES,
+    )
+    return False
+
 # Tightened stop for LONG positions while macro is risk-off (market_sentiment
 # == 'BAD'). Riding a losing 0DTE spread all the way to the full stop
 # into a deteriorating tape gives up twice the capital for a position whose
@@ -2212,6 +2256,18 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             position.playbook, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, RISK_OFF_STOP_LOSS_PCT)
         )
         is_credit_pos = is_credit(position.strategy)
+        # RESET THE STOP CLOCK WHENEVER THE POSITION IS NOT BREACHING.
+        #
+        # _stop_confirmed only runs while return_pct <= stop_pct, so it never
+        # sees a recovery and could never clear its own key. Without this the
+        # first dip arms a clock that keeps running through every recovery, and
+        # the confirmation degrades into "five minutes after the first touch,
+        # ever" -- which is not what it claims and is barely a guard.
+        #
+        # It also clears the key for a NEW position in the same underlying,
+        # which would otherwise inherit the previous one's elapsed time.
+        if return_pct > stop_pct:
+            _stop_since.pop(position.underlying, None)
         # Late-session tightening, credit positions only. A long debit spread
         # has the opposite exposure into the close -- it converges toward its
         # width -- so pulling its stop in would book the convergence it is
@@ -2389,7 +2445,9 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 )
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
-            elif return_pct <= stop_pct and not stop_held_by_trend:
+            elif (return_pct <= stop_pct and not stop_held_by_trend
+                  and _stop_confirmed(position.underlying, return_pct,
+                                      stop_pct)):
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "STOP_LOSS"
             elif (
@@ -2554,7 +2612,9 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "RATCHET"
         # Rule B / C: Stop Loss vs. Buy More
-        elif return_pct <= stop_pct and not stop_held_by_trend:
+        elif (return_pct <= stop_pct and not stop_held_by_trend
+              and _stop_confirmed(position.underlying, return_pct,
+                                  stop_pct)):
             # place_buy_more adds `position.quantity` more contracts — it
             # doubles the position — so the affordability check has to price
             # that whole lot. Checking a single contract's cost (as this once

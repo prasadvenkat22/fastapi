@@ -68,6 +68,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import psycopg2  # noqa: E402
 
 from trading_engine import tradier_orders  # noqa: E402
+from trading_engine.macro_calendar import (  # noqa: E402
+    blackout_active as event_blackout_active, describe as describe_event)
 from trading_engine.data_feed import fetch_option_chain, fetch_spot  # noqa: E402
 from trading_engine.screener import rank  # noqa: E402
 from trading_engine.symbol_news import (classify_day,  # noqa: E402
@@ -546,6 +548,23 @@ def main() -> None:
     syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     exp = args.expiry or date.today().isoformat()
     now = datetime.now(NY)
+
+    # A SCHEDULED MACRO EVENT. This gate lived only in trading_engine/nodes.py,
+    # and this script is a SECOND live entry path -- it runs on its own cron
+    # every fifteen minutes and never asked the calendar. Arming
+    # TRADING_EVENT_BLACKOUT therefore stood down the engine and left this one
+    # trading, which is the worst of both: the protection looks armed and half
+    # the book ignores it. Found on 2026-09-16, an FOMC day, nine minutes
+    # before the open.
+    #
+    # Placed before the chain fetch so a stood-down day costs no API calls and
+    # says plainly why it did nothing.
+    event_note = describe_event(now)
+    if event_note:
+        logger.info("%s", event_note)
+    if event_blackout_active(now):
+        logger.info("Scheduled macro event — no new 0DTE entries today.")
+        return
 
     # DOES A CONTRACT EVEN EXIST TODAY? Ask before doing anything else.
     #

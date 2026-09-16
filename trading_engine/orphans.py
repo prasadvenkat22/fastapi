@@ -450,8 +450,26 @@ ORPHAN_LATER_STALL_GIVEBACK_PCT = float(
 # a loss.
 #
 # 0 disables it and restores the 2026-09-16 behaviour.
-ORPHAN_LATER_MAX_DRAG_WIDTH = float(
-    os.getenv("TRADING_ORPHAN_LATER_MAX_DRAG_WIDTH", "0.15") or 0)
+#
+# SCOPED TO WEEKLIES FIRST, AND THAT WAS WRONG BY FIFTY MINUTES. The first
+# version of this carried `not zero_dte`, reasoning that on a same-day expiry
+# the mark and intrinsic converge into the bell. True at 15:45. False at
+# 11:22, which is when an INTC 98/102 x5 -- entry 3.02, four wide -- was
+# closed by the 0DTE STALL for +40.00:
+#
+#     mark 3.10   intrinsic 3.80   drag 0.70 = 17.5% of width
+#     INTC then ran to 102.07, above the short strike, and the spread sat at
+#     its maximum intrinsic: +490 held to expiry against the +40 booked.
+#
+# books_a_gain passed on EIGHT CENTS. Four and a half hours from expiry a
+# 0DTE ITM spread carries the same drag a weekly does, because the drag comes
+# from the short leg sitting nearer the money, not from the calendar. The
+# ceiling belongs to the STRUCTURE, so it applies to every expiry.
+#
+# The old name is still read so a deployment that set it keeps working.
+ORPHAN_MAX_DRAG_WIDTH = float(
+    os.getenv("TRADING_ORPHAN_MAX_DRAG_WIDTH",
+              os.getenv("TRADING_ORPHAN_LATER_MAX_DRAG_WIDTH", "0.15")) or 0)
 
 # WHICH SERIES THE LATER TARGET READS.
 #
@@ -1846,13 +1864,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                         basis >= width * ORPHAN_LATER_TARGET_PCT)
 
             # HOW MUCH INTRINSIC CLOSING RIGHT NOW WOULD THROW AWAY.
-            # See ORPHAN_LATER_MAX_DRAG_WIDTH.
+            # See ORPHAN_MAX_DRAG_WIDTH.
             _w = abs(st["short_strike"] - st["long_strike"])
             drag = (parts_iv[0] - value) if parts_iv else None
             drag_blocks = (
-                ORPHAN_LATER_MAX_DRAG_WIDTH > 0 and not zero_dte
+                ORPHAN_MAX_DRAG_WIDTH > 0
                 and drag is not None and _w > 0
-                and drag > _w * ORPHAN_LATER_MAX_DRAG_WIDTH)
+                and drag > _w * ORPHAN_MAX_DRAG_WIDTH)
 
             stall_later_ready = (
                 (not zero_dte) and past_hold and ORPHAN_LATER_STALL_MINUTES > 0
@@ -1862,7 +1880,15 @@ def review(engine_symbols: "set | None" = None) -> list:
                     st["root"], entry_abs, rec["peak"], None,
                     abs(st["short_strike"] - st["long_strike"])))
 
-            if drag_blocks and (later_target_hit or stall_later_ready):
+            stall_ready = (
+                zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0
+                and quiet >= STALL_MINUTES and books_a_gain
+                and stall_pct <= rec["peak"] - _giveback_points(
+                    st["root"], entry_abs, rec["peak"], STALL_GIVEBACK_PCT,
+                    abs(st["short_strike"] - st["long_strike"])))
+
+            if drag_blocks and (later_target_hit or stall_later_ready
+                                or stall_ready):
                 logger.info(
                     "ORPHAN %s %.0f/%.0f would close on %s at %.2f, but "
                     "intrinsic is %.2f — closing now forfeits %.2f, which is "
@@ -1870,9 +1896,11 @@ def review(engine_symbols: "set | None" = None) -> list:
                     "expires %s and extrinsic goes to zero by then, so it "
                     "holds.",
                     st["root"], st["long_strike"], st["short_strike"],
-                    "LATER_TARGET" if later_target_hit else "STALL_LATER",
+                    "LATER_TARGET" if later_target_hit
+                    else ("STALL" if stall_ready else "STALL_LATER"),
                     value, parts_iv[0], drag, drag / _w * 100.0, _w,
-                    ORPHAN_LATER_MAX_DRAG_WIDTH * 100.0, st.get("expiry"),
+                    ORPHAN_MAX_DRAG_WIDTH * 100.0,
+                    st.get("expiry") or "today",
                 )
 
             reason = None
@@ -1928,11 +1956,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # purpose -- this rule exists precisely for the case where the
                 # mark is under water and the expiry value is walking away.
                 reason = "GIVEBACK"
-            elif (zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0
-                  and quiet >= STALL_MINUTES and books_a_gain
-                  and stall_pct <= rec["peak"] - _giveback_points(
-                      st["root"], entry_abs, rec["peak"], STALL_GIVEBACK_PCT,
-                      abs(st["short_strike"] - st["long_strike"]))):
+            elif stall_ready and not drag_blocks:
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.

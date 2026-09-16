@@ -44,18 +44,57 @@ from __future__ import annotations
 
 import glob
 import gzip
+import json
 import re
 import sys
 from collections import defaultdict
 from datetime import date, datetime
 
 LOG_GLOB = "/var/log/qqq-trading.log*"
+CLOSES = "/opt/fastapi/.expiry_closes.json"
+
+
+def _closes() -> dict:
+    """{symbol: {date: close}} from scripts/expiry_closes.py, or {}."""
+    try:
+        with open(CLOSES, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def settle(sym, day, right, long_k, short_k, entry, closes):
+    """What a HELD 0DTE debit spread was ACTUALLY worth, or None.
+
+    THE TRUNCATION FIX. A HELD run has no marks past the real exit, so it used
+    to be scored where the marks stopped -- which for an expiring contract is
+    usually near its worst, and which punished exactly the patient rules the
+    sweep exists to test. But a 0DTE position expires the same session: what
+    it was worth if held is not a guess, it is the intrinsic at the close.
+
+    Returns None when the close is not cached, and the caller then falls back
+    to the last mark. A missing close must leave a run scored as it was
+    before, never scored wrongly -- a fallback that quietly invents a number
+    is how _mark_value hid its own bug for a day.
+    """
+    row = closes.get(sym) or {}
+    px = row.get(day + "@flatten")
+    if px is None:
+        px = row.get(day)
+    if px is None:
+        return None
+    width = abs(long_k - short_k)
+    if width <= 0 or entry <= 0:
+        return None
+    iv = (max(0.0, min(px - long_k, width)) if right == "C"
+          else max(0.0, min(long_k - px, width)))
+    return (iv - entry) / entry * 100.0
 
 # entry / value / return / intrinsic, as the engine logged them.
 RX = re.compile(
     r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+ INFO ORPHAN ([A-Z]+) ([CP]) "
     r"([\d.]+)/([\d.]+) x(\d+) (debit|credit): entry ([\d.]+) value ([\d.]+) "
-    r"([-+][\d.]+)%.*?\[intrinsic ([\d.]+),"
+    r"([-+][\d.]+)%(?P<exp>.*?\[expires (\d{6})\])?.*?\[intrinsic ([\d.]+),"
 )
 
 # (label, target, stop, confirm, stall, giveback, otm_floor, otm_minutes)
@@ -90,7 +129,7 @@ CONFIGS = [
 
 
 def load(day: str = "", only: str = "") -> dict:
-    """{(day, symbol, strikes, entry): [(t, value, ret, qty, intrinsic)]}."""
+    """{(day, symbol, C/P, strikes, entry): [(t, value, ret, qty, iv)]}."""
     out = defaultdict(list)
     for fn in sorted(glob.glob(LOG_GLOB)):
         opener = gzip.open if fn.endswith(".gz") else open
@@ -103,14 +142,18 @@ def load(day: str = "", only: str = "") -> dict:
                 m = RX.match(line)
                 if not m:
                     continue
-                ts, sym, right, lo, hi, qty, kind, entry, val, ret, iv = m.groups()
+                (ts, sym, right, lo, hi, qty, kind, entry, val, ret,
+                 _exptag, expiry, iv) = m.groups()
                 if kind != "debit":
                     continue          # intrinsic inverts on a credit; not tested
                 if day and not ts.startswith(day):
                     continue
                 if only and sym != only.upper():
                     continue
-                out[(ts[:10], sym, f"{lo}/{hi}", float(entry))].append(
+                # expiry None == 0DTE: the log omits the tag when it expires
+                # today, and that is the only case this can settle.
+                out[(ts[:10], sym, right, f"{lo}/{hi}", float(entry),
+                     expiry or "")].append(
                     (datetime.strptime(ts, "%Y-%m-%d %H:%M:%S"),
                      float(val), float(ret), int(qty), float(iv)))
     return {k: sorted(set(v)) for k, v in out.items()}
@@ -180,6 +223,7 @@ def main() -> None:
     day = "" if every else (args[0] if args else date.today().isoformat())
     only = args[1] if len(args) > 1 else ""
     series = load(day, only)
+    closes = _closes()
     if not series:
         print(f"No ORPHAN debit marks found for {day or 'any session'}"
               f"{' / ' + only.upper() if only else ''}.")
@@ -200,19 +244,37 @@ def main() -> None:
         mg = cfg[10] if len(cfg) > 10 else 0.0
         dc = cfg[11] if len(cfg) > 11 else 0.0
         total, held, why_n = 0.0, 0, defaultdict(int)
-        for (_d, _s, _k, entry), marks in sorted(series.items()):
+        for (_d, _s, _r, _k, entry, _exp), marks in sorted(series.items()):
             try:
-                _lo, _hi = (float(x) for x in _k.split("/"))
-                w = abs(_hi - _lo)
+                _long, _short = (float(x) for x in _k.split("/"))
+                w = abs(_short - _long)
             except ValueError:
+                _long = _short = 0.0
                 w = 0.0
             why, ret, qty = run(marks, tgt, stop, cf, sm, gb, of, om, needs,
                                 gbp, 5.0, w, entry, mg, dc)
+            if why == "HELD":
+                # ONLY 0DTE CAN BE SETTLED. A later expiry does not end with
+                # this session, so neither its close nor its 15:45 price says
+                # what the position was worth -- it carries on into tomorrow.
+                # Settling one anyway priced a SNDK weekly off nine different
+                # sessions' closes and let a 19-point last-quarter-hour move on
+                # a 45-wide spread swing the whole sweep by tens of thousands.
+                # Those stay HELD at the last mark, and the count is printed so
+                # the remaining bias is visible rather than assumed away.
+                settled = (None if _exp else
+                           settle(_s, _d, _r, _long, _short, entry, closes))
+                if settled is not None:
+                    ret, why_n["SETTLED"] = settled, why_n["SETTLED"] + 1
+                else:
+                    why_n["HELD"] += 1
+                    held += 1
+            else:
+                why_n[why] += 1
             total += entry * (ret / 100.0) * qty * 100
-            why_n[why] += 1
-            held += why == "HELD"
         tag = {"TARGET": "T", "OTM": "O", "STALL": "L",
-               "STOP": "P", "HELD": "H", "GIVEBACK": "G"}
+               "STOP": "P", "HELD": "H", "GIVEBACK": "G",
+               "SETTLED": "X"}
         mix = " ".join(f"{tag.get(k, k[0])}{v}"
                        for k, v in sorted(why_n.items()))
         print(f"{name:<42}{total:>+10.0f} {mix:>26}   {held}")

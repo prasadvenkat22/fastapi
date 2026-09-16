@@ -10514,3 +10514,77 @@ it the other way.
     A REVERSAL SIX MINUTES AFTER AN EXIT IS NOT EVIDENCE THE EXIT WAS WRONG.
     It is one observation of the same series, and on an expiring contract the
     only observation that settles anything is the last one.
+
+
+169. THE HARNESS HAD TWO BUGS AND THEY REVERSED THE ANSWER TWICE  (2026-09-16)
+--------------------------------------------------------------------------------
+
+exit_backtest.py scored a HELD run -- one the rule would have carried past the
+real exit -- at the LAST OBSERVED MARK. Guards work by turning exits into
+holds, so the rules most worth testing were the ones the bias punished hardest:
+
+    LIVE (no guards)          -24,784    82 of 182 HELD
+    LIVE NOW, no OTM stop     -27,357   128 of 182 HELD
+
+128 truncations against 82 is not a comparison. A 0DTE position expires the
+same session, so what it was worth if held is not a guess -- it is intrinsic at
+a known price. scripts/expiry_closes.py caches that per (symbol, session).
+
+TWO BUGS IN THE FIX, BOTH FOUND BEFORE THE NUMBERS WERE BELIEVED, AND EACH
+REVERSED THE CONCLUSION.
+
+  1. SORTED STRIKES. The log prints long/short. The first settle() sorted them
+     into low/high, which is RIGHT for a call debit -- the long IS the lower
+     strike -- and wrong for every put. QQQ "P 709/706" is long 709; sorting
+     priced it off 706 and read zero intrinsic whenever the close landed
+     between the strikes. It looked correct on every call spread in the
+     sample, which is the whole danger. Caught by asserting four hand-computed
+     cases, two of each side, before running anything.
+
+  2. SETTLING A WEEKLY AT A DAILY CLOSE. The fix was applied to every held
+     run. SNDK expires 09-18 and does not end with the session -- settling it
+     at nine different sessions' closes let a 19-point last-quarter-hour move
+     on a 45-wide spread swing the sweep by TENS OF THOUSANDS. That produced
+     "OTM is +7,148, the gain floor is -7,004", which was recommended out loud
+     before the magnitude was questioned. A 26,000 swing from moving a
+     settlement point fifteen minutes is not a finding, it is a defect, and
+     the size of it was the tell.
+
+     The log already distinguishes them: "[expires YYMMDD]" is printed only
+     when the position does NOT expire today. Only 0DTE settles now.
+
+  AND THE SETTLEMENT POINT IS 15:45, NOT THE CLOSE, because the engine
+  FORCE_CLOSEs 0DTE at 15:45 and never holds to 16:00. Charging a held run the
+  last fifteen minutes is the same bias in miniature.
+
+WHAT THE CORRECTED SWEEP SAYS -- 206 positions, 9 sessions:
+
+    tgt30 stop-10 cf0                    -16,299   H12
+    LIVE NOW gain floor 15                  +635   H45
+    LIVE NOW, no OTM stop   <- running       +551   H52
+    LIVE tgt30 stop-35 cf5                  +509   H29
+    UND + OTM 0min                          +412   H23
+    LIVE NOW +OTM0 +gain8 +drag15            +99   H44
+    LIVE NOW gain floor 0                  -5,281   H37
+    LIVE NOW no drag guard                 -5,786   H40
+
+  THE -10% STOP IS CATASTROPHIC at -16,299. This morning's widening to -35%
+  was right, and that is now measured rather than argued.
+
+  THE 8% GAIN FLOOR HELPS: removing it costs 5,380.
+  THE 15% DRAG CEILING HELPS: removing it costs 6,337.
+  Both of the day's guard additions survive the only unbiased measurement
+  available.
+
+  THE OTM STOP IS A COIN FLIP: +551 without, +99 with, inside the noise that
+  held counts of 23 to 52 can explain. Correctly off.
+
+WHAT IS STILL BIASED. Weeklies cannot be settled -- that needs the EXPIRY
+date's close, which for an open position does not exist yet -- so held counts
+still range 23 to 52 across configurations and any difference under about a
+thousand dollars should not be believed.
+
+THE LESSON IS NOT ABOUT EXITS. Three times today a vivid single case was
+turned into a setting, and twice a broken instrument was turned into a
+recommendation. The instrument gets debugged like code: assert known answers
+first, and treat an implausible magnitude as a defect rather than a discovery.

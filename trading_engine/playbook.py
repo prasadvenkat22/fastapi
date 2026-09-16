@@ -732,6 +732,35 @@ WINDOWS = (
              "is moving in.",
     ),
     PlaybookWindow(
+        # ENABLED 2026-09-15 to close a coverage hole, not because it is proven.
+        #
+        # That session produced FIVE CLEAN/bear cycles at 12:00-12:04 ET and no
+        # playbook could take them:
+        #
+        #     MORNING_PUT     09:45-11:30  CLEAN  bearish   -- closed
+        #     MORNING_CREDIT  10:15-11:30  ALL    bearish   -- closed, and off
+        #     MORNING_DRIFT   10:15-12:30  CLEAN  LONG ONLY -- the only one open
+        #
+        #     "MORNING_DRIFT is long-only -- refusing the bearish CLEAN setup."
+        #
+        # A valid bearish setup with nowhere to go. Both bearish books shut at
+        # 11:30 and the one still open cannot go short.
+        #
+        # WHY THIS WINDOW AND NOT A LONGER MORNING. Extending the morning has
+        # been measured three separate times and loses every time -- section
+        # 27's start time, section 32's relaxation, and the window sweep that
+        # found allowing morning entries to 15:00 "does not capture the
+        # afternoon, it dilutes the morning". 11:30-13:30 is the gap; this
+        # window already covers exactly it, in both directions, at ALL tiers.
+        #
+        # THE EVIDENCE FOR IT IS TWO TRADES. Live record: 2 fills, +86.67,
+        # +43.34 a trade, 1 win. Positive and meaningless at that count. What
+        # it does NOT have is a negative measurement -- unlike MORNING_CREDIT
+        # directly above, which is off because 32 trades measured -57.64 each.
+        # That is the whole case: a gap with no rule, and the rule designed for
+        # the gap has nothing against it.
+        #
+        # Remove it from TRADING_ENABLED_WINDOWS to revert; no deploy needed.
         name="ITM_GRINDER",
         start=_env_time("TRADING_GRINDER_START", "11:30"),
         end=_env_time("TRADING_GRINDER_END", "13:30"), placement=ITM,

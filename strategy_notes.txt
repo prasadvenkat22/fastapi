@@ -9779,3 +9779,184 @@ IT GATES NOTHING, AND THE SECOND REASON IS THE IMPORTANT ONE.
 
 macro_outcome.py scores both against the session that followed. That is the
 only thing that will settle which read deserves a gate, and neither has it yet.
+
+
+157. A STOP THAT FIRED ON ONE PRINT, AND THE GUARD THAT WAS ALREADY BUILT  (2026-09-15)
+--------------------------------------------------------------------------------
+
+Observed from the tape: a loss taken early for no reason. Correct, and the
+record is unambiguous.
+
+QQQ 708/703 put debit, entry 2.46, peaked +15.7%, then printed -10.8% for ONE
+CYCLE on a five-minute wick:
+
+    12:50   QQQ 705.89   spread -14%    the wick
+    12:53   STOP_LOSS, booked -154 across two fills
+    12:55   QQQ 705.45   spread  +4%
+    13:00   QQQ 704.78   spread +31%    past the +30% target
+    13:20   QQQ 704.57   spread +39%
+
+It would have hit its target seven minutes after being closed. NO RULE COULD
+HAVE SAVED IT: the target needs +30% and the peak was +15.7%; the stall needs
+five minutes since the peak and the stop fired at four.
+
+THE GUARD FOR THIS WAS BUILT, MEASURED, AND SHIPPED SWITCHED OFF. The sweep sits
+in a comment directly above the constant it disables:
+
+    fast          slow           fires helps      P&L    vs hold
+    -40% /  0min  -20% / 30min       5     4   +34335    +1943
+    -40% /  2min  -20% / 30min       4     4   +34493    +2101   <- best
+    -40% /  5min  -20% / 30min       3     3   +34013    +1621
+    -40% / 10min  -20% / 30min       3     3   +33833    +1441
+
+"Two minutes filters one bad fire and takes the hit rate to 4 of 4." It then
+shipped at 0 -- in the code default AND again in .env.production.
+
+    Nothing in any log would ever have said so. A stop with no confirmation
+    looks identical to a stop whose confirmation always passes.
+
+Weeklies had 15-minute persistence the whole time. Only 0DTE -- the noisiest
+chain there is -- had none.
+
+AND THE LEVEL IS THE REAL PROBLEM, NOT THE TIMING. On that 2.46 entry:
+
+    entry          spread 2.46  ->  QQQ 705.54
+    stop -10%      spread 2.21  ->  QQQ 705.79    0.25 points away
+    target +30%    spread 3.20  ->  QQQ 704.80    0.74 points away
+
+    QQQ's range that day: 5.62 points
+    the stop is 4% of it; the target is 13%
+
+A -10% stop on a deep-ITM spread is a QUARTER POINT of QQQ -- 0.035%, inside
+tick noise. The spread is nearly all intrinsic so it tracks the underlying
+almost one-for-one, and the entry filter's own 30-75%-of-width band is
+deliberately selecting structures with exactly that property.
+
+Section 82 had already measured the level on 39 structure-days: only -40% and
+-60% beat holding, and the WORST single loss was identical (-1,932) at every
+setting. Tightening buys nothing on the bad day and closes the good ones early.
+The note then said "the deployed -25% is itself negative"; it had since been
+tightened to -10%, with nothing on record explaining why.
+
+Deployed: stop -35%, confirmation 5 minutes. The confirmation diverges from the
+sweep's 2 deliberately -- that sweep ran a -40% stop, and a window tuned for a
+stop four times wider does not transfer to one that sits inside the noise.
+
+
+158. THE EXIT SETTINGS, REPLAYED AGAINST THE SESSION'S OWN MARKS  (2026-09-15)
+--------------------------------------------------------------------------------
+
+Two exits missed that afternoon, both worth understanding before changing
+anything else.
+
+A QQQ 705/702 peaked +31.0% and closed at FORCE_CLOSE +8.3%. The +30% target
+never fired because THE PEAK WAS SUB-MINUTE -- reconstructed from one-minute
+bars, the position spent ZERO minutes at or above +30%:
+
+    above +30%   0 min
+    above +25%   1 min
+    above +20%   4 min
+
+The engine marks several times a minute and saw the spike; the target is
+evaluated per cycle and did not. The stall could not help either: the peak was
+two minutes before the 15:45 flatten and the stall needs five.
+
+THAT LOOKED LIKE AN ARGUMENT FOR A 2-MINUTE STALL. It was deployed as one. A
+replay of every QQQ position that session, against the ENGINE'S OWN LOGGED
+MARKS, said the opposite:
+
+    tgt30 stop-35 cf5 stall 5min    -152
+    tgt30 stop-35 cf5 stall 2min    -210
+    tgt30 stop-20 cf5 stall 2min    -620
+    tgt25 stop-35 cf5 stall 2min    -110
+    this morning: tgt30 stop-10 cf0 stall5   -246
+    no exits, ride to the last mark          -257
+
+ONE POSITION DRIVES THE STALL RESULT AND IT IS A MECHANISM, NOT LUCK. QQQ
+705/703 peaked +9.4%, fell to +1.9%, SAT FLAT FOR SIX MINUTES, then ran to the
++30% target for +165:
+
+    18:42:52   +1.9%   peak +9.4%, 2.1 min ago   <- a 2-min stall books here
+    18:43-45   +1.9% to +7.5%   flat
+    18:48:09  +30.2%   TARGET
+
+Two minutes books that at +1.9%. THE WAITING IS THE POINT: a giveback rule that
+fires while a position is merely resting turns every pause into an exit, and
+pausing is what winners do. Reverted to 5.
+
+    The error was generalising from the ONE position where a short stall would
+    have helped and not checking the one where it hurts. The 705/702 case is
+    still real -- but a peak two minutes before a hard close cannot be caught
+    by any stall with a longer window. That is an argument about the FLATTEN
+    boundary, not the stall.
+
+THE +25% RESULT IS AN ARTIFACT AND WAS NOT ACTED ON. It wins only because one
+position peaked at +29.8%, a hair under the threshold. Moving a target because
+a single peak landed just short of it is fitting to one observation.
+
+TWO THINGS THE REPLAY DOES NOT SETTLE, both printed by the script itself. Six
+positions is not a sample -- and every configuration LOST money that day, from
+-110 to -620, so the session was bad for this strategy whatever the exits did.
+And any rule that would have held past the real exit has no data beyond that
+point, so it is scored at the last mark seen, which biases against patient
+rules. Three of the six truncate.
+
+scripts/exit_backtest.py is kept so the next setting change is argued against
+marks rather than against the most recent trade -- which is the mistake the
+stall change was.
+
+
+159. FOUR MORE THINGS FOUND BY READING THE LOG  (2026-09-15)
+--------------------------------------------------------------------------------
+
+THE HISTORY LABEL WAS INVERTING THE RE-ENTRY COOLDOWN. trading_history.strategy
+read `"CALL_CREDIT_SPREAD" if credit else "BULL_CALL_SPREAD"` -- credit versus
+debit and nothing else -- so every put debit was booked as a bull call spread:
+
+    actually               labelled as          trades  losers   pnl
+    CALL spread (bullish)  BULL_CALL_SPREAD         16       9  +703
+    PUT  spread (bearish)  BULL_CALL_SPREAD         20      13  -346
+
+equity.blocked_direction() reads that column and blocks THE SIDE of the last
+losing trade for 90 minutes. BULLISH_STRATEGIES contains BULL_CALL_SPREAD, so
+each of those 13 losing PUT spreads blocked the BULLISH side -- on a day call
+debits made +703 and put debits lost -346. The guard was pointing at the wrong
+side, and it compounded with the news veto found the day before: both pushed
+the book short on a rising tape. st["right"] had carried C/P the whole time.
+
+opened_at was never passed either, so every row had a close time and no open
+time -- "what did entries after 11:00 do" was unanswerable.
+
+dte0_shadow HAD ENDPOINTS AND NO PATH. open_session() wrote the entry and
+settle() the expiry value; nothing ran between, so last/peak/worst/target_hit
+were NULL on all 20 rows. That answers "does this structure work held to
+expiry" and cannot answer what the exit rules need. --mark now prices every
+open row off the chain every 15 minutes.
+
+    A BUG WORTH RECORDING BECAUSE IT LOOKED LIKE SUCCESS: _mark_value first
+    read the chain as Tradier's raw list-of-dicts; it is a dict keyed
+    (option_type, strike). It found nothing, returned None, and fell through to
+    the intrinsic fallback -- so every mark equalled the expiry value. Rows
+    updated, numbers landed, and BOTH QQQ credit spreads read exactly 100%
+    because that IS their intrinsic. Opposite structures cannot both be at max
+    value, which is what gave it away. A fallback that cannot fail hides the
+    bug behind it.
+
+    ALSO: I had been calling dte0_shadow empty for two days. That count was
+    taken on the Sunday, before Monday's session existed, and repeated without
+    re-checking while the table filled.
+
+POLYGON'S SCORE PREFERRED THIN COVERAGE. It is the mean of per-article
+verdicts, so one article scores 1.00 while fifteen regress toward zero as they
+disagree. With a flat 0.70 veto floor the gate systematically favoured the
+LEAST-covered name: DELL +1.00 on 1 article vetoed, NVDA +0.28 on 18 ignored.
+Shrunk by sample size (n/(n+3)) so a veto needs volume AND agreement, and the
+floor moved to 0.50 -- across 92 rows, 12 cleared 0.70 raw, ZERO clear it
+shrunk, 3 clear 0.50.
+
+"NO CHAIN WAS TIGHT ENOUGH" WAS A LIE ABOUT A MARKET NEVER EXAMINED. Every
+single-name chain came back empty because QQQ carries daily expiries and single
+names do not -- on that Tuesday QQQ listed 09-15 while NVDA, TSLA, AAPL, MU and
+AVGO all started at 09-16. There was no 0DTE contract to assess. The run
+reported a liquidity judgement instead, which sends the next reader hunting for
+a spread-width problem that does not exist.

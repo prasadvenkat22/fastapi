@@ -592,6 +592,21 @@ Exits are `orphans.py`'s job and are not duplicated here.
 `scripts/dte0_pick.py`. **Prints, never trades.** Each constraint was learned
 by losing money to its opposite in the week of 2026-09-08:
 
+**The 0DTE exit ladder, as deployed 2026-09-15** (sections 157–158):
+
+| rule | setting | note |
+|---|---|---|
+| target | **+30%** | a level, so a sub-minute spike through it books nothing |
+| stall | 20% giveback, **5 min** quiet | briefly 2, reverted — 2 books winners while they rest |
+| stop | **−35%**, **5 min** confirm | was −10%/0min; −10% was a 0.25-point QQQ move |
+| later stop | −10%, 15 min | weeklies, unchanged |
+| flatten | 15:45 | |
+| `STOP_RESPECTS_INTRINSIC` | on | stands the stop down while intrinsic exceeds entry |
+
+`scripts/exit_backtest.py` replays a session's positions against the engine's
+own logged marks. Use it before moving any of these — the stall was changed on
+one trade's evidence and the replay reversed it the same evening.
+
 ```
 entry 30-65% of width     above 65% the +30% target is arithmetically
                           unreachable, since max return is (width-entry)/entry
@@ -599,11 +614,16 @@ entry 30-65% of width     above 65% the +30% target is arithmetically
                           on 09-11 were bought at 0.68-0.81 and their target
                           rung did nothing; the 15:45 flatten became the exit.
                           Below 30% the premium is mostly time value and the
-                          -10% stop is nearer than one morning of theta.
+                          stop is nearer than one morning of theta. (That read
+                          -10% until 2026-09-15; the 0DTE stop is now -35% --
+                          section 157.)
 extrinsic under 25%       the same failure in the units that cause it. NVDA
                           220/200 screened at +28 points of edge with 35% time
                           value: the stop sat 0.26 below entry against 0.91 of
                           extrinsic, so theta alone covered it before lunch.
+                          The same arithmetic is why -10% was widened: on a
+                          2.46 entry it was a QUARTER POINT of QQQ, 4% of the
+                          day's range.
 target within 0.3 ATR     the move to +30% has to be an ordinary session. ATR
                           converts at ATR/1.596, the constant the probability
                           engines already use.

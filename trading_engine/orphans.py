@@ -1346,11 +1346,24 @@ def _quotes_tradeable(q: dict, st: dict, reason: str = "") -> bool:
     try:
         bid, ask = float(row.get("bid") or 0.0), float(row.get("ask") or 0.0)
     except (TypeError, ValueError):
+        logger.warning(
+            "ORPHAN quote unreadable: %s bid=%r ask=%r — reporting but not "
+            "acting.", st["short"], row.get("bid"), row.get("ask"))
         return False
     # The ask, not the bid: closing this structure BUYS the short back. A zero
     # bid on a nearly-worthless short is normal and does not stop anything; a
     # zero ask means there is no offer to buy at, which does.
-    if ask <= 0 or ask < bid:
+    if ask <= 0:
+        logger.warning(
+            "ORPHAN no offer on %s (bid %.2f, ask %.2f) — nothing to buy the "
+            "short back at, so %s is reported and not acted on.",
+            st["short"], bid, ask, reason or "the ladder")
+        return False
+    if ask < bid:
+        logger.warning(
+            "ORPHAN crossed quote on %s: bid %.2f is ABOVE ask %.2f — that is "
+            "not a market, so %s is reported and not acted on.",
+            st["short"], bid, ask, reason or "the ladder")
         return False
     if reason == "FORCE_CLOSE":
         return True

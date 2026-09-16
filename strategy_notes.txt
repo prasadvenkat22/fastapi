@@ -10588,3 +10588,35 @@ THE LESSON IS NOT ABOUT EXITS. Three times today a vivid single case was
 turned into a setting, and twice a broken instrument was turned into a
 recommendation. The instrument gets debugged like code: assert known answers
 first, and treat an implausible magnitude as a defect rather than a discovery.
+
+
+170. A POSITION SAT UNMANAGED AND THE LOG WOULD NOT SAY WHY  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Asked whether the weekly stop was really set on the open SNDK. It is
+configured -- and the position was printing "[observation only]", which means
+the ladder was REPORTING and not ACTING. Nine cycles that session.
+
+_quotes_tradeable has three ways to refuse and only ONE of them talked:
+
+    ask <= 0        silent      no offer to buy the short back
+    ask < bid       silent      a crossed quote, not a market
+    too wide        WARNING     already logged, "quote unusable"
+
+Zero "quote unusable" lines against nine "observation only" lines, so it was
+one of the silent two -- and WHICH ONE CANNOT BE RECOVERED, with the whole log
+available, because neither branch ever wrote anything. The refusals are
+correct; a crossed or offerless quote is not something to trade into. The
+defect is that a position stopped being managed and nothing said so.
+
+That is the same blindness as section 157's missing stop confirmation: a rule
+that silently declines to act is indistinguishable from one that never armed,
+and both look like a quiet market. Every branch now names itself and the
+reason it was deciding.
+
+WHAT IT MEANS FOR THE WEEKLY LADDER, and it is the honest answer to the
+question asked: the stop is set at -25% with a 15-minute confirmation, and
+there are moments when it will not fire whatever the number says -- because
+the short leg has no usable market at that instant. On a weekly that is rarer
+than on a 0DTE, but it is not zero, and the operator could not previously see
+it happening.

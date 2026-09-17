@@ -651,8 +651,8 @@ separate settings — they were briefly one rule by accident, see section 171.
 | stall quiet | **2 min** | **20 min** | 2 measured better or equal on *every* session (§172) |
 | stall giveback | **15% of band** | **20% of band** | band = width − entry, fixed at entry |
 | stall arms at | any positive peak | **+5%** | a multi-day position may pause without being finished |
-| stop (fast) | **−35%**, 5 min confirm | **−25%**, 15 min | for a gap. −10% *touched* costs $16,299 over 9 sessions |
-| stop (slow) | **−10%, held 5 min** | none — `LATER_STOP` covers weeklies | for a grind. **Measured best at 30 min**; 5 min is a judgement call worth ≈**−$9,500** on 214 positions, firing 61× against 21× (§181) |
+| stop (fast) | **−15%**, 5 min confirm | **−25%**, 15 min | **dormant** — cannot fire while the slow stop is tighter on the same clock (P0 across 221 positions). Insurance against the slow path failing (§183) |
+| stop (slow) | **−10%, held 5 min** | none — `LATER_STOP` covers weeklies | the **primary** 0DTE stop. Ignores the intrinsic guard. Measured best at 30 min; 5 min is a judgement worth ≈**−$9,500** and it also silenced the fast stop (§181, §183) |
 | flatten | 15:45 | none — runs to expiry | |
 | opening quiet | **09:45** | 09:45 | `ORPHAN_HOLD_UNTIL`. Holds **10 of 12** branches; only `ACCOUNT_FLOOR` and `FORCE_CLOSE` can act before it (§182) |
 
@@ -673,6 +673,19 @@ their *clock*, and the 0DTE stop has its own branch that logs and holds —
 *"declines to trust a −25% mark printed into the opening spread at all."* Two
 separate audit scripts have now reported these as ungated by reading condition
 text alone (§174, §182).
+
+**THE TWO STOPS ARE COUPLED.** The fast stop is dormant only while the slow
+stop sits at a tighter level on the same clock. Disabling the slow stop
+(`TRADING_ORPHAN_SLOW_STOP_PCT=0`) hands primary duty to **−15%/5min** — four
+times tighter than anything that measured well, and near the level the
+original sweep found catastrophic. Put `TRADING_ORPHAN_STOP_PCT` back to −35
+in the same change.
+
+**There is no resting stop order at the broker.** Every exit is a `multileg`
+**limit** order submitted when a rule fires, on a **60-second poll**. Nothing
+watches between cycles, while the engine is down, or overnight; a gap is
+caught at the next poll at whatever price exists then, and the limit can fail
+to fill. This is not a broker stop and must not be relied on as one (§183).
 
 **Three guards sit across both books:**
 

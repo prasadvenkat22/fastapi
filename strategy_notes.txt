@@ -11295,3 +11295,63 @@ at the broker. What exists is a SIXTY-SECOND POLL plus a limit order:
 That is why a stop quoted at -70 filled at -165: the rule saw a level, a clock
 ran, and an order went out. It is not a resting stop and should not be relied
 on as one.
+
+
+184. THE DUAL-TIER STOP, AND WHY A LEVEL NEEDS A CLOCK  (2026-09-17)
+--------------------------------------------------------------------------------
+
+Raised from the tape: the stop framework is confusing, and -35% is too far.
+Proposed instead a 5% soft / 10% hard split of premium value.
+
+THE FRAMEWORK WAS RIGHT AND ALREADY BUILT. What was running WAS a dual tier --
+slow -10%/5min and fast -15%/5min -- with two problems: both clocks were the
+same length, so the wider one could never fire (section 183), and the levels
+were inside the noise.
+
+FOUR SETTINGS, TWO RULES. Each stop needs a LEVEL and a WAIT:
+
+                  level              wait        env
+    SOFT      -10% of premium      30 min    SLOW_STOP_PCT / _MINUTES
+    HARD      -30% of premium       5 min    STOP_PCT / STOP_CONFIRM_MINUTES
+
+The waits differ deliberately: a slow bleed might recover and needs
+confirming, a 30% drop has already said something and waiting costs money.
+Both clocks are CONTINUOUS -- a tick back above the level resets to zero.
+
+THE 5/10 PROPOSAL MEASURED, 221 positions:
+
+    soft -5%/30min  hard -10%/0min     -4,915   P93
+    soft -5%/30min  hard -10%/5min     -5,851   P53
+    soft -5%/10min  hard -10%/2min     -6,886   P64
+    soft -5%/5min   hard -10%/5min    -12,481   W81   <- the literal proposal
+
+WHY IT CANNOT WORK, and it is arithmetic rather than judgement: FIVE PERCENT
+OF PREMIUM IS SMALLER THAN THE BID-ASK. On QQQ 716/717 at a 0.55 entry, 5% is
+2.75 cents against a 2-4 cent spread. On MU 975/990 at 6.60, 5% is 33 cents
+against a 20-40 cent spread. The stop fires when the QUOTE wiggles, not when
+the position moves -- 93 hard-stop fires on 221 positions in the best variant.
+
+THE HARD LEVEL SWEPT, with the soft stop fixed at -10%/30min:
+
+    hard -15%/5min    -5,560    40 fires
+    hard -20%/5min      -703    30
+    hard -25%/5min      +414    19
+    hard -30%/5min    +5,938     9    <- best of everything measured
+    hard -35%/5min    +5,857     8
+
+A CLIFF BETWEEN -25% AND -30%. Tighter than -30% and the hard stop starts
+firing on noise AND pre-empting the soft stop -- its five-minute clock
+completes long before the soft stop's thirty, so the careful rule never acts.
+That is the same mechanism as section 183, one level down.
+
+    -30% IS TIGHTER THAN -35% AND MEASURES MARGINALLY BETTER (+81). The
+    operator asked for tighter and the data allowed it, which is the first
+    time this week those two agreed on the first attempt.
+
+DEPLOYED: soft -10%/30min, hard -30%/5min. +5,938 against the -4,187 of the
+five-minute pair it replaced -- a 10,125 swing, and the largest single
+improvement measured in this file.
+
+AND THE POINT WORTH KEEPING: "-10% with no wait costs 12,559, -10% held an
+hour gains 996" is the same level twice. The clock is not a refinement of a
+stop, it is most of the stop.

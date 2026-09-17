@@ -651,8 +651,9 @@ separate settings — they were briefly one rule by accident, see section 171.
 | stall quiet | **2 min** | **20 min** | 2 measured better or equal on *every* session (§172) |
 | stall giveback | **15% of band** | **20% of band** | band = width − entry, fixed at entry |
 | stall arms at | any positive peak | **+5%** | a multi-day position may pause without being finished |
-| stop (fast) | **−15%**, 5 min confirm | **−25%**, 15 min | **dormant** — cannot fire while the slow stop is tighter on the same clock (P0 across 221 positions). Insurance against the slow path failing (§183) |
-| stop (slow) | **−10%, held 5 min** | none — `LATER_STOP` covers weeklies | the **primary** 0DTE stop. Ignores the intrinsic guard. Measured best at 30 min; 5 min is a judgement worth ≈**−$9,500** and it also silenced the fast stop (§181, §183) |
+
+| stop — **SOFT** | **−10%**, held **30 min** | none — `LATER_STOP` covers weeklies | a slow bleed. Ignores the intrinsic guard. Below 30 min it fires on noise: 10 min ≈ −$1,400, 5 min ≈ −$9,500 (§181) |
+| stop — **HARD** | **−30%**, held **5 min** | **−25%**, 15 min | a fast drop. Respects the intrinsic guard. **A cliff below −30%**: −25% ≈ −$5,500, −15% ≈ −$11,500 (§184) |
 | flatten | 15:45 | none — runs to expiry | |
 | opening quiet | **09:45** | 09:45 | `ORPHAN_HOLD_UNTIL`. Holds **10 of 12** branches; only `ACCOUNT_FLOOR` and `FORCE_CLOSE` can act before it (§182) |
 
@@ -674,12 +675,29 @@ their *clock*, and the 0DTE stop has its own branch that logs and holds —
 separate audit scripts have now reported these as ungated by reading condition
 text alone (§174, §182).
 
-**THE TWO STOPS ARE COUPLED.** The fast stop is dormant only while the slow
-stop sits at a tighter level on the same clock. Disabling the slow stop
-(`TRADING_ORPHAN_SLOW_STOP_PCT=0`) hands primary duty to **−15%/5min** — four
-times tighter than anything that measured well, and near the level the
-original sweep found catastrophic. Put `TRADING_ORPHAN_STOP_PCT` back to −35
-in the same change.
+**THE DUAL-TIER STOP — four settings, two rules.** Each stop needs a *level*
+and a *wait*, and the wait is what makes a level usable:
+
+| | level | wait | env |
+|---|---|---|---|
+| **SOFT** | −10% of premium | 30 min | `SLOW_STOP_PCT` / `SLOW_STOP_MINUTES` |
+| **HARD** | −30% of premium | 5 min | `STOP_PCT` / `STOP_CONFIRM_MINUTES` |
+
+The waits differ on purpose: a slow bleed might recover and needs confirming;
+a 30% drop has already told you something and waiting costs money. **Both
+clocks are continuous** — a tick back above the level resets them to zero.
+
+**Why a level alone cannot work.** Same level, the only difference being
+persistence: `−10% with no wait = −$12,559` against `−10% held an hour =
++$996`. On a 0DTE spread the bid-ask alone is often more than 10% of premium,
+so an unconfirmed level fires on the quote rather than the position. 5% / 10%
+of premium was measured at **−$12,481** for exactly this reason — 5% of a
+$0.55 spread is under three cents.
+
+**Best measured combination**, 221 positions over 10 sessions: soft −10%/30min
++ hard −30%/5min at **+$5,938**, against −$4,187 for the 5-minute pair it
+replaced. The hard stop fires 9 times rather than 40, and the soft stop gets
+to act instead of being pre-empted.
 
 **There is no resting stop order at the broker.** Every exit is a `multileg`
 **limit** order submitted when a rule fires, on a **60-second poll**. Nothing

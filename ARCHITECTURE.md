@@ -1015,11 +1015,29 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 ## HTTP: the screener is callable
 
 ```
+GET  /trading/positions        every structure the BROKER holds + its live ladder state
+GET  /trading/position         the ENGINE's own row only
 GET  /trading/screener/verticals?symbols=CRWV,AVGO&side=call&structure=debit&by=edge&per_symbol=2
 GET  /trading/screener/flow?symbols=CRWV,AVGO,SNDK
 POST /trading/flatten?confirm=LIQUIDATE&preview=true
 POST /trading/flatten?confirm=LIQUIDATE&preview=false&plan_token=<from the preview>
 ```
+
+**`/trading/positions` answers "why is this still open?"** Per structure it
+returns entry, mark, `intrinsic`/`extrinsic`, return and peak, then the ladder
+*as it applies to that structure*: `stop_pct`, `stop_confirm_minutes`,
+`stall_giveback_points`, `stall_quiet_minutes`, `stall_armed`,
+`stall_min_gain_pct`, `drag_ceiling`, `drag_now`, `drag_blocks`, `hold_until`,
+`past_hold`, `managed`, `quote_tradeable`.
+
+**Every one is asked of the function the engine asks, never read off a
+setting** (§177). The first version read the knobs and reported the flat
+giveback percents the band overrides — 40.0 on a weekly whose real threshold
+was 9.1 points — plus null for the stop on a weekly that has one. `drag_blocks`
+is the field that explains a held winner, and it was the one missing.
+
+Read-only, deliberately: the exit rules run in the cycle, not in a request
+handler, and a dashboard that can trade is a dashboard that will.
 
 **`/flatten` closes MANUAL spreads only** — engine positions are excluded by
 passing their legs as `engine_symbols`, the same way `orphans.review()` does.

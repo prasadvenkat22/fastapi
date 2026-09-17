@@ -11060,3 +11060,62 @@ expiry. NOT DEPLOYED: "best mark" above is a hindsight maximum over each
 position's life, a live target at 11% would cap every winner that runs
 further, and the harness still cannot settle a weekly. Recorded as the
 remaining candidate, not as a change.
+
+
+180. THE SLOW STOP, ENABLED  (2026-09-17)
+--------------------------------------------------------------------------------
+
+Raised from the tape: "how can we wait for a loss to happen?" -- the -35% fast
+stop on a 2.10 entry is a 520 dollar loss before anything acts. The rule built
+for exactly that objection existed and was switched off.
+
+ORPHAN_SLOW_STOP is the other half of the stop: a SHALLOWER level that must
+hold CONTINUOUSLY, clock reset the instant the mark recovers. Its comment
+states the hole it fills -- "a position that erodes steadily without ever
+reaching -40% is never caught at all."
+
+SWEPT ACROSS 213 POSITIONS, 10 SESSIONS, against the live ladder:
+
+    -10% / 30 min   +9,737   21 fires   <- best of everything tested
+    -15% / 30 min   +9,587   12
+    -20% / 30 min   +9,560    9
+    no slow stop    +9,380              <- baseline
+    -25% / 30 min   +9,100    6
+    -10% / 10 min   +7,982   37
+    -20% / 15 min   +5,866   15
+
+THE LEVEL CAN BE TIGHT; THE DURATION CANNOT BE SHORT. -10% works at 30
+minutes and loses 1,398 at 10; -20% works at 30 and loses 3,514 at 15. That
+reproduces the original 39-structure-day finding exactly: "-10% touched costs
+12,559, -10% held for an hour gains 996. The duration filter is the whole
+difference."
+
+PER SESSION at -10%/30min: 4 better, 3 worse, 2 identical, worst single
+session -507. At -10%/10min: one session alone loses 4,447.
+
+DEPLOYED AT -10% / 10 MINUTES at the operator's instruction, after the
+measurement was put to them and they reaffirmed. The level is the measured
+one; the duration is not, and on this data it is worth about -1,400 against
+the 30-minute version. Recorded so the next reader knows which half is
+evidence and which is judgement.
+
+    TRADING_ORPHAN_SLOW_STOP_PCT=0 reverts it entirely.
+    TRADING_ORPHAN_SLOW_STOP_MINUTES=30 restores the measured duration.
+
+AND IT DELIBERATELY OVERRIDES THE INTRINSIC GUARD, which is the uncomfortable
+part and is not a side effect: "With STOP_RESPECTS_INTRINSIC applied it never
+fires at all -- every measured configuration collapses back to the fast stop
+alone. Its entire value comes from closing a position that still pays at
+expiry on paper but has been grinding for half an hour, which is exactly the
+case the guard was written to protect. Both cannot be right."
+
+So the book now deliberately holds both positions: the intrinsic guard
+protects a spread whose mark is depressed by drag, and the slow stop closes
+one that has been depressed for ten minutes. The duration test is the only
+thing separating them.
+
+    WORTH WATCHING FOR: a slow stop firing on a position whose intrinsic is
+    above its entry. That is this rule working as designed and it is also the
+    shape of the TARGET bug that cost 2,200 the same morning. If it starts
+    happening on positions that would have paid at the bell, the duration is
+    the lever, not the level.

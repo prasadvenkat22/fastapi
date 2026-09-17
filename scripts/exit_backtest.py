@@ -131,6 +131,14 @@ CONFIGS = [
     ("SM    LIVE, stall quiet 25 min          ", 30, -35, 5, 25, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
     ("SM    LIVE, stall quiet 40 min          ", 30, -35, 5, 40, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
     ("SM    LIVE, stall OFF                   ", 30, -35, 5, 9999, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
+    ("SS    LIVE + slow stop -10%/10min       ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 10.0),
+    ("SS    LIVE + slow stop -10%/30min       ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
+    ("SS    LIVE + slow stop -10%/60min       ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 60.0),
+    ("SS    LIVE + slow stop -15%/30min       ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -15.0, 30.0),
+    ("SS    LIVE + slow stop -20%/30min       ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -20.0, 30.0),
+    ("SS    LIVE + slow stop -20%/15min       ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -20.0, 15.0),
+    ("SS    LIVE + slow stop -25%/30min       ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -25.0, 30.0),
+    ("SS    LIVE (no slow stop)               ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
     ("      no exits, ride to the last mark   ", 999, -999, 0, 999, 999, 0.0, -1),
 ]
 
@@ -168,9 +176,10 @@ def load(day: str = "", only: str = "") -> dict:
 
 def run(marks, target, stop, confirm, stall_min, giveback, otm_floor, otm_min,
         otm_needs_itm=False, gb_pct=0.0, gb_confirm=5.0, width=0.0,
-        entry=0.0, min_gain=0.0, drag_ceiling=0.0):
+        entry=0.0, min_gain=0.0, drag_ceiling=0.0,
+        slow_stop=0.0, slow_min=30.0):
     """Walk the marks once. First rule to fire wins, as the engine does."""
-    peak = peak_at = stop_since = otm_since = None
+    peak = peak_at = stop_since = otm_since = slow_since = None
     was_itm = False
     peak_iv, gb_since = None, None
     for t, _val, ret, qty, iv in marks:
@@ -216,6 +225,14 @@ def run(marks, target, stop, confirm, stall_min, giveback, otm_floor, otm_min,
             if (quiet >= stall_min and ret <= peak * (1 - giveback / 100.0)
                     and _gain_ok and _drag_ok):
                 return "STALL", ret, qty
+        if slow_stop < 0:
+            if ret <= slow_stop:
+                if slow_since is None:
+                    slow_since = t
+                elif (t - slow_since).total_seconds() / 60.0 >= slow_min:
+                    return "SLOWSTOP", ret, qty
+            else:
+                slow_since = None
         if ret <= stop:
             if stop_since is None:
                 stop_since = t
@@ -252,6 +269,8 @@ def main() -> None:
         gbp = cfg[9] if len(cfg) > 9 else 0.0
         mg = cfg[10] if len(cfg) > 10 else 0.0
         dc = cfg[11] if len(cfg) > 11 else 0.0
+        ss = cfg[12] if len(cfg) > 12 else 0.0
+        sm2 = cfg[13] if len(cfg) > 13 else 30.0
         total, held, why_n = 0.0, 0, defaultdict(int)
         for (_d, _s, _r, _k, entry, _exp), marks in sorted(series.items()):
             try:
@@ -261,7 +280,7 @@ def main() -> None:
                 _long = _short = 0.0
                 w = 0.0
             why, ret, qty = run(marks, tgt, stop, cf, sm, gb, of, om, needs,
-                                gbp, 5.0, w, entry, mg, dc)
+                                gbp, 5.0, w, entry, mg, dc, ss, sm2)
             if why == "HELD":
                 # ONLY 0DTE CAN BE SETTLED. A later expiry does not end with
                 # this session, so neither its close nor its 15:45 price says
@@ -283,7 +302,7 @@ def main() -> None:
             total += entry * (ret / 100.0) * qty * 100
         tag = {"TARGET": "T", "OTM": "O", "STALL": "L",
                "STOP": "P", "HELD": "H", "GIVEBACK": "G",
-               "SETTLED": "X"}
+               "SETTLED": "X", "SLOWSTOP": "W"}
         mix = " ".join(f"{tag.get(k, k[0])}{v}"
                        for k, v in sorted(why_n.items()))
         print(f"{name:<42}{total:>+10.0f} {mix:>26}   {held}")

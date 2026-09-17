@@ -2125,8 +2125,38 @@ def review(engine_symbols: "set | None" = None) -> list:
             elif zero_dte and _past_force_close():
                 # Time beats everything. These settle in shares, not cash.
                 reason = "FORCE_CLOSE"
-            elif ORPHAN_TARGET_RETURN_PCT > 0 and ret_pct >= ORPHAN_TARGET_RETURN_PCT:
+            elif (ORPHAN_TARGET_RETURN_PCT > 0
+                  and ret_pct >= ORPHAN_TARGET_RETURN_PCT
+                  and not drag_blocks):
                 # Return on cost, not a fraction of max profit. See the knob.
+                #
+                # DRAG-GATED SINCE 2026-09-17, and it is the only rule in this
+                # chain that was taking profit without being. A live SNDK
+                # 1510/1550 weekly showed the whole failure in three log lines:
+                #
+                #   LATER_TARGET would close at 20.10, intrinsic 40.00 --
+                #     forfeits 19.90, 50% of width, REFUSED by the guard
+                #   LATER_TARGET would close at 26.70, intrinsic 40.00 --
+                #     forfeits 13.30, 33% of width, REFUSED again
+                #   TARGET fired at 26.70 (+54.8%) and sold it
+                #
+                # The guard turned the same exit away twice and this branch let
+                # it through the side door, on a spread sitting at its MAXIMUM
+                # intrinsic. Booked +2,348 where holding to expiry was worth
+                # about +4,550.
+                #
+                # A take-profit is exactly the kind of rule the ceiling is for:
+                # it is a judgement that the position is finished, and a
+                # position cannot be finished while a third of its width is
+                # still coming back.
+                #
+                # NOTE WHAT IS DELIBERATELY *NOT* ADDED HERE. This branch is
+                # also ungated on zero_dte, so the 0DTE target applies to
+                # weeklies alongside LATER_TARGET, and ungated on past_hold, so
+                # it can fire into the opening spread -- it did, at 09:31.
+                # Both are arguable and neither is measurable yet: the harness
+                # cannot settle a weekly. Left as they are rather than changed
+                # on the same single observation.
                 reason = "TARGET"
             elif ceiling is not None and ret_pct >= ceiling:
                 reason = "CEILING"

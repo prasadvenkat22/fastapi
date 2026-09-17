@@ -10744,3 +10744,56 @@ most of this day went.
     Fails OPEN on a bad value. An unparseable time leaves the rules working
     rather than silently disabling two exits for a session, which is the right
     direction for a guard whose failure nobody would notice.
+
+
+174. THE FOURTH WAY OUT  (2026-09-17)
+--------------------------------------------------------------------------------
+
+A SNDK 1510/1550 weekly, at its MAXIMUM intrinsic of 40.00, was sold at a mark
+of 26.70 for +2,348 at 09:31 ET. Holding to Friday was worth about +4,550.
+The whole failure is three consecutive log lines:
+
+    LATER_TARGET would close at 20.10, intrinsic 40.00
+      -> forfeits 19.90, 50% of width, REFUSED by the drag ceiling
+    LATER_TARGET would close at 26.70, intrinsic 40.00
+      -> forfeits 13.30, 33% of width, REFUSED again
+    TARGET fired at 26.70 (+54.8%) and sold it
+
+The guard turned the same exit away twice and another branch let it out the
+side door.
+
+TWO INDEPENDENT GUARDS BOTH FAILED TO APPLY, and either alone would have held
+it:
+
+  1. THE DRAG CEILING WAS NEVER WIRED TO TARGET. Four branches in this chain
+     take profit -- TARGET, LATER_TARGET, STALL, STALL_LATER -- and section
+     162 wired three. TARGET was considered and dismissed IN WRITING, with the
+     reasoning "when the mark reaches +30%, drag has shrunk". That is true on
+     a same-day expiry, where the mark converges to intrinsic into the bell,
+     and false on a weekly: this position was +54.8% on the mark while holding
+     33% of its width in drag.
+
+     THAT IS THE SAME ERROR AS SECTION 166, made the same day, one branch
+     over: a 0DTE property generalised to a multi-day position.
+
+  2. ORPHAN_HOLD_UNTIL DOES NOT GATE ANY TAKE-PROFIT. It gates six of twelve
+     branches -- LATER_STOP, SLOW_STOP, OTM_STOP, STALL, STALL_LATER,
+     GIVEBACK -- and not TARGET, LATER_TARGET, CEILING, STOP_LOSS,
+     FORCE_CLOSE or ACCOUNT_FLOOR. Asked to "start watching at 09:35", the
+     answer given was "it gates the stop, the slow stop, the giveback and both
+     stalls -- nothing acts before 09:35 now". The first clause is exhaustive
+     and correct and contains no target; the second does not follow from it and
+     was false. The enumeration was right there and the conclusion ignored it.
+
+FIXED: TARGET is drag-gated. All four profit-taking branches now are.
+
+NOT FIXED, DELIBERATELY: the hold still does not cover the take-profit paths,
+and TARGET is still ungated on zero_dte so the 0DTE target applies to weeklies
+alongside LATER_TARGET. Both are arguable, neither is measurable -- the harness
+cannot settle a weekly -- and changing them would be a third alteration to one
+subsystem driven by one event, which is the pattern that produced this.
+
+THE PROCEDURE THIS CHANGES. A change to one branch of a twelve-branch exit
+chain requires enumerating all twelve and stating which the change touches and
+which it deliberately does not. That reasoning was done informally for section
+162 and got TARGET wrong by assumption. As an explicit list it would not have.

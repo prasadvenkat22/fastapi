@@ -11119,3 +11119,63 @@ thing separating them.
     shape of the TARGET bug that cost 2,200 the same morning. If it starts
     happening on positions that would have paid at the bell, the duration is
     the lever, not the level.
+
+
+181. THE SLOW STOP AT FIVE MINUTES, AND ITS FIRST FIRES  (2026-09-17)
+--------------------------------------------------------------------------------
+
+Section 180 deployed -10%/10min. Within the hour it fired on two QQQ 0DTE
+positions on a trending afternoon, and the operator asked for five.
+
+WHAT ACTUALLY FIRED, and it is the rule working:
+
+    18:43  QQQ 715/718 x1   -45   SLOW_STOP
+    18:43  QQQ 716/717 x5   -85   SLOW_STOP
+    18:44  QQQ 716/717 x5   -80   SLOW_STOP
+
+QQQ 716/717 was BELOW its long strike -- intrinsic 0.01 on a 0.55 entry, pure
+premium with an hour to the flatten. Riding to 15:45 with QQQ under 716 was
+-540. It cut at -165. That is the case the rule exists for.
+
+A PRESENTATION ERROR WORTH RECORDING BECAUSE IT IS THE SAME ONE AS YESTERDAY.
+The loss was quoted as "-70, slow stop, 10 min" -- which was the mark at the
+moment the CLOCK STARTED, not what the rule books. A confirmation window
+settles at the price when it COMPLETES:
+
+    18:29  mark 0.48  -12.7%  clock starts    -70   <- the number quoted
+    18:37  mark 0.36  -34.5%  clock 5/10     -190
+    18:40  mark 0.33  -40.0%  clock 8/10     -220
+    18:43  mark 0.38          fired          -165   (it recovered slightly)
+
+That is exactly the dynamic explained to the operator the day before about the
+fast stop's five-minute confirm costing 114 on QQQ 710/714, and then presented
+backwards the next afternoon.
+
+FIVE MINUTES MEASURED, across 214 positions:
+
+    -10% /  5 min   -2,947   61 fires
+    -10% / 10 min   +5,142   37
+    -10% / 30 min   +6,897   21    <- best
+    no slow stop    +6,548    0
+
+FIVE MINUTES COSTS 9,495 AGAINST HAVING NO SLOW STOP AT ALL. It fires 61 times
+against 21, and the extra forty are positions that recovered. Shortening the
+duration does not reduce losses, it manufactures them -- the same finding as
+the original sweep's "-10% touched costs 12,559".
+
+DEPLOYED AT FIVE ANYWAY, at the operator's instruction, after the number was
+put to them and they reaffirmed. Recorded plainly: the -10% LEVEL is measured
+and is the best of the levels tested; the 5-minute DURATION is a judgement
+against the measurement by about 9,500 on this sample.
+
+    TRADING_ORPHAN_SLOW_STOP_MINUTES=30  restores the measured duration
+    TRADING_ORPHAN_SLOW_STOP_PCT=0       off entirely
+
+ALREADY 0DTE-ONLY IN CODE. The branch is gated on zero_dte, so weeklies keep
+LATER_STOP at -25%/15min and the slow stop cannot touch them. The operator's
+"0DTE only" was already satisfied and needed no change.
+
+WHAT TO WATCH FOR: a SLOW_STOP firing at -10 to -15% on a structure that is
+worth more an hour later. The 61-against-21 fire count says most of the extra
+fires are exactly that. Two or three of those and the duration is the lever,
+not the level.

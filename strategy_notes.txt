@@ -10964,3 +10964,99 @@ band that silently overrode two callers, the harness that modelled the old
 TARGET, and now an endpoint reading knobs. The fix is always the same -- one
 function, called from everywhere -- and it is worth reaching for before the
 next feature rather than after the next bug.
+
+
+178. THE +81.8% PEAK THAT WAS NEVER A PRICE  (2026-09-17)
+--------------------------------------------------------------------------------
+
+Raised from the broker screen: SNDK 1570 call showing +129% and -1,667, and
+"how did sndk not get stall watch". Two separate things, and neither is what
+the screen shows.
+
+THE SCREEN IS ONE LEG. +129% is the long 1570's day change and -1,667 is the
+long leg's loss. The position is the 1570/1625 spread, and the short offsets
+both. Same confusion as the QQQ 709 put on 09-16 -- a broker row per leg
+against an engine that thinks in structures.
+
+IT DID HAVE STALL WATCH. Armed the whole session, and it logged its refusal on
+every cycle:
+
+    "gave back to -21.9% from a +81.8% peak, but the mark is 22.40 against a
+     28.87 entry -- closing books a LOSS of -22.4%, and the stall does not
+     realise losses."
+
+THE PEAK WAS INTRINSIC AND WAS NEVER TRANSACTABLE. Its own marks, sampled:
+
+    spot~1603.0  intrinsic 33.02  drag  6.52 (12%)  mark 26.50
+    spot~1610.3  intrinsic 40.31  drag 11.41 (21%)  mark 28.90
+    spot~1619.9  intrinsic 49.88  drag 19.98 (36%)  mark 29.90
+    spot~1622.5  intrinsic 52.50  drag 21.20 (39%)  mark 31.30   <- best all day
+    spot~1592.7  intrinsic 22.72  drag -0.58 (-1%)  mark 23.30
+
+Intrinsic gained 19.5 points from 33.02 to 52.50 while THE MARK GAINED 4.8.
+The mark is about a quarter responsive to intrinsic in that zone, because spot
+was climbing TOWARD the short strike where the short's extrinsic is maximal.
+
+    A SUGGESTION MADE AND WITHDRAWN IN THE SAME HOUR: take profit BEFORE spot
+    reaches the short strike, where drag is lower. The series says no -- at
+    intrinsic 33 the mark was 26.50, WORSE than 31.30. The mark peaked exactly
+    when intrinsic did. There was no better moment.
+
+WHY NOTHING FIRED:
+
+    LATER_TARGET  intrinsic hit 52.49 against a 52.25 threshold (95% of
+                  width) -- and drag was 39% of width against an 8.25
+                  ceiling. Blocked, correctly: the guard refused to sell 52
+                  of intrinsic for 31.
+    the stall     its giveback tripped between 13:54 and 14:06, but the
+                  20-minute quiet from the 13:52 peak does not elapse until
+                  14:12, and by then the mark was 23.30 -- below entry.
+                  books_a_gain blocked it permanently from that moment.
+
+    The 20-minute weekly quiet, set that morning, contributed. With the old 5
+    the quiet elapses at 13:57 -- but the 8% gain floor needs the mark above
+    31.18 and the peak mark was 31.50. A thirty-two cent window. No setting
+    realistically books more than about 263 dollars here.
+
+THE CEILING OF THIS POSITION WAS +263 AT THE MARK. It is a structure problem,
+not a rules problem: a 55-wide spread entered at 28.87 that goes deep ITM fast
+carries so much drag that its intrinsic gains are unrealizable until expiry.
+The direction was right and there was no way to get paid for it intraday.
+
+
+179. A WIDTH CAP, PROPOSED AND MEASURED AWAY  (2026-09-17)
+--------------------------------------------------------------------------------
+
+From section 178 the obvious conclusion was a MAXIMUM ABSOLUTE WIDTH at entry:
+drag scales with width, the band (30-75% of width) constrains only the ratio,
+and 28.87/55 is a perfectly in-band structure that behaves badly. It was
+recommended out loud. Then measured, across 212 positions:
+
+    width      n   entry/w  best MARK  peak INTR   max drag
+    <= 3      24     52%       11%       20%       12% of width
+    3-6       56     55%       12%       28%       14%
+    6-15      42     58%       -1%       20%       22%
+    15-30     28     57%        8%       48%       32%   <- worst
+    > 30      62     52%       11%       33%       18%
+
+DRAG AS A SHARE OF WIDTH DOES NOT GROW WITH WIDTH. It peaks in the 15-30 band
+and is LOWER above 30. A maximum-width cap would have let the worst band
+through and blocked one that behaves better. "Drag scales with width" is true
+in absolute dollars and false as a fraction -- and the fraction is what the
+ceiling measures. Withdrawn.
+
+    Proposed from theory in the same breath as saying one observation is not
+    enough to act on. The measurement took one query against data already on
+    the box.
+
+WHAT THE TABLE DOES SAY, and it is the more useful finding: THE BEST MARK GAIN
+IS ABOUT 11% IN EVERY BAND, against peak intrinsic of 20-48%. Intraday
+realizability is structurally capped at roughly a quarter to a third of what
+intrinsic reaches, and width is not the lever.
+
+That points at the weekly book having NO MARK-BASED TARGET AT ALL --
+LATER_TARGET aims at 95% of width on intrinsic, a price that exists only at
+expiry. NOT DEPLOYED: "best mark" above is a hindsight maximum over each
+position's life, a live target at 11% would cap every winner that runs
+further, and the harness still cannot settle a weekly. Recorded as the
+remaining candidate, not as a change.

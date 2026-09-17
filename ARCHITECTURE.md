@@ -678,6 +678,35 @@ Measured and deliberately **off**: `ORPHAN_INTRINSIC_GIVEBACK_PCT` (monotonic �
 the less it fires the better) and `ORPHAN_OTM_STOP` (a coin flip, and it
 preempted the whole ladder, leaving zero stalls and zero stops).
 
+**Intraday realizability is capped, and width is not the lever** (§178–179).
+Across 212 positions the best mark gain a position ever offers averages **~11%
+in every width band**, against peak *intrinsic* of 20–48%:
+
+| width | n | best MARK | peak INTRINSIC | max drag |
+|---|---|---|---|---|
+| ≤3 | 24 | 11% | 20% | 12% of width |
+| 3–6 | 56 | 12% | 28% | 14% |
+| 6–15 | 42 | −1% | 20% | 22% |
+| 15–30 | 28 | 8% | 48% | **32%** |
+| >30 | 62 | 11% | 33% | 18% |
+
+A **maximum absolute width at entry** was proposed and **measured away**: drag
+as a *share* of width peaks in the 15–30 band and is lower above 30, so a cap
+would have admitted the worst band and blocked a better one. "Drag scales with
+width" is true in dollars and false as a fraction, and the fraction is what the
+ceiling measures.
+
+The live case: a SNDK 1570/1625 peaked at **+81.8% on intrinsic while its mark
+never passed +9.1%** — intrinsic gained 19.5 points, the mark 4.8, because spot
+was climbing *toward* the short strike where its extrinsic is maximal. Its
+realizable ceiling was **+$263**. Both rules declined correctly and logged why.
+
+Open candidate, **not deployed**: the weekly book has no mark-based target at
+all — `LATER_TARGET` aims at 95% of width on *intrinsic*, a price that exists
+only at expiry. "Best mark" above is a hindsight maximum, a live target at 11%
+would cap every winner that runs further, and the harness cannot settle a
+weekly.
+
 `scripts/exit_backtest.py [date] [symbol] | --all` replays every position
 against the engine's own logged marks, rotated logs included. **It now settles
 held 0DTE runs at their real value** — `scripts/expiry_closes.py` caches each

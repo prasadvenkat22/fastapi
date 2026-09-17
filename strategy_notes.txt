@@ -10797,3 +10797,56 @@ THE PROCEDURE THIS CHANGES. A change to one branch of a twelve-branch exit
 chain requires enumerating all twelve and stating which the change touches and
 which it deliberately does not. That reasoning was done informally for section
 162 and got TARGET wrong by assumption. As an explicit list it would not have.
+
+
+175. THE RETEST, AND WHAT IT CAN AND CANNOT COVER  (2026-09-17)
+--------------------------------------------------------------------------------
+
+exit_backtest was scoring a TARGET the engine now refuses, so the harness was
+modelling the bug rather than the fix. Drag-gated there too. 210 positions
+across 10 sessions:
+
+    running config (OTM off, gain8, drag15, stall 2min)   +9,529   <- best
+    same but stall 5 min                                  +6,870
+    same but stall 5 min + OTM on                         +6,418
+    same but gain floor 0                                 +1,038
+    same but NO drag guard                                -3,690
+    2026-09-16 morning config (no guards at all)          +3,186
+    no exits at all                                         -296
+
+    drag ceiling, all four profit branches   +10,108 against running without it
+    8% gain floor                             +5,380 against floor 0
+    2-minute stall                            +2,659 against 5 min
+
+On today's four positions alone the drag ceiling is worth +3,265 -- that figure
+IS the SNDK case, and it is the fix measured rather than argued.
+
+EIGHT OF THE SIXTEEN FIXES CANNOT BE TESTED BY THIS HARNESS AT ALL, and saying
+so matters more than the numbers above:
+
+    INTC aliases, RSS ticker news leg     entry-side; it replays exits only
+    dte0_trade macro-calendar gate        entry-side
+    RECONCILE false alarm                 log-only
+    Voyage retry loop, 71 tracebacks      log-only
+    _quotes_tradeable silent refusals     log-only
+    polygon/polygon+rss reader tie-break  verified by hand
+    weekly stall band split, 20min/20%    cannot settle a weekly
+    LATER_STOP -25, LATER_TARGET 0.95     cannot settle a weekly
+
+KNOWN, OPEN, DELIBERATE:
+
+    ORPHAN_HOLD_UNTIL still gates no take-profit
+    TARGET still ungated on zero_dte
+    the harness cannot settle a weekly -- needs the EXPIRY date's close
+    THE LOG PRINTS STRIKES AT %.0f, so NVDA 215/217.5 reads as "215/218" and
+      the harness computes width 3.0 where the engine used 2.5. It silently
+      skews the band, the drag ceiling and the settled intrinsic on every
+      half-strike position. The engine is right and the record of it is not.
+      Fixing it needs a log format change and then new data.
+    four credentials unrotated, Polygon in plaintext in the log on every call
+
+AND THE HONEST HEADLINE: every bug FOUND is fixed. That is not the same as no
+bugs. The TARGET gap sat live for a day inside code written and reasoned about
+explicitly the day before, and surfaced only because the operator asked why a
+position had sold. Sixteen defects in two days in one subsystem is a rate that
+says the subsystem is under-instrumented, not that the day went badly.

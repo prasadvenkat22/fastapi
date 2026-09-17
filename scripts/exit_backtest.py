@@ -178,7 +178,9 @@ def run(marks, target, stop, confirm, stall_min, giveback, otm_floor, otm_min,
             was_itm = True
         if peak is None or ret > peak:
             peak, peak_at = ret, t
-        if ret >= target:
+        _drag_ok_t = (drag_ceiling <= 0 or width <= 0
+                      or (iv - _val) <= width * drag_ceiling)
+        if ret >= target and _drag_ok_t:
             return "TARGET", ret, qty
         # THE UNDERLYING STOP, ahead of the mark stop because it is the
         # cleaner signal: the position is out of the money and the only way

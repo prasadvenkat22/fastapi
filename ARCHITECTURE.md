@@ -655,6 +655,17 @@ separate settings — they were briefly one rule by accident, see section 171.
 | flatten | 15:45 | none — runs to expiry | |
 | opening quiet | **09:35** | 09:35 | `ORPHAN_HOLD_UNTIL`; 09:30 is the bell, not a quiet period |
 
+**All four profit-taking branches are drag-gated** — `TARGET`, `LATER_TARGET`,
+`STALL`, `STALL_LATER`. `TARGET` was the one that was not, until 2026-09-17,
+when it sold a SNDK weekly at a 26.70 mark against 40.00 of intrinsic four
+minutes after the drag ceiling had refused the identical close twice (§174).
+A change to one branch of this chain means enumerating **all twelve** and
+stating which it touches and which it deliberately does not.
+
+**`ORPHAN_HOLD_UNTIL` gates six of the twelve** — `LATER_STOP`, `SLOW_STOP`,
+`OTM_STOP`, `STALL`, `STALL_LATER`, `GIVEBACK` — and **no take-profit path**.
+So the opening quiet period delays the loss side and the stalls only.
+
 **Three guards sit across both books:**
 
 | guard | setting | what it refuses |

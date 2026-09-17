@@ -651,7 +651,8 @@ separate settings — they were briefly one rule by accident, see section 171.
 | stall quiet | **2 min** | **20 min** | 2 measured better or equal on *every* session (§172) |
 | stall giveback | **15% of band** | **20% of band** | band = width − entry, fixed at entry |
 | stall arms at | any positive peak | **+5%** | a multi-day position may pause without being finished |
-| stop | **−35%**, 5 min confirm | **−25%**, 15 min | −10% was a 0.25-point QQQ move; it costs $16,299 over 9 sessions |
+| stop (fast) | **−35%**, 5 min confirm | **−25%**, 15 min | for a gap. −10% *touched* costs $16,299 over 9 sessions |
+| stop (slow) | **−10%, held 10 min** | none | for a grind. Measured best at **30 min** (+$357); 10 min is a judgement call worth ≈−$1,400 (§180) |
 | flatten | 15:45 | none — runs to expiry | |
 | opening quiet | **09:35** | 09:35 | `ORPHAN_HOLD_UNTIL`; 09:30 is the bell, not a quiet period |
 
@@ -671,6 +672,13 @@ So the opening quiet period delays the loss side and the stalls only.
 | guard | setting | what it refuses |
 |---|---|---|
 | `STOP_RESPECTS_INTRINSIC` | on | stopping a spread whose intrinsic exceeds entry — it pays at expiry |
+
+**The slow stop deliberately overrides `STOP_RESPECTS_INTRINSIC`** — with the
+guard applied it never fires at all. So the book holds both positions at once:
+the guard protects a spread whose mark is depressed by drag, and the slow stop
+closes one depressed for ten minutes. **The duration test is the only thing
+separating them.** Watch for it firing on a position whose intrinsic is above
+entry; if that starts costing money, the duration is the lever, not the level.
 | `STALL_MIN_GAIN_PCT` | **8%** on the mark | booking a gain not worth taking; removing it costs $5,380 |
 | `ORPHAN_MAX_DRAG_WIDTH` | **15% of width** | closing while forfeiting intrinsic; removing it costs $6,337 |
 

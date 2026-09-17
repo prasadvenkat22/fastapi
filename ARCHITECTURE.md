@@ -185,6 +185,7 @@ legs, asymmetric because the problem is:
 | leg | source | model |
 |---|---|---|
 | ticker | Polygon `insights.sentiment` **+ RSS headlines naming the symbol** | one hosted API |
+| analysis | `scripts/exit_backtest.py` + `expiry_closes.py` | none — stdlib, runs on the host |
 | macro | RSS → promo regex → **one Gemini call** | one hosted API |
 
 **The ticker leg gained an RSS half on 2026-09-16 (section 163).** Reuters
@@ -641,27 +642,49 @@ Exits are `orphans.py`'s job and are not duplicated here.
 `scripts/dte0_pick.py`. **Prints, never trades.** Each constraint was learned
 by losing money to its opposite in the week of 2026-09-08:
 
-**The 0DTE exit ladder, as deployed 2026-09-15** (sections 157–158):
+**The exit ladder, as deployed 2026-09-16** (sections 157–173). Two books,
+separate settings — they were briefly one rule by accident, see section 171.
 
-| rule | setting | note |
+| rule | 0DTE | weekly | note |
+|---|---|---|---|
+| target | **+30%** on the mark | **95% of width on INTRINSIC** | a level, so a sub-minute spike books nothing |
+| stall quiet | **2 min** | **20 min** | 2 measured better or equal on *every* session (§172) |
+| stall giveback | **15% of band** | **20% of band** | band = width − entry, fixed at entry |
+| stall arms at | any positive peak | **+5%** | a multi-day position may pause without being finished |
+| stop | **−35%**, 5 min confirm | **−25%**, 15 min | −10% was a 0.25-point QQQ move; it costs $16,299 over 9 sessions |
+| flatten | 15:45 | none — runs to expiry | |
+| opening quiet | **09:35** | 09:35 | `ORPHAN_HOLD_UNTIL`; 09:30 is the bell, not a quiet period |
+
+**Three guards sit across both books:**
+
+| guard | setting | what it refuses |
 |---|---|---|
-| target | **+30%** | a level, so a sub-minute spike through it books nothing |
-| stall | 20% giveback, **5 min** quiet | briefly 2, reverted — 2 books winners while they rest |
-| stop | **−35%**, **5 min** confirm | was −10%/0min; −10% was a 0.25-point QQQ move |
-| later stop | −10%, 15 min | weeklies, unchanged |
-| flatten | 15:45 | |
-| `STOP_RESPECTS_INTRINSIC` | on | stands the stop down while intrinsic exceeds entry |
+| `STOP_RESPECTS_INTRINSIC` | on | stopping a spread whose intrinsic exceeds entry — it pays at expiry |
+| `STALL_MIN_GAIN_PCT` | **8%** on the mark | booking a gain not worth taking; removing it costs $5,380 |
+| `ORPHAN_MAX_DRAG_WIDTH` | **15% of width** | closing while forfeiting intrinsic; removing it costs $6,337 |
 
-`scripts/exit_backtest.py <date> [symbol]` replays a session's positions against
-the engine's own logged marks, rotated logs included. Use it before moving any
-of these — the stall was changed on one trade's evidence and the replay
-reversed it the same evening.
+Measured and deliberately **off**: `ORPHAN_INTRINSIC_GIVEBACK_PCT` (monotonic —
+the less it fires the better) and `ORPHAN_OTM_STOP` (a coin flip, and it
+preempted the whole ladder, leaving zero stalls and zero stops).
 
-On 2026-09-15's six QQQ positions the deployed pair beat all six alternatives
-(−152 against −246 before), **and neither half works alone**: stop −35% with a
-2-minute wait gives −532, stop −25% with 5 minutes gives −472. A wider stop
-without the wait meets the same wicks further out; the wait without the width
-spends it on a level inside the noise.
+`scripts/exit_backtest.py [date] [symbol] | --all` replays every position
+against the engine's own logged marks, rotated logs included. **It now settles
+held 0DTE runs at their real value** — `scripts/expiry_closes.py` caches each
+session's close and 15:45 price, and a held run is scored at intrinsic at the
+*flatten*, since the engine never holds 0DTE to 16:00. Before that fix a rule
+that held more was punished for holding using data that did not exist, which
+reversed two conclusions in one evening (§169).
+
+**What it still cannot do**, and both matter when reading its output: it cannot
+settle a **weekly** (that needs the expiry date's close, which for an open
+position does not exist), so those stay truncated and held counts still vary
+across configurations — treat any difference under about $1,000 as noise. And
+it replays **exits only**: a trade never taken leaves no marks, so entry-side
+changes are invisible to it.
+
+Use it before moving any of these. Every setting above that carries a dollar
+figure was argued against 206 positions over 9 sessions; every one that does
+not is an operator judgement, and the weekly column is entirely the latter.
 
 It replays **exits only**. `ITM_GRINDER`, the ZONE tier and the engine-side stop
 confirmation change which trades are *taken* or sit on a path no position

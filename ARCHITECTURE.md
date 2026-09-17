@@ -654,7 +654,7 @@ separate settings — they were briefly one rule by accident, see section 171.
 | stop (fast) | **−35%**, 5 min confirm | **−25%**, 15 min | for a gap. −10% *touched* costs $16,299 over 9 sessions |
 | stop (slow) | **−10%, held 5 min** | none — `LATER_STOP` covers weeklies | for a grind. **Measured best at 30 min**; 5 min is a judgement call worth ≈**−$9,500** on 214 positions, firing 61× against 21× (§181) |
 | flatten | 15:45 | none — runs to expiry | |
-| opening quiet | **09:35** | 09:35 | `ORPHAN_HOLD_UNTIL`; 09:30 is the bell, not a quiet period |
+| opening quiet | **09:45** | 09:45 | `ORPHAN_HOLD_UNTIL`. Holds **10 of 12** branches; only `ACCOUNT_FLOOR` and `FORCE_CLOSE` can act before it (§182) |
 
 **All four profit-taking branches are drag-gated** — `TARGET`, `LATER_TARGET`,
 `STALL`, `STALL_LATER`. `TARGET` was the one that was not, until 2026-09-17,
@@ -663,9 +663,16 @@ minutes after the drag ceiling had refused the identical close twice (§174).
 A change to one branch of this chain means enumerating **all twelve** and
 stating which it touches and which it deliberately does not.
 
-**`ORPHAN_HOLD_UNTIL` gates six of the twelve** — `LATER_STOP`, `SLOW_STOP`,
-`OTM_STOP`, `STALL`, `STALL_LATER`, `GIVEBACK` — and **no take-profit path**.
-So the opening quiet period delays the loss side and the stalls only.
+**`ORPHAN_HOLD_UNTIL` now holds ten of the twelve.** Only `ACCOUNT_FLOOR`
+(account-level, outranks any single position) and `FORCE_CLOSE` (15:45 only)
+can act before it.
+
+Checking that requires reading each guard **where it is computed**, not the
+`elif` text: `SLOW_STOP`, `LATER_STOP` and `OTM_STOP` carry `past_hold` in
+their *clock*, and the 0DTE stop has its own branch that logs and holds —
+*"declines to trust a −25% mark printed into the opening spread at all."* Two
+separate audit scripts have now reported these as ungated by reading condition
+text alone (§174, §182).
 
 **Three guards sit across both books:**
 

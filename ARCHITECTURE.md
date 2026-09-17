@@ -652,7 +652,7 @@ separate settings — they were briefly one rule by accident, see section 171.
 | stall giveback | **15% of band** | **20% of band** | band = width − entry, fixed at entry |
 | stall arms at | any positive peak | **+5%** | a multi-day position may pause without being finished |
 | stop (fast) | **−35%**, 5 min confirm | **−25%**, 15 min | for a gap. −10% *touched* costs $16,299 over 9 sessions |
-| stop (slow) | **−10%, held 10 min** | none | for a grind. Measured best at **30 min** (+$357); 10 min is a judgement call worth ≈−$1,400 (§180) |
+| stop (slow) | **−10%, held 5 min** | none — `LATER_STOP` covers weeklies | for a grind. **Measured best at 30 min**; 5 min is a judgement call worth ≈**−$9,500** on 214 positions, firing 61× against 21× (§181) |
 | flatten | 15:45 | none — runs to expiry | |
 | opening quiet | **09:35** | 09:35 | `ORPHAN_HOLD_UNTIL`; 09:30 is the bell, not a quiet period |
 

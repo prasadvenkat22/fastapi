@@ -11179,3 +11179,51 @@ WHAT TO WATCH FOR: a SLOW_STOP firing at -10 to -15% on a structure that is
 worth more an hour later. The 61-against-21 fire count says most of the extra
 fires are exactly that. Two or three of those and the duration is the lever,
 not the level.
+
+
+182. THE OPENING HOLD AT 09:45, AND WHAT IT ACTUALLY COVERS  (2026-09-17)
+--------------------------------------------------------------------------------
+
+Asked to make sure nothing closes before 09:45. ORPHAN_HOLD_UNTIL 09:35 ->
+09:45, and then VERIFIED rather than asserted -- because the last time this
+question was answered the enumeration was right and the conclusion was not
+(section 174).
+
+TEN OF TWELVE BRANCHES ARE HELD. Only two can act before 09:45:
+
+    ACCOUNT_FLOOR  account-level; it has already decided the ACCOUNT is not
+                   working and outranks any judgement about one position
+    FORCE_CLOSE    only fires at 15:45, so irrelevant in the morning
+
+A TEXT AUDIT OF THE elif CONDITIONS REPORTED FOUR STOPS AS UNGATED AND WAS
+WRONG AGAIN. SLOW_STOP, LATER_STOP and OTM_STOP each carry past_hold in their
+CLOCK rather than in the branch:
+
+    1992  if ORPHAN_SLOW_STOP_PCT < 0 and zero_dte and past_hold:
+    1954  if (ORPHAN_LATER_STOP_PCT < 0 and not zero_dte and past_hold
+    1979  if (ORPHAN_OTM_STOP and not st["credit"] and past_hold
+
+and the 0DTE stop has its own branch that logs and holds:
+
+    2109  elif zero_dte and ret_pct <= stop_pct and not past_hold:
+          "declines to trust a -25% mark printed into the opening spread"
+
+    THAT IS THE SECOND TIME AN AUDIT SCRIPT HAS MISSED GUARDS THE SAME WAY THE
+    CODE DID -- once by reading a fixed window of lines, once by reading only
+    the elif. Checking the condition text is not checking the behaviour. The
+    reliable version reads each guard where it is actually computed.
+
+AND THE THING THAT MATTERS MORE THAN THE HOLD: BOTH OPEN POSITIONS EXPIRE
+TOMORROW, so at the open they stop being weeklies and become 0DTE.
+
+    SNDK 1605/1630 x1  entry 10.60  mark 11.50  +8.5%
+    MU    975/990 x1   entry  6.60  mark  6.25  -5.3%
+
+    today     weekly:  stop -25%/15min, no flatten
+    tomorrow  0DTE:    fast -35%/5min, SLOW -10%/5min, flatten 15:45
+
+A far tighter regime, and the five-minute slow stop now applies to both. MU is
+already -5.3%; a modest gap down puts it past -10% and the clock starts the
+moment the hold expires. The hold window DELAYS the decision, it does not
+avoid it -- and both get flattened at 15:45, which as weeklies they would not
+have been.

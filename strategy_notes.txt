@@ -10678,3 +10678,69 @@ A SECOND LOSSY THING FOUND ALONGSIDE: the ORPHAN line prints strikes with
 FROM THE LOG, so it computes width 3.0 where the engine used 2.5 -- skewing
 the band, the drag ceiling and the settled intrinsic on every half-strike
 position. The engine is right and the record of it is not.
+
+
+172. THE 0DTE STALL WAS TOO SLOW, AND THE MEASUREMENT SAID SO ON EVERY SESSION  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Raised from the tape: five minutes of quiet is too short for the 0DTE stall,
+make it 25. The instinct was right and the direction was backwards. With the
+harness now settling held 0DTE runs, this is measurable for the first time:
+
+    quiet  2 min    +3,209    20 stall fires
+    quiet 25 min    +1,014     5
+    quiet 10 min      +863     8
+    quiet 15 min      +852     6
+    quiet 40 min      +639     3
+    quiet  5 min      +551    12    <- what was deployed
+    stall OFF         +253     0
+
+25 IS an improvement on 5. Two is better than both, and the per-session view
+is what settles it rather than the total:
+
+    09-03  +7901  +7901  +7901     identical
+    09-04 +10124 +10124 +10124     identical
+    09-08  -1016  -1016  -1016     identical
+    09-09  +1147  +1147  +1147     identical
+    09-10  +2600  +2160  +2279     2min
+    09-11  -2732  -3803  -3692     2min
+    09-15     +1    -79    -79     2min
+    09-16  -7739  -8394  -8394     2min
+
+BETTER OR EQUAL ON EVERY SESSION, WORSE ON NONE. Four where the stall does not
+differentiate at all and four where two minutes wins. Monotone dominance is a
+far stronger result than any total, and nothing else measured today came close
+to it.
+
+THIS REVERSES SECTION 158, which chose 5 over 2 -- and whose own closing line
+was "the error was generalising from the ONE position where a short stall
+would have helped and not checking the one where it hurts". It then generalised
+from one position in the other direction: six positions, one session, a
+truncated harness. 206 positions with settlement say the opposite.
+
+    THE MECHANISM. On a same-day expiry a position that has peaked and is
+    giving back rarely recovers, because decay is working against it the whole
+    way. Acting fast preserves more than waiting does. Section 158's
+    counter-example -- a spread that sat flat six minutes then ran to target --
+    is real and is simply rarer than the cases that fade.
+
+Deployed at 2. THE WEEKLY STALL IS UNTOUCHED at the 20 minutes set separately;
+the two are different variables and, since section 171, different rules again.
+
+
+173. AN OPENING QUIET PERIOD THAT ALREADY EXISTED  (2026-09-16)
+--------------------------------------------------------------------------------
+
+Asked to start watching SNDK at 09:35 rather than 09:30, because the open is
+chaotic. ORPHAN_HOLD_UNTIL was built for exactly that and was already set to
+09:30 -- which is no quiet period at all, since that IS the bell.
+
+Moved to 09:35. It gates the stop, the slow stop, the giveback and both
+stalls, and the reason is in the code beside it: the engine "declines to trust
+a -25% mark printed into the opening spread at all". A one-variable change
+that needed no new rule, found by reading before building -- which is not how
+most of this day went.
+
+    Fails OPEN on a bad value. An unparseable time leaves the rules working
+    rather than silently disabling two exits for a session, which is the right
+    direction for a guard whose failure nobody would notice.

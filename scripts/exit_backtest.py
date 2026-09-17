@@ -124,6 +124,13 @@ CONFIGS = [
     ("GB    LIVE + intrinsic giveback 15%     ", 30, -35, 5, 5, 20, 0.0, 0, False, 15.0),
     ("GB    LIVE + intrinsic giveback 20%     ", 30, -35, 5, 5, 20, 0.0, 0, False, 20.0),
     ("GB    LIVE + intrinsic giveback 30%     ", 30, -35, 5, 5, 20, 0.0, 0, False, 30.0),
+    ("SM    LIVE, stall quiet  2 min          ", 30, -35, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
+    ("SM    LIVE, stall quiet  5 min  <-now    ", 30, -35, 5, 5, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
+    ("SM    LIVE, stall quiet 10 min          ", 30, -35, 5, 10, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
+    ("SM    LIVE, stall quiet 15 min          ", 30, -35, 5, 15, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
+    ("SM    LIVE, stall quiet 25 min          ", 30, -35, 5, 25, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
+    ("SM    LIVE, stall quiet 40 min          ", 30, -35, 5, 40, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
+    ("SM    LIVE, stall OFF                   ", 30, -35, 5, 9999, 20, 0.0, -1, False, 0.0, 8.0, 0.15),
     ("      no exits, ride to the last mark   ", 999, -999, 0, 999, 999, 0.0, -1),
 ]
 

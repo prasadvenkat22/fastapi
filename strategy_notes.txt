@@ -11227,3 +11227,71 @@ already -5.3%; a modest gap down puts it past -10% and the clock starts the
 moment the hold expires. The hold window DELAYS the decision, it does not
 avoid it -- and both get flattened at 15:45, which as weeklies they would not
 have been.
+
+
+183. THE FAST STOP WAS DEAD CODE, AND THERE IS NO STOP ORDER AT THE BROKER  (2026-09-17)
+--------------------------------------------------------------------------------
+
+Asked whether -35%/5min is still needed now that the slow stop is -10%/5min.
+It was not. It could not fire at all.
+
+    slow -10%/5min + fast -15%/5min    -4,187   P0
+    slow -10%/5min + fast -20%/5min    -4,187   P0
+    slow -10%/5min + fast -35%/5min    -4,187   P0
+    slow -10%/5min, NO fast stop       -4,187   P0
+
+Four identical totals and identical fire mixes across 221 positions. THE FAST
+STOP'S LEVEL IS IRRELEVANT while the slow stop sits at a tighter level on the
+same clock -- a position crosses -10% before it reaches -15% or -35%, the slow
+clock completes first, and the fast branch never evaluates true.
+
+    IT IS ALSO A STRICT SUBSET, not a parallel rule. The fast stop RESPECTS
+    intrinsic_ok and the slow stop ignores it, so the fast stop fires only
+    where the slow stop already would have, under an extra condition.
+
+THE PAIRING WAS DESIGNED WITH DIFFERENT DURATIONS and that is the whole point:
+
+    fast   wide level, short clock    catches a GAP
+    slow   tight level, long clock    catches a GRIND
+
+    slow -10%/30min, NO fast stop     +2,062   W25 P0
+    slow -10%/30min + fast -35%/5min  +5,857   W21 P8   <- fast wakes up, +3,795
+    NO slow, fast -35%/5min only      +5,508        P14
+    slow -10%/5min  + fast (any)      -4,187   W61 P0   <- deployed
+
+Setting both to five minutes collapsed two rules into one and lost the gap
+coverage. That is not a tuning choice anyone made; it is a consequence nobody
+noticed until the question was asked.
+
+DEPLOYED -15%/5min for the fast stop at the operator's instruction, as
+insurance against the slow stop's code path failing. Measurably it changes
+nothing -- the harness models both rules working, so it cannot evaluate that
+motivation -- but the two use separate paths (slow_held vs stop_confirmed) and
+a bug in one need not hit the other. Recorded as insurance, not as a measured
+improvement.
+
+    THE TWO SETTINGS ARE NOW COUPLED. If the slow stop is ever disabled or its
+    duration raised, -15%/5min becomes the PRIMARY stop -- four times tighter
+    than anything that measured well, and near the level the original sweep
+    found catastrophic ("-10% touched costs 12,559"). Anyone setting
+    TRADING_ORPHAN_SLOW_STOP_PCT=0 must put TRADING_ORPHAN_STOP_PCT back to
+    -35 in the same change.
+
+AND THE ANSWER TO "does this act as a stop loss order": NO, AND IT IS WORTH
+KNOWING. Every exit is a LIMIT order submitted at the moment a rule fires:
+
+    payload = {"class": "multileg", "type": "credit"|"debit",
+               "price": f"{abs(limit_price):.2f}", ...}
+
+There is no `stop` order type anywhere in tradier_orders.py and nothing rests
+at the broker. What exists is a SIXTY-SECOND POLL plus a limit order:
+
+    between cycles     nothing is watching
+    engine down        nothing is watching
+    overnight          nothing is watching
+    a gap through the level   caught at the next poll, at whatever price exists
+    the order itself   a LIMIT, which can fail to fill if the market runs
+
+That is why a stop quoted at -70 filled at -165: the rule saw a level, a clock
+ran, and an order went out. It is not a resting stop and should not be relied
+on as one.

@@ -728,6 +728,21 @@ ORPHAN_FORCE_CLOSE = os.getenv("TRADING_ORPHAN_FORCE_CLOSE", "15:45").strip()
 # gate accepts up to the full debit on a genuine gap in exchange for not
 # booking losses into an opening spread that reverses. On 0DTE a 2% adverse
 # move frequently does not come back, and nothing here pretends otherwise.
+# WHAT IT COVERS, stated because the answer was got wrong once. It gates every
+# rule that makes a JUDGEMENT ABOUT VALUE off a mark that the opening spread
+# has not settled yet:
+#
+#   the 0DTE stop, the slow stop, the later stop, the OTM stop
+#   both stalls, the intrinsic giveback
+#   TARGET, LATER_TARGET and the ceiling      <- added 2026-09-17
+#
+# NOT the force close, which is about assignment and where time beats
+# everything, and not the account floor, which has already decided the account
+# is not working and outranks any judgement about one position.
+#
+# It previously covered six of twelve branches and NO take-profit at all, so
+# "start watching at 09:35" delayed the loss side and left the profit side
+# firing into the bell. A SNDK weekly sold on TARGET at 09:31 (section 174).
 ORPHAN_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_HOLD_UNTIL", "").strip()
 
 # THE SLOW STOP: A LEVEL THAT HAS TO HOLD, NOT A LEVEL THAT IS TOUCHED.
@@ -1213,7 +1228,7 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
                     # missing HERE is absent from the order window AND the
                     # position list, which is a stranger problem than a short
                     # window and needs to be visible as such.
-                    "ORPHAN inferred pair %s %.0f/%.0f: no fill price for %s "
+                    "ORPHAN inferred pair %s %g/%g: no fill price for %s "
                     "(absent from the order window AND from cost basis) — "
                     "skipped, since a return without a true entry is not a "
                     "number worth acting on.",
@@ -1555,7 +1570,7 @@ def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
             _held = {p.get("symbol") for p in (tradier_orders.open_positions() or [])}
             if _held and not ({st["long"], st["short"]} & _held):
                 logger.warning(
-                    "ORPHAN %s %.0f/%.0f: the broker holds neither leg — not "
+                    "ORPHAN %s %g/%g: the broker holds neither leg — not "
                     "sending a close. Reconstruction says open, the account "
                     "says otherwise.",
                     st["root"], st["long_strike"], st["short_strike"])
@@ -1583,7 +1598,7 @@ def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
         suppressed = str((res or {}).get("status") or "").lower() == "suppressed"
         logger.log(
             logging.WARNING if suppressed else logging.INFO,
-            "ORPHAN %s: %s %s %.0f/%.0f x%d — %s",
+            "ORPHAN %s: %s %s %g/%g x%d — %s",
             reason, "NOT closing (orders suppressed)" if suppressed else "closing",
             st["root"], st["long_strike"], st["short_strike"], st["qty"], res)
         return _fill_value((res or {}).get("id"))
@@ -1649,7 +1664,7 @@ def _book(st: dict, value: float, ret_pct: float, reason: str,
                 opened_at=st.get("opened"),
             ))
             db.commit()
-            logger.info("ORPHAN booked to history: %s %.0f/%.0f x%d %+.2f (%s)",
+            logger.info("ORPHAN booked to history: %s %g/%g x%d %+.2f (%s)",
                         st["root"], st["long_strike"], st["short_strike"],
                         n, pnl, reason)
         finally:
@@ -1897,7 +1912,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             giveback_held = gb_now and gb_held_min >= ORPHAN_GIVEBACK_CONFIRM_MIN
             if gb_now and not giveback_held:
                 logger.info(
-                    "ORPHAN %s %.0f/%.0f has given back %.2f of intrinsic (needs %.2f) "
+                    "ORPHAN %s %g/%g has given back %.2f of intrinsic (needs %.2f) "
                     "but only for %.1f min of the %.0f required — waiting to see if it "
                     "is a reversal or a wobble.",
                     st["root"], st["long_strike"], st["short_strike"],
@@ -1923,7 +1938,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                     stop_confirmed = held >= ORPHAN_STOP_CONFIRM_MINUTES
                     if not stop_confirmed:
                         logger.info(
-                            "ORPHAN %s %.0f/%.0f is %+.1f%%, past the %+.0f%% stop, "
+                            "ORPHAN %s %g/%g is %+.1f%%, past the %+.0f%% stop, "
                             "but only for %.1f of the %.0f minutes needed to confirm.",
                             st["root"], st["long_strike"], st["short_strike"],
                             ret_pct, stop_pct, held, ORPHAN_STOP_CONFIRM_MINUTES,
@@ -1945,7 +1960,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                     later_stop_held = _lheld >= ORPHAN_LATER_STOP_MINUTES
                     if not later_stop_held:
                         logger.info(
-                            "ORPHAN %s %.0f/%.0f has been %+.1f%% for %.0f of the %.0f "
+                            "ORPHAN %s %g/%g has been %+.1f%% for %.0f of the %.0f "
                             "minutes the later-expiry stop needs — watching. It "
                             "expires %s, so there is time for this to be noise.",
                             st["root"], st["long_strike"], st["short_strike"],
@@ -1982,7 +1997,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                     slow_held = held >= ORPHAN_SLOW_STOP_MINUTES
                     if not slow_held:
                         logger.info(
-                            "ORPHAN %s %.0f/%.0f has been %+.1f%% for %.0f of the %.0f "
+                            "ORPHAN %s %g/%g has been %+.1f%% for %.0f of the %.0f "
                             "minutes the slow stop needs — watching.",
                             st["root"], st["long_strike"], st["short_strike"],
                             ret_pct, held, ORPHAN_SLOW_STOP_MINUTES,
@@ -2039,7 +2054,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             if (stall_armed or stall_later_armed) and not books_a_gain:
                 if _gain_abs <= 0:
                     logger.info(
-                        "ORPHAN %s %.0f/%.0f gave back to %+.1f%% from a "
+                        "ORPHAN %s %g/%g gave back to %+.1f%% from a "
                         "%+.1f%% peak, but the mark is %.2f against a %.2f "
                         "entry — closing books a LOSS of %+.1f%%, and the "
                         "stall does not realise losses. That is the stop's "
@@ -2049,7 +2064,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                     )
                 else:
                     logger.info(
-                        "ORPHAN %s %.0f/%.0f gave back to %+.1f%% from a "
+                        "ORPHAN %s %g/%g gave back to %+.1f%% from a "
                         "%+.1f%% peak, but closing at %.2f books only "
                         "%+.1f%% — under the %.0f%% floor, so it is not worth "
                         "taking and the position runs on to the stop or the "
@@ -2064,7 +2079,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             if drag_blocks and (later_target_hit or stall_later_ready
                                 or stall_ready):
                 logger.info(
-                    "ORPHAN %s %.0f/%.0f would close on %s at %.2f, but "
+                    "ORPHAN %s %g/%g would close on %s at %.2f, but "
                     "intrinsic is %.2f — closing now forfeits %.2f, which is "
                     "%.0f%% of the %.0f width and above the %.0f%% ceiling. It "
                     "expires %s and extrinsic goes to zero by then, so it "
@@ -2078,7 +2093,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 )
 
             reason = None
-            if later_target_hit and not drag_blocks:
+            if later_target_hit and not drag_blocks and past_hold:
                 reason = "LATER_TARGET"
             elif floor_breached:
                 # Ahead of every other rule, and deliberately blind to expiry,
@@ -2097,7 +2112,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # that still pays at expiry; this one declines to trust a
                 # -25% mark printed into the opening spread at all.
                 logger.info(
-                    "ORPHAN %s %.0f/%.0f is %+.1f%% on the mark but it is before "
+                    "ORPHAN %s %g/%g is %+.1f%% on the mark but it is before "
                     "%s — holding through the opening spread rather than booking "
                     "a loss on it.",
                     st["root"], st["long_strike"], st["short_strike"], ret_pct,
@@ -2105,7 +2120,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 )
             elif zero_dte and ret_pct <= stop_pct and intrinsic_ok:
                 logger.info(
-                    "ORPHAN %s %.0f/%.0f is %+.1f%% on the mark but holds %.2f of "
+                    "ORPHAN %s %g/%g is %+.1f%% on the mark but holds %.2f of "
                     "intrinsic against a %.2f entry — NOT stopping out a position "
                     "that pays at expiry. The gap is time premium on the short leg.",
                     st["root"], st["long_strike"], st["short_strike"], ret_pct,
@@ -2127,7 +2142,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 reason = "FORCE_CLOSE"
             elif (ORPHAN_TARGET_RETURN_PCT > 0
                   and ret_pct >= ORPHAN_TARGET_RETURN_PCT
-                  and not drag_blocks):
+                  and not drag_blocks and past_hold):
                 # Return on cost, not a fraction of max profit. See the knob.
                 #
                 # DRAG-GATED SINCE 2026-09-17, and it is the only rule in this
@@ -2158,9 +2173,16 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # cannot settle a weekly. Left as they are rather than changed
                 # on the same single observation.
                 reason = "TARGET"
-            elif ceiling is not None and ret_pct >= ceiling:
+            elif (ceiling is not None and ret_pct >= ceiling
+                  and not drag_blocks and past_hold):
+                # GATED WITH THE REST OF THE PROFIT BRANCHES, 2026-09-17, even
+                # though ORPHAN_CEILING_FRACTION is 0 and this cannot fire.
+                # It is the same shape as the TARGET bug in section 174 and it
+                # was waiting for someone to turn a knob. "Every branch that
+                # takes profit is drag-gated" has to be an invariant of the
+                # chain, not a property of which settings happen to be zero.
                 reason = "CEILING"
-            elif zero_dte and past_hold and giveback_held:
+            elif zero_dte and past_hold and giveback_held and not drag_blocks:
                 # See ORPHAN_INTRINSIC_GIVEBACK. No books_a_gain test here on
                 # purpose -- this rule exists precisely for the case where the
                 # mark is under water and the expiry value is walking away.
@@ -2194,7 +2216,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             in_flight = bool(working & {st["long"], st["short"]})
             if in_flight and reason:
                 logger.info(
-                    "ORPHAN %s %.0f/%.0f wants %s but an order is already working "
+                    "ORPHAN %s %g/%g wants %s but an order is already working "
                     "on its legs — standing down rather than selling it twice.",
                     st["root"], st["long_strike"], st["short_strike"], reason,
                 )
@@ -2275,7 +2297,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 intr, extr = parts_iv
                 iv_note = "  [intrinsic %.2f, extrinsic %+.2f]" % (intr, extr)
             logger.info(
-                "ORPHAN %s %s %.0f/%.0f x%d %s: entry %.2f value %.2f %+.1f%% "
+                "ORPHAN %s %s %g/%g x%d %s: entry %.2f value %.2f %+.1f%% "
                 "(peak %+.1f%%, %.0f min ago) — %s%s",
                 st["root"], st["right"], st["long_strike"], st["short_strike"],
                 st["qty"], "credit" if st["credit"] else "debit",
@@ -2306,7 +2328,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                         # the peak, shrink the cache, and let the next pass see
                         # what is left rather than treating it as finished.
                         logger.warning(
-                            "ORPHAN partial close: %d of %d %s %.0f/%.0f filled — "
+                            "ORPHAN partial close: %d of %d %s %g/%g filled — "
                             "%d contracts remain.", filled_qty, st["qty"], st["root"],
                             st["long_strike"], st["short_strike"], st["qty"] - filled_qty)
                         rec_s = state["structures"].get(key)

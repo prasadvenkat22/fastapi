@@ -10850,3 +10850,66 @@ bugs. The TARGET gap sat live for a day inside code written and reasoned about
 explicitly the day before, and surfaced only because the operator asked why a
 position had sold. Sixteen defects in two days in one subsystem is a rate that
 says the subsystem is under-instrumented, not that the day went badly.
+
+
+176. THE INVARIANT, INSTEAD OF ANOTHER PATCH  (2026-09-17)
+--------------------------------------------------------------------------------
+
+After section 174 the procedure was stated: a change to one branch of a
+twelve-branch chain means enumerating ALL TWELVE. Done properly for the first
+time -- parsing each `elif` condition rather than a fixed window of lines, and
+resolving the hoisted readiness variables -- it found TWO MORE unguarded
+profit branches:
+
+    LATER_TARGET   drag YES
+    TARGET         drag YES   <- fixed that morning
+    STALL          drag YES
+    STALL_LATER    drag YES
+    CEILING        drag  -    <- unguarded
+    GIVEBACK       drag  -    <- unguarded
+
+Both were latent: ORPHAN_CEILING_FRACTION and ORPHAN_INTRINSIC_GIVEBACK_PCT
+are both 0, so neither could fire. They were the TARGET bug waiting for
+someone to turn a knob.
+
+    AN EARLIER ATTEMPT AT THIS AUDIT REPORTED THE WRONG ANSWER and was nearly
+    believed. It read a fixed 14-line window backwards from each `reason = `
+    line, so it picked up `past_hold` and `zero_dte` from the branches ABOVE
+    and reported TARGET as gated on both when it was gated on neither. A tool
+    built to check for missed guards missed them the same way the code did.
+    The version that works parses the condition.
+
+THREE THINGS FIXED, AND THE FIRST IS THE ONLY ONE THAT MATTERS:
+
+  1. EVERY BRANCH THAT TAKES PROFIT IS NOW DRAG-GATED AND HOLD-GATED, and
+     that is asserted by re-running the enumeration rather than by reading.
+     "Every profit branch is guarded" is now an invariant of the chain instead
+     of a property of which settings happen to be zero.
+
+  2. ORPHAN_HOLD_UNTIL NOW COVERS THE TAKE-PROFITS. It gated six of twelve and
+     no profit path, so "start watching at 09:35" delayed the loss side and
+     left the profit side firing into the bell -- which is how the SNDK weekly
+     sold at 09:31. What it covers is now written beside the knob, because the
+     answer was got wrong once by listing the gated rules correctly and then
+     asserting the opposite in the next sentence.
+
+  3. STRIKES LOG LOSSLESSLY. Sixteen format strings used %.0f, so NVDA
+     215/217.5 printed as "215/218" -- and exit_backtest parses strikes FROM
+     THE LOG, computing width 3.0 where the engine used 2.5. It silently
+     skewed the band, the drag ceiling and the settled intrinsic on every
+     half-strike spread. %g keeps 217.5 and still prints 218 as "218", so the
+     common case is unchanged and the lossy one stops lying.
+
+WHAT REMAINS OPEN, and it is now a short list:
+
+    TARGET is still ungated on zero_dte, so the 0DTE target applies to
+      weeklies alongside LATER_TARGET. Arguable, unmeasurable while the
+      harness cannot settle a weekly.
+    The harness cannot settle a weekly. Structural; needs the expiry date's
+      close, which for an open position does not exist.
+    Four credentials unrotated, Polygon in plaintext in the log on every call.
+
+SIXTEEN DEFECTS IN TWO DAYS IN ONE SUBSYSTEM says the subsystem was
+under-instrumented, not that the days went badly. The instrumentation added --
+settled backtests, logged suppressions, named refusals, and an enumeration
+that can be re-run -- is worth more than any of the individual fixes.

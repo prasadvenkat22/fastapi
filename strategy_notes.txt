@@ -10913,3 +10913,54 @@ SIXTEEN DEFECTS IN TWO DAYS IN ONE SUBSYSTEM says the subsystem was
 under-instrumented, not that the days went badly. The instrumentation added --
 settled backtests, logged suppressions, named refusals, and an enumeration
 that can be re-run -- is worth more than any of the individual fixes.
+
+
+177. THE DASHBOARD WAS REPORTING RULES THAT COULD NOT FIRE  (2026-09-17)
+--------------------------------------------------------------------------------
+
+Asked whether an endpoint shows the ladder state per position. GET
+/trading/positions does, and it was wrong about three things:
+
+                        reported            actually governed
+    SNDK weekly
+      stop              null                -25% / 15 min
+      stall giveback    40.0                 9.1 points
+      note              "stop and force      LATER_STOP has existed since
+                         close are 0DTE"     2026-09-09
+    QQQ 0DTE
+      stall giveback    20.0                12.3 points
+
+BOTH GIVEBACK FIGURES WERE THE DEAD FLAT PERCENTS that
+ORPHAN_STALL_GIVEBACK_BAND overrides -- the same dead config that prompted
+section 171. The endpoint read the knob; the engine calls
+_giveback_points(). A value computed twice drifts, which is section 131's
+lesson, and this one already had.
+
+    The model's own docstring warned against exactly this: "a field that names
+    a rule which cannot fire is worse than no field." It then shipped four.
+
+AND FOUR RULES WERE NOT REPORTED AT ALL: the stall quiet period, the gain
+floor, the drag ceiling and the hold window. Three are the guards added in the
+preceding two days, and THE DRAG CEILING IS THE ONE THAT DECIDES WHETHER A
+PROFITABLE EXIT IS ALLOWED -- it is what held the SNDK weekly open, and the
+dashboard could not say so. The question "why is this position still open"
+was unanswerable from the endpoint built to answer it.
+
+FIXED: every ladder field is now asked of the same function the engine asks,
+never read off a setting, and the response carries stop_confirm_minutes,
+stall_giveback_points, stall_quiet_minutes, stall_min_gain_pct, drag_ceiling,
+drag_now, drag_blocks, hold_until and past_hold. stall_giveback_pct is kept so
+an existing reader does not break, populated from the real threshold rather
+than the dead knob.
+
+    Read-only, as it was. Nothing here places, closes or modifies anything --
+    the exit rules run in the cycle, not in a request handler, and a dashboard
+    that can trade is a dashboard that will.
+
+WHAT THIS IS AN INSTANCE OF. Four of the last five defects were the same
+shape: a second place in the codebase that restates what a rule is instead of
+asking. The drag ceiling wired into three branches and not the fourth, the
+band that silently overrode two callers, the harness that modelled the old
+TARGET, and now an endpoint reading knobs. The fix is always the same -- one
+function, called from everywhere -- and it is worth reaching for before the
+next feature rather than after the next bug.

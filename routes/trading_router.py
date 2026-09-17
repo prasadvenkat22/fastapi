@@ -170,14 +170,32 @@ async def get_broker_positions():
         managed = (orphans.MANAGE_ORPHANS
                    and (not orphans.MANAGE_UNDERLYING
                         or st["root"] in orphans.MANAGE_UNDERLYING))
-        # Say which stall governs this one rather than printing both, for the
-        # same reason the log line was fixed: a field that names a rule which
-        # cannot fire is worse than no field.
+        # ASK THE ENGINE'S OWN FUNCTION, never a raw setting. Reading the knob
+        # reported 40.0 on a weekly whose real threshold was 9.1 points, and
+        # 20.0 on a 0DTE whose real one was 12.3 -- both the flat fallbacks
+        # that ORPHAN_STALL_GIVEBACK_BAND overrides. Section 131 again: a value
+        # computed twice drifts.
+        width = abs(st["short_strike"] - st["long_strike"])
         if zero_dte:
-            giveback, armed = orphans.STALL_GIVEBACK_PCT, (peak or 0) > 0
+            band = orphans.ORPHAN_STALL_GIVEBACK_BAND
+            flat = orphans.STALL_GIVEBACK_PCT
+            quiet_needed = orphans.STALL_MINUTES
+            armed = (peak or 0) > 0
         else:
-            giveback = orphans.ORPHAN_LATER_STALL_GIVEBACK_PCT
+            band = orphans.ORPHAN_LATER_STALL_GIVEBACK_BAND
+            flat = None
+            quiet_needed = orphans.ORPHAN_LATER_STALL_MINUTES
             armed = peak is not None and peak >= orphans.ORPHAN_LATER_STALL_ARM_PCT
+        giveback = orphans._giveback_points(
+            st["root"], entry, peak or 0.0, flat, width, band)
+
+        # The drag ceiling decides whether a PROFITABLE exit is allowed at all,
+        # and it was the missing field: it is what held this position open.
+        drag_ceiling = width * orphans.ORPHAN_MAX_DRAG_WIDTH
+        iv_now = (orphans._decompose(st, value) or (None, None))[0] if value is not None else None
+        drag_now = round(iv_now - value, 4) if (iv_now is not None and value is not None) else None
+        drag_blocks = (orphans.ORPHAN_MAX_DRAG_WIDTH > 0 and drag_now is not None
+                       and width > 0 and drag_now > drag_ceiling)
 
         out.append(BrokerPosition(
             underlying=st["root"], right=st["right"],
@@ -193,15 +211,30 @@ async def get_broker_positions():
             peak_pct=round(peak, 2) if peak is not None else None,
             minutes_since_peak=quiet,
             ceiling_value=round(ceiling_value, 2) if ceiling_value else None,
+            # A WEEKLY HAS A STOP. The old version returned null here and a
+            # note saying the stop was 0DTE-only, which was true before
+            # ORPHAN_LATER_STOP_PCT existed and has been wrong since.
             stop_pct=((orphans.ORPHAN_CREDIT_STOP_PCT if st["credit"]
-                       else orphans.ORPHAN_STOP_PCT) if zero_dte else None),
-            stall_giveback_pct=giveback,
+                       else orphans.ORPHAN_STOP_PCT) if zero_dte
+                      else (orphans.ORPHAN_LATER_STOP_PCT
+                            if orphans.ORPHAN_LATER_STOP_PCT < 0 else None)),
+            stop_confirm_minutes=(orphans.ORPHAN_STOP_CONFIRM_MINUTES if zero_dte
+                                  else orphans.ORPHAN_LATER_STOP_MINUTES),
+            stall_giveback_points=round(giveback, 2),
+            stall_giveback_pct=round(giveback, 2),
+            stall_quiet_minutes=quiet_needed,
             stall_armed=armed,
+            stall_min_gain_pct=orphans.STALL_MIN_GAIN_PCT,
+            drag_ceiling=round(drag_ceiling, 2),
+            drag_now=drag_now,
+            drag_blocks=drag_blocks,
+            hold_until=orphans.ORPHAN_HOLD_UNTIL or None,
+            past_hold=orphans._past_hold_until(),
             expires_today=today,
             managed=managed,
             quote_tradeable=orphans._quotes_tradeable(
                 tradier_orders.quotes([st["long"], st["short"]]), st),
-            note=None if zero_dte else "ceiling and stall only; stop and force close are 0DTE rules",
+            note=None if zero_dte else "no 15:45 flatten; runs to expiry",
         ))
 
     return BrokerPositionsResponse(

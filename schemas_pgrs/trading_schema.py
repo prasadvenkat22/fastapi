@@ -74,9 +74,34 @@ class BrokerPosition(BaseModel):
     peak_pct: Optional[float] = None
     minutes_since_peak: Optional[float] = None
     ceiling_value: Optional[float] = None
+
+    # THE EXIT LADDER AS IT APPLIES TO *THIS* STRUCTURE.
+    #
+    # Every value below is asked of the same function the engine asks, never
+    # read off a raw setting. The first version read the knobs directly and
+    # went stale the moment the giveback moved from a flat percent to a share
+    # of the band: it reported 40.0 on a weekly whose real threshold was 9.1
+    # points, and null for the stop on a weekly that has one at -25%/15min.
+    # That is the failure this model's own docstring warns about -- a field
+    # naming a rule that cannot fire -- and it is section 131's lesson again:
+    # a value computed twice drifts, and this one already had.
     stop_pct: Optional[float] = None        # null when the rule does not apply
-    stall_giveback_pct: Optional[float] = None
+    stop_confirm_minutes: Optional[float] = None
+    stall_giveback_points: Optional[float] = None   # points of RETURN, not a knob
+    stall_quiet_minutes: Optional[float] = None
     stall_armed: Optional[bool] = None
+    stall_min_gain_pct: Optional[float] = None      # the mark must book this much
+    drag_ceiling: Optional[float] = None            # dollars of intrinsic, this structure
+    drag_now: Optional[float] = None                # intrinsic - mark, right now
+    drag_blocks: Optional[bool] = None              # is a profitable exit refused?
+    hold_until: Optional[str] = None                # no rule acts before this
+    past_hold: Optional[bool] = None
+
+    # Deprecated: the flat percent the band overrides. Kept so an existing
+    # reader does not break, and populated from the real threshold rather than
+    # the dead knob.
+    stall_giveback_pct: Optional[float] = None
+
     expires_today: bool
     managed: bool
     quote_tradeable: Optional[bool] = None

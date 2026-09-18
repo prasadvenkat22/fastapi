@@ -1173,6 +1173,18 @@ def _rolled_net(orders: list, lsym: str, ssym: str, qty: int) -> "float | None":
         for key, rec in (_load().get("structures") or {}).items():
             if key == me:
                 continue
+            # ONLY A GENUINE PRIMARY MAY SEED THE WALK. A cached pair with a
+            # real `opened` timestamp is an actual fill the order window has
+            # aged out of -- the overnight case this exists for. One with
+            # opened=None is a SUMMARY this walk itself wrote back (inferred
+            # or roll-corrected), and it already contains the earlier flows.
+            # Seeding from it counts them twice: on the second roll of SNDK
+            # 1605 the walk added the original 10.60, roll one 36.30, AND the
+            # cached 46.90 that was the sum of those two -- 113.70 against a
+            # true 66.80, turning a +33% position into a -21% one with the
+            # slow-stop clock running on it.
+            if not rec.get("opened"):
+                continue
             syms = set(key.split("|"))
             if syms & frontier and rec.get("net") is not None:
                 used.append({"id": "cache:" + key, "legs": [{"symbol": x} for x in syms],

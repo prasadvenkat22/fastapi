@@ -11560,3 +11560,57 @@ would take first: "a few hundred labelled days."
     weekly_shadow table has no `created_at` or `variant` column -- it is
     `opened_at` and `strategy` -- so two queries written from assumption failed
     before one written from information_schema succeeded.
+
+
+189. THE ROLL FIX DOUBLE-COUNTED ON THE SECOND ROLL  (2026-09-18)
+--------------------------------------------------------------------------------
+
+Section 186's roll-aware basis worked for one roll. The operator rolled the
+same spread again -- 1680 to 1710, a 19.90 debit -- and it broke in the other
+direction:
+
+    true basis   10.60 + 36.30 + 19.90 = 66.80      bell +3,820
+    engine said  113.70                              bell   -870
+
+WHY. The walk seeds from cached structures so an overnight open the order
+window has aged out of can still be counted. The cache held THREE pairs
+sharing the 1605 long: the genuine original (1605|1630, net 10.60, a real
+fill timestamp), and two SUMMARIES the walk itself had written back --
+1605|1680 at 46.90 and 1605|1710 at 113.70, both opened=None. Seeding from
+1605|1680 added the 10.60 and the 36.30 a second time: 10.60 + 46.90 + 36.30
++ 19.90 = 113.70. A summary is not a cash flow.
+
+AND IT HAD THE SLOW-STOP CLOCK RUNNING ON A WINNER. At a 113.70 basis the
+89.30 mark reads -21.5%:
+
+    15:04:42  SNDK 1605/1710 has been -21.7% for 2 of the 30 minutes the
+              slow stop needs -- watching.
+
+The slow stop ignores the intrinsic guard by design (section 180). Twenty-eight
+minutes later it would have sold a spread worth 3,820 at the bell for about
+2,250 and booked the exit as a STOP_LOSS. Caught with 25 minutes to spare
+because the operator changed the spread and asked for it to be watched.
+
+FIXED, one condition: a cached pair may seed the walk ONLY if it carries a
+real `opened` timestamp. That is the overnight case the seeding exists for.
+opened=None marks a summary this code wrote, and it is skipped. The two
+poisoned entries were purged and rebuilt; the engine's line went from
+"entry 113.70 -21.5%" to "entry 66.80 +33.1%" and the clock cleared.
+
+    THE SAME SHAPE AS SECTION 185. The first version of the roll fix made the
+    cache a source of truth and a sink for its own output at the same time.
+    Anything that reads back what it wrote will eventually count something
+    twice; the fix is to mark what was derived and never read it as primary.
+
+THE OPERATOR THEN ARMED A ONE-SHOT UNDERLYING TRIGGER: close SNDK 1605/1710
+if SNDK prints below 1709.50. scripts/sndk_trigger.py, inside the container,
+polling every 15 s through orphans._close so the quantity clamp applies. It
+fires once and exits; it does not re-arm. At the time: SNDK 1717, mark ~89,
++33%; a fire books about +2,200 against +3,820 at the pin. That is a
+deliberate trade of the last 1,600 for certainty on the underlying, which is
+what the OTM stop measured as a coin flip in general and what the operator
+chose for this position in particular.
+
+    Two rolls, two different basis failures, both caught the same way: a
+    return percentage a vertical cannot produce. +790% the first time, -21% on
+    a spread pinned at max the second. That number is the alarm.

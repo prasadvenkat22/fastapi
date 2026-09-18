@@ -136,6 +136,23 @@ CONFIGS = [
     ("DT    soft -5%/30min  hard -10%/5min    ", 30, -10, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -5.0, 30.0),
     ("DT    soft -5%/10min  hard -10%/2min    ", 30, -10, 2, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -5.0, 10.0),
     ("DT    soft -5%/5min   hard -10%/5min    ", 30, -10, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -5.0, 5.0),
+    ("DR    drag guard as-is (live)           ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.0, 0.0, False),
+    ("DR    release when intrinsic -5%% of width", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.0, 0.05, False),
+    ("DR    release when intrinsic -10%% width  ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.0, 0.10, False),
+    ("DR    release when intrinsic -20%% width  ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.0, 0.20, False),
+    ("DR    guard ONLY while pinned at max     ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.0, 0.0, True),
+    ("DR    no drag guard at all               ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.00, -10.0, 30.0),
+    ("WT    width-target 70%  + entry +30%    ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.70),
+    ("WT    width-target 80%  + entry +30%    ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.80),
+    ("WT    width-target 85%  + entry +30%    ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.85),
+    ("WT    width-target 85%  ONLY (no +30%)  ", 999, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0, 0.85),
+    ("WT    entry +30% only  <- live          ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
+    ("TG    target +20%  (soft10/30 hard30/5) ", 20, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
+    ("TG    target +30%  <- live               ", 30, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
+    ("TG    target +40%                        ", 40, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
+    ("TG    target +50%                        ", 50, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
+    ("TG    target +70%                        ", 70, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
+    ("TG    no target at all                   ", 999, -30, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
     ("DT    soft -10%/30min hard -15%/5min    ", 30, -15, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
     ("DT    soft -10%/30min hard -20%/5min    ", 30, -20, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
     ("DT    soft -10%/30min hard -25%/5min    ", 30, -25, 5, 2, 20, 0.0, -1, False, 0.0, 8.0, 0.15, -10.0, 30.0),
@@ -194,7 +211,8 @@ def load(day: str = "", only: str = "") -> dict:
 def run(marks, target, stop, confirm, stall_min, giveback, otm_floor, otm_min,
         otm_needs_itm=False, gb_pct=0.0, gb_confirm=5.0, width=0.0,
         entry=0.0, min_gain=0.0, drag_ceiling=0.0,
-        slow_stop=0.0, slow_min=30.0):
+        slow_stop=0.0, slow_min=30.0, target_width=0.0,
+        drag_release=0.0, drag_maxed_only=False, short_k=0.0, long_k=0.0):
     """Walk the marks once. First rule to fire wins, as the engine does."""
     peak = peak_at = stop_since = otm_since = slow_since = None
     was_itm = False
@@ -204,8 +222,20 @@ def run(marks, target, stop, confirm, stall_min, giveback, otm_floor, otm_min,
             was_itm = True
         if peak is None or ret > peak:
             peak, peak_at = ret, t
-        _drag_ok_t = (drag_ceiling <= 0 or width <= 0
-                      or (iv - _val) <= width * drag_ceiling)
+        _blocked = (drag_ceiling > 0 and width > 0
+                    and (iv - _val) > width * drag_ceiling)
+        if _blocked and drag_release > 0 and peak_iv is not None:
+            # intrinsic has fallen this far off its high -> holding no longer
+            # recovers the drag, it loses intrinsic too
+            if (peak_iv - iv) > width * drag_release:
+                _blocked = False
+        if _blocked and drag_maxed_only and width > 0:
+            # only protect a position that is still PINNED at max intrinsic
+            if iv < width - 1e-9:
+                _blocked = False
+        _drag_ok_t = not _blocked
+        if target_width > 0 and width > 0 and _val >= width * target_width:
+            return "WTARGET", ret, qty
         if ret >= target and _drag_ok_t:
             return "TARGET", ret, qty
         # THE UNDERLYING STOP, ahead of the mark stop because it is the
@@ -237,8 +267,7 @@ def run(marks, target, stop, confirm, stall_min, giveback, otm_floor, otm_min,
             # taking, measured on the MARK where it is actually paid.
             _gain_ok = (entry <= 0) or ((_val - entry) / entry * 100.0) >= min_gain
             # ORPHAN_MAX_DRAG_WIDTH: and must not forfeit intrinsic to do it.
-            _drag_ok = (drag_ceiling <= 0 or width <= 0
-                        or (iv - _val) <= width * drag_ceiling)
+            _drag_ok = _drag_ok_t
             if (quiet >= stall_min and ret <= peak * (1 - giveback / 100.0)
                     and _gain_ok and _drag_ok):
                 return "STALL", ret, qty
@@ -288,6 +317,9 @@ def main() -> None:
         dc = cfg[11] if len(cfg) > 11 else 0.0
         ss = cfg[12] if len(cfg) > 12 else 0.0
         sm2 = cfg[13] if len(cfg) > 13 else 30.0
+        tw = cfg[14] if len(cfg) > 14 else 0.0
+        dr = cfg[15] if len(cfg) > 15 else 0.0
+        dmo = cfg[16] if len(cfg) > 16 else False
         total, held, why_n = 0.0, 0, defaultdict(int)
         for (_d, _s, _r, _k, entry, _exp), marks in sorted(series.items()):
             try:
@@ -297,7 +329,7 @@ def main() -> None:
                 _long = _short = 0.0
                 w = 0.0
             why, ret, qty = run(marks, tgt, stop, cf, sm, gb, of, om, needs,
-                                gbp, 5.0, w, entry, mg, dc, ss, sm2)
+                                gbp, 5.0, w, entry, mg, dc, ss, sm2, tw, dr, dmo)
             if why == "HELD":
                 # ONLY 0DTE CAN BE SETTLED. A later expiry does not end with
                 # this session, so neither its close nor its 15:45 price says
@@ -319,7 +351,7 @@ def main() -> None:
             total += entry * (ret / 100.0) * qty * 100
         tag = {"TARGET": "T", "OTM": "O", "STALL": "L",
                "STOP": "P", "HELD": "H", "GIVEBACK": "G",
-               "SETTLED": "X", "SLOWSTOP": "W"}
+               "SETTLED": "X", "SLOWSTOP": "W", "WTARGET": "M"}
         mix = " ".join(f"{tag.get(k, k[0])}{v}"
                        for k, v in sorted(why_n.items()))
         print(f"{name:<42}{total:>+10.0f} {mix:>26}   {held}")

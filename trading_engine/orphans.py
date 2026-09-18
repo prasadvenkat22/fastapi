@@ -577,6 +577,49 @@ ORPHAN_MAX_DRAG_WIDTH = float(
     os.getenv("TRADING_ORPHAN_MAX_DRAG_WIDTH",
               os.getenv("TRADING_ORPHAN_LATER_MAX_DRAG_WIDTH", "0.15")) or 0)
 
+# AND THE GUARD HAS TO LET GO WHEN ITS PREMISE EXPIRES.
+#
+# ORPHAN_MAX_DRAG_WIDTH refuses a profit exit because extrinsic returns at
+# expiry, so holding recovers the gap. THAT IS TRUE ONLY WHILE THE POSITION
+# IS STILL AT ITS PEAK. Once intrinsic starts falling off the high, holding
+# does not recover the drag -- it loses intrinsic as well -- and the guard is
+# blocking an exit for a reason that has stopped applying.
+#
+# THE DEAD ZONE IT CREATED, found live 2026-09-18 on two SNDK 0DTE spreads
+# pinned at maximum intrinsic with SNDK at 1657:
+#
+#     1605/1630  mark 18.40  intrinsic 25.00  drag  6.60 vs a 3.75 ceiling
+#     1600/1640  mark 30.10  intrinsic 40.00  drag  9.90 vs a 6.00 ceiling
+#
+# If SNDK fell back through the short strikes, THREE rules stood down at once:
+# TARGET and STALL on the drag ceiling, and the hard stop on the intrinsic
+# guard (intrinsic still exceeded entry, so it "pays at expiry"). The soft
+# stop needed the mark down at 9.54. Between SNDK 1630 and 1616 the big
+# spread could give back 3,620 dollars with nothing acting at all.
+#
+# And drag WORSENS as spot falls toward the short strike, because that is
+# where the short leg carries the most premium -- so the guard stays shut
+# precisely while the giveback happens.
+#
+# MEASURED, 203 positions over 10 sessions, against the ladder as deployed:
+#
+#     guard as-is                      +2,850
+#     release at -5%  of width         +4,013
+#     release at -10% of width         +4,284   <- deployed
+#     release at -20% of width         +3,250
+#     guard only while pinned at max     +396
+#     no guard at all                  -8,633
+#
+# BE HONEST ABOUT THE SHAPE OF THAT: the whole +1,434 comes from ONE session
+# (09-14, +1,694). Two sessions lose 80 and 614, six are identical. It is
+# shipped because the DEFECT is logical rather than statistical -- a premise
+# that has expired -- and because the asymmetry is favourable. If it starts
+# costing money, this is the first thing to turn off.
+#
+# 0 disables the release and restores the unconditional guard.
+ORPHAN_DRAG_RELEASE_WIDTH = float(
+    os.getenv("TRADING_ORPHAN_DRAG_RELEASE_WIDTH", "0.10") or 0)
+
 # WHICH SERIES THE LATER TARGET READS.
 #
 # It was measured on the mark, and on the same two SNDK spreads that made it
@@ -1567,7 +1610,38 @@ def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
         # flat-account bug submitted a rejected close every minute, and the
         # guard added to the engine's exit that morning did nothing here.
         try:
-            _held = {p.get("symbol") for p in (tradier_orders.open_positions() or [])}
+            _pos = tradier_orders.open_positions() or []
+            _held = {p.get("symbol") for p in _pos}
+            # HOW MANY, not just whether. open_structures() pairs by expiry and
+            # right, so after a PARTIAL close its qty is stale -- and submitting
+            # a close for more contracts than are held is rejected outright.
+            #
+            # Observed live 2026-09-18: one of two SNDK 1600/1640 was closed by
+            # hand, the broker showed 1600 x1 and 1640 x-1, and the engine still
+            # reported x2. Any stop firing would have sent a 2-lot close against
+            # a 1-lot holding and been refused -- "submitted" in the log, the
+            # position still open, which is the worst possible outcome for an
+            # exit rule.
+            #
+            # /trading/flatten got exactly this clamp on 2026-09-10 after
+            # "SNDK 1750/1800 x5" was reported against three held. Same bug,
+            # second place, and only one of them was fixed.
+            _n = {}
+            for _p in _pos:
+                try:
+                    _n[str(_p.get("symbol"))] = abs(int(float(_p.get("quantity") or 0)))
+                except (TypeError, ValueError):
+                    continue
+            _have = min(_n.get(st["long"], 0), _n.get(st["short"], 0))
+            if _have and _have < int(st["qty"]):
+                logger.warning(
+                    "ORPHAN %s %g/%g: pairing says x%d but the broker holds x%d "
+                    "— closing %d. A close for more than is held is rejected, "
+                    "and a rejected close reads as success.",
+                    st["root"], st["long_strike"], st["short_strike"],
+                    int(st["qty"]), _have, _have,
+                )
+                st = dict(st, qty=_have)
             if _held and not ({st["long"], st["short"]} & _held):
                 logger.warning(
                     "ORPHAN %s %g/%g: the broker holds neither leg — not "
@@ -2034,6 +2108,21 @@ def review(engine_symbols: "set | None" = None) -> list:
                 ORPHAN_MAX_DRAG_WIDTH > 0
                 and drag is not None and _w > 0
                 and drag > _w * ORPHAN_MAX_DRAG_WIDTH)
+            # See ORPHAN_DRAG_RELEASE_WIDTH. Intrinsic off its high by this
+            # much means holding no longer recovers the drag, so the guard
+            # stops protecting and starts trapping.
+            if (drag_blocks and ORPHAN_DRAG_RELEASE_WIDTH > 0
+                    and peak_iv is not None and iv_now is not None
+                    and (peak_iv - iv_now) > _w * ORPHAN_DRAG_RELEASE_WIDTH):
+                logger.info(
+                    "ORPHAN %s %g/%g: intrinsic %.2f is %.2f off its %.2f peak "
+                    "(past %.0f%% of the %g width) — the drag guard no longer "
+                    "applies, holding does not recover it.",
+                    st["root"], st["long_strike"], st["short_strike"],
+                    iv_now, peak_iv - iv_now, peak_iv,
+                    ORPHAN_DRAG_RELEASE_WIDTH * 100, _w,
+                )
+                drag_blocks = False
 
             stall_later_armed = (
                 (not zero_dte) and past_hold and ORPHAN_LATER_STALL_MINUTES > 0

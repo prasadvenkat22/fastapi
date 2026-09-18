@@ -11355,3 +11355,45 @@ improvement measured in this file.
 AND THE POINT WORTH KEEPING: "-10% with no wait costs 12,559, -10% held an
 hour gains 996" is the same level twice. The clock is not a refinement of a
 stop, it is most of the stop.
+
+
+185. THE CLAMP THAT PROVED ITSELF IN FOUR MINUTES  (2026-09-18)
+--------------------------------------------------------------------------------
+
+One of two SNDK 1600/1640 was closed by hand. The broker then held 1600 x1 and
+1640 x-1 -- one spread. open_structures() still reported x2, because it pairs
+from the OPENING order window and a partial close does not appear there.
+
+_close() submitted quantity=st["qty"] with NO CLAMP. It checked only whether
+EITHER leg was held, never how many. So the next rule to fire would have sent
+a 2-lot close against a 1-lot holding, Tradier would have rejected it, and the
+log would have read "closing ... status ok" while the position stayed open.
+
+    A REJECTED CLOSE READS AS SUCCESS. That is the worst possible outcome for
+    an exit rule: the operator believes they are out, the position is not, and
+    nothing in the log says otherwise.
+
+/trading/flatten GOT EXACTLY THIS CLAMP ON 2026-09-10, after the pairing
+reported "SNDK 1750/1800 x5" against three held. Same bug, second place, and
+only one of the two was fixed. That is the pattern this file keeps recording:
+a rule restated in a second location instead of asked for once.
+
+Fixed: _close() now reads per-symbol quantities from the broker and closes
+min(pairing, held), logging the discrepancy.
+
+IT FIRED FOUR MINUTES AFTER DEPLOY, with 4,350 dollars of position on it:
+
+    13:54:13 WARNING SNDK 1600/1640: pairing says x2 but the broker holds x1
+             -- closing 1. A close for more than is held is rejected, and a
+             rejected close reads as success.
+    13:54:13 TARGET: closing SNDK 1600/1640 x1 -- order accepted
+    13:54:13 booked to history: SNDK 1600/1640 x1 +1643.00 (TARGET)
+
+Without it that TARGET would have been refused and a maxed-out spread would
+have sat open believing itself closed.
+
+AND THE FLATTEN ENDPOINT WAS TESTED, in preview: it returned a valid two-leg
+plan with a token, estimated proceeds, zero pairing shortfalls, zero unpaired
+legs, and SENT NOTHING. It listed exactly what the broker held -- the two
+positions absent from the plan had genuinely closed seconds earlier (MU 970/995
+on STALL, SNDK 1600/1640 on TARGET), which the plan was right to omit.

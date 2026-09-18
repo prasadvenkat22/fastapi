@@ -11457,3 +11457,46 @@ which is normal, and the engine's model of it silently broke, which was not
 visible anywhere -- the position looked spectacularly profitable. A +790%
 return on a 0DTE vertical is not a number that can occur, and it should have
 been the tell.
+
+
+187. THE FIRST LIVE TRADE FROM THE ZONE TIER  (2026-09-18)
+--------------------------------------------------------------------------------
+
+Asked whether the engine can take 0DTE trades if worth it. It had, ten minutes
+earlier:
+
+    14:25:19  Entry read [MORNING_DRIFT]: tier=ZONE/bear
+    14:25:19  Risk allocation: MORNING_PUT may spend 20% of the $853 daily
+              budget ($171) -- sizing 2 contracts, not 5
+    14:25:19  Entering BEAR via MORNING_PUT:ZONE: long 721 / short 717 at 2.95
+    14:25:23  FILLED avg 2.91  (721P bought 4.30, 717P sold 1.39)
+
+QQQ P 721/717 x2. Ten minutes later QQQ was 716.63, below the 717 short, so
+the spread sat at its full 4.00 width: +218 at the bell against a 2.91 entry.
+
+THIS IS THE ENTRY-SIDE DATA POINT THE HARNESS COULD NOT PRODUCE. Section 160
+enabled the ZONE tier on MORNING_PUT as an experiment -- ZONE had measured
+NEGATIVE standalone (-21, -13, -25 a trade across three arms) and the argument
+for it was that the macro gate, which the original measurement could not
+express, now gates the entry. exit_backtest replays exits and is blind to any
+trade never taken. This is the first one taken. One observation, recorded as
+one.
+
+SIZING DID WHAT IT WAS BUILT TO DO: 11 contracts by conviction, cut to 5 by the
+live-order cap, cut to 2 by the 20% risk allocation. Small on purpose for an
+unproven setup, and the right shape.
+
+"Macro BAD -- refused by: breadth" APPEARED ON THE SAME CYCLE AND BLOCKED
+NOTHING, which is correct and worth stating because it looks like a refusal.
+nodes.py: "BAD means unsafe to be LONG... this flag stays bullish-framed
+because that is what it measures." Collapsing breadth is the case FOR a put.
+The line reads as a veto and is a description.
+
+THE SINGLE-NAME SCRIPT FOUND NOTHING AND SAID WHY: macro turned bearish at
+10:30 (crude +0.14%, 10Y +1.6bp, VIX +1.3%), calls refused, puts allowed --
+and every buildable put on MU / INTC / NVDA priced at 5-19% of width, under the
+30% floor, with ten more on crossed quotes. That is an answer, not a failure.
+
+The put spread also happens to offset the operator's QQQ 715/717 x10 calls --
+same underlying, opposite direction, on a bearish tape. Not by design; the
+engine does not read the manual book when it sizes. Worth noticing anyway.

@@ -11500,3 +11500,63 @@ and every buildable put on MU / INTC / NVDA priced at 5-19% of width, under the
 The put spread also happens to offset the operator's QQQ 715/717 x10 calls --
 same underlying, opposite direction, on a bearish tape. Not by design; the
 engine does not read the manual book when it sizes. Worth noticing anyway.
+
+
+188. THE WEEKLY BOOK TRADES, AND ITS ANALYSIS IS NOT IN THE TRIGGER  (2026-09-18)
+--------------------------------------------------------------------------------
+
+Asked whether the engine can take weekly calls after analysis, news and data.
+Three things had to be established, and the answer to each was different.
+
+IT TRADES. trading_engine/weekly_shadow.py runs inside every engine cycle
+(service.py imports it). Entry is Friday at or after 15:45 ET into the
+next-Friday expiry. It opens SHADOW rows on every name in
+TRADING_WEEKLY_SYMBOLS across CALL / PUT / CONDOR -- recorded, never traded --
+and ONE live slice: TRADING_WEEKLY_LIVE_SYMBOLS=CRWV, VARIANTS=CALL, 1
+contract, 0.25 delta, 50% target, closed by 15:30 the following Friday.
+
+    THE LIVE "CALL" IS A CALL CREDIT SPREAD. entry_credit 0.90 and 0.74,
+    "collects only X, below the floor", and the module's own line: "selling
+    the index's own drift back to itself." The weekly book SELLS calls. An
+    operator asking about "weekly calls" will picture buying them; it does
+    the opposite.
+
+ITS RECORD, in full:
+
+    2026-09-04  CRWV call credit  0.90 collected  expired 09-11   +100%
+    2026-09-11  CRWV call credit  0.74 collected  expires 09-18   marking +100%
+
+Two for two, full credit kept, on nine CRWV shadow observations total. Small
+and positive and not evidence.
+
+THE ANALYSIS IS NOT IN THE TRIGGER, which is the part worth writing down. The
+gates between "it is Friday 15:45" and a live order, from _maybe_open(), are:
+
+    a chain exists / a spot exists / a strike near 0.25 delta /
+    both legs quoted / credit >= MIN_CREDIT
+
+Nothing else. The news verdict, trend, RSI, VWAP side, flow ratio, RV/IV --
+thirty-odd sig_* columns -- are written BESIDE the row for later study. None
+of them decides anything.
+
+    scripts/weekly_pick.py IS the news-weighted ranker: EV_adj = EV_dem +
+    w * confidence * (EV_raw - EV_dem), with a NEWS CONFLICT flag for a
+    direction into a VERY_* verdict. It is reachable on demand through
+    /trading/screener/verticals and imported by trading_engine/screener.py.
+    It has no --live flag, no submit path, is scheduled by nothing, and has
+    never logged a run on this box. Its own comment: the weights were "chosen,
+    not measured -- news_verdicts began accumulating 2026-09-07 and has no
+    history to fit against."
+
+So "after analysis and news and data" is a description of what gets RECORDED
+about a weekly trade, not of what DECIDES it. That is the documented design of
+a shadow book with one narrow live slice, not a defect. Whether to wire
+weekly_pick's EV into _maybe_open is a decision, and weekly_pick says what it
+would take first: "a few hundred labelled days."
+
+    Two cheaper things went wrong finding this out. A repo-wide grep for
+    weekly_pick walked the env/ site-packages and timed out; scoping the search
+    to scripts/, trading_engine/, routes/ answered in a second. And the
+    weekly_shadow table has no `created_at` or `variant` column -- it is
+    `opened_at` and `strategy` -- so two queries written from assumption failed
+    before one written from information_schema succeeded.

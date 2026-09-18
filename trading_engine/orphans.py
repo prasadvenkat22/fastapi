@@ -1126,6 +1126,90 @@ def _giveback_points(root: str, entry_abs: float, peak_pct: float = 0.0,
     return ORPHAN_LATER_STALL_GIVEBACK_PCT if flat is None else flat
 
 
+def _rolled_net(orders: list, lsym: str, ssym: str, qty: int) -> "float | None":
+    """True cost basis per contract for a pair whose legs were ROLLED, or None.
+
+    WHY THE PER-LEG PRICE IS WRONG AFTER A ROLL. The inferred path prices a
+    pair as long_fill - short_fill, one price per contract symbol. That is
+    correct for a pair opened as a pair. It is WRONG the moment a short leg is
+    rolled, because the roll is a separate order -- buy the old short back,
+    sell a new one -- and NEITHER side of it appears in the surviving legs'
+    fill prices.
+
+    Observed live 2026-09-18. A SNDK 1605/1630 opened at 10.60 had its short
+    rolled to 1680: buy 1630 back at 57.00, sell 1680 at 20.70, a 36.30 debit.
+    True basis 46.90. The per-leg calculation returned 27.10 - 20.70 = 6.40,
+    understating it by FORTY DOLLARS and reporting +790% on the position.
+    Everything downstream is a percentage OF that number:
+
+        soft stop -10%    should be 42.21, was 5.76
+        hard stop -30%    should be 32.83, was 4.48
+        target +70%       should be 79.73, was 10.88
+
+    So the position had no working stop at all -- the mark would have had to
+    collapse 90% before anything fired -- and its P&L read 4,050 dollars high.
+
+    HOW IT IS RECOVERED: walk the order history from the surviving legs and
+    follow every order that shares a symbol, transitively. The roll order
+    shares the new short; the original open shares the long. Summing their
+    net gives the cash actually paid for the structure that is held now.
+
+    RETURNS None RATHER THAN A GUESS when the walk finds nothing or only one
+    order -- one order means no roll happened and the per-leg price is already
+    right. A basis this cannot verify must not be invented, because every
+    stop and target is a percentage of it.
+    """
+    try:
+        seen, frontier = set(), {lsym, ssym}
+        used, net = [], 0.0
+        # SEED FROM THE CACHE FIRST. Tradier's /orders is the CURRENT SESSION
+        # only, so a pair opened yesterday and rolled today has its OPEN in the
+        # cached structures and its ROLL in today's orders -- neither source
+        # alone can price it. The cached record for the pair being priced is
+        # skipped on purpose: it may be a stale per-leg value written before
+        # the roll was understood (6.40 sat in the cache while the truth was
+        # 46.90), and seeding from it would launder the wrong number back in.
+        me = "|".join(sorted((lsym, ssym)))
+        for key, rec in (_load().get("structures") or {}).items():
+            if key == me:
+                continue
+            syms = set(key.split("|"))
+            if syms & frontier and rec.get("net") is not None:
+                used.append({"id": "cache:" + key, "legs": [{"symbol": x} for x in syms],
+                             "net": rec["net"], "credit": rec.get("credit", False),
+                             "qty": rec.get("qty") or 1})
+                frontier |= syms
+        for _ in range(6):                     # depth-limited; rolls are shallow
+            nxt = set()
+            for o in orders:
+                oid = o.get("id")
+                if oid in seen:
+                    continue
+                syms = {l["symbol"] for l in o["legs"]}
+                if not (syms & frontier):
+                    continue
+                seen.add(oid)
+                used.append(o)
+                nxt |= syms
+            if not (nxt - frontier):
+                break
+            frontier |= nxt
+        if len(used) < 2:
+            return None                        # no roll; per-leg price stands
+        for o in used:
+            # A closing order on OTHER strikes can share no leg and is never
+            # reached; one that is reached is part of this structure's history.
+            sign = 1.0 if not o.get("credit") else -1.0
+            net += abs(float(o["net"])) * sign * int(o.get("qty") or 1)
+        per = net / max(1, qty)
+        # Sanity: a basis outside the strike width is not a basis.
+        return round(per, 4) if 0 < per < 1e5 else None
+    except Exception:
+        logger.warning("Roll-aware basis failed — falling back to per-leg "
+                       "prices, which understate a rolled pair.", exc_info=True)
+        return None
+
+
 def open_structures(engine_symbols: "set | None" = None) -> list:
     """Reconstruct what is open, from the orders that opened it.
 
@@ -1203,8 +1287,23 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             continue
         if any(s in engine_symbols for s in syms):
             continue
+        net = rec.get("net", 0.0)
+        # A CACHED PAIR MAY HAVE BEEN ROLLED TODAY. The cache holds what the
+        # pair cost when it was first reconstructed; a roll since then is in
+        # today's orders and the cached net knows nothing about it. Worse, the
+        # cache can hold a pair that was ITSELF written from a bad per-leg
+        # inference -- 1605|1680 sat at 6.40 while 46.90 was the truth -- and
+        # served it back every cycle as if it were a fill. Re-derive from the
+        # order history whenever it can be, and let it win.
+        rolled = _rolled_net(orders, syms[0], syms[1], rec.get("qty") or 1)
+        if rolled is not None and abs(rolled - float(net or 0)) > 0.01:
+            logger.warning(
+                "ORPHAN cached pair %s: cache says %.2f, the order history "
+                "gives %.2f — a roll the cache never saw. Using %.2f.",
+                key, float(net or 0), rolled, rolled)
+            net = rolled
         book[syms] = {"symbols": syms, "qty": rec.get("qty", 0),
-                      "net": rec.get("net", 0.0), "credit": rec.get("credit", False),
+                      "net": net, "credit": (net < 0) if rolled is not None else rec.get("credit", False),
                       "opened": rec.get("opened")}
 
     # LEGS THE ORDERS COULD NOT PAIR. A position legged into across separate
@@ -1278,9 +1377,19 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
                     root, lk, sk,
                     [sym for sym, px in ((lsym, lp), (ssym, sp)) if px is None])
             else:
+                net = round(lp - sp, 4)
+                rolled = _rolled_net(orders, lsym, ssym, n)
+                if rolled is not None and abs(rolled - net) > 0.01:
+                    logger.warning(
+                        "ORPHAN inferred pair %s %g/%g: per-leg prices give "
+                        "%.2f but the ORDER HISTORY gives %.2f — a leg was "
+                        "rolled and its buy-back is not in the leg prices. "
+                        "Using %.2f; every percentage rule depends on it.",
+                        root, lk, sk, net, rolled, rolled)
+                    net = rolled
                 book[tuple(sorted((lsym, ssym)))] = {
-                    "symbols": (lsym, ssym), "qty": n, "net": round(lp - sp, 4),
-                    "credit": (lp - sp) < 0, "opened": None, "inferred": True,
+                    "symbols": (lsym, ssym), "qty": n, "net": net,
+                    "credit": net < 0, "opened": None, "inferred": True,
                 }
             longs[li] = (lk, lsym, lq - n)
             shorts[si] = (sk, ssym, sq + n)

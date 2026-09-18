@@ -11397,3 +11397,63 @@ plan with a token, estimated proceeds, zero pairing shortfalls, zero unpaired
 legs, and SENT NOTHING. It listed exactly what the broker held -- the two
 positions absent from the plan had genuinely closed seconds earlier (MU 970/995
 on STALL, SNDK 1600/1640 on TARGET), which the plan was right to omit.
+
+
+186. A ROLLED SPREAD HAD NO COST BASIS, SO IT HAD NO STOP  (2026-09-18)
+--------------------------------------------------------------------------------
+
+A SNDK 1605/1630 opened at 10.60 had its short rolled to 1680 mid-session:
+
+    13:57  buy_to_close 1630 @ 57.00 / sell_to_open 1680 @ 20.70  -> 36.30 DEBIT
+
+True basis 46.90. The engine reported 6.40 and +790%.
+
+WHY. A roll is a separate order whose legs are (old short, new short) -- a
+different key from the original pair -- flagged neither opening nor closing.
+open_structures() discarded it. The surviving legs (1605, 1680) were never in
+one order together, so they fell to INFERRED pairing, which prices a pair as
+long_fill - short_fill from per-symbol prices: 27.10 - 20.70 = 6.40. The 1630
+leg's original credit AND its 57.00 buy-back both vanished from the number.
+
+    THEN THE CACHE LAUNDERED IT. The bad 6.40 was written to orphan_peaks.json
+    as a live structure and served back every cycle as if it were a fill --
+    ahead of the inferred path, so a fix there alone never ran.
+
+WHAT IT BROKE, because every rule is a PERCENTAGE OF THE ENTRY:
+
+                       engine (6.40)    truth (46.90)
+    P&L at the bell       +6,860          +2,810     overstated by 4,050
+    soft stop -10%          5.76           42.21     mark was 57-65
+    hard stop -30%          4.48           32.83
+    target +70%            10.88           79.73
+
+The stops were dead: the mark would have had to collapse 90% before either
+fired. The position was riding on the 1680 pin and the 15:45 flatten alone.
+
+FIXED: _rolled_net() walks from the surviving legs through every order and
+cached structure that shares a symbol, transitively, and sums the cash. The
+cached original (10.60) plus today's roll (36.30) gives 46.90. Applied at BOTH
+the cache-merge and the inferred path; the cached record for the pair being
+priced is skipped on purpose so a stale value cannot seed its own correction.
+Returns None rather than a guess when it finds fewer than two contributing
+records -- one record means no roll, and the per-leg price already stands.
+
+    Tradier's /orders is the current session only, so a pair opened yesterday
+    and rolled today has its OPEN in the cache and its ROLL in the orders.
+    Neither source alone can price it; the walk needs both. The first draft
+    read orders only and returned None on the very case that motivated it.
+
+VERIFIED LIVE: the engine's own line went from "entry 6.40 +885.9%" to
+"entry 46.90 +37.1%", stops at 42.21 / 32.83, on a running position with
+2,810 dollars at the bell.
+
+    A harmless side effect worth knowing: the walk also "corrects" the DEAD
+    cached pair 1605|1630 (no longer held) to 42.70 and logs it. The held
+    check drops that pair downstream, so it changes nothing -- but the warning
+    will appear once per cycle until the cache entry ages out.
+
+THE LESSON THIS FILE KEEPS RECORDING: the operator adjusted a spread by hand,
+which is normal, and the engine's model of it silently broke, which was not
+visible anywhere -- the position looked spectacularly profitable. A +790%
+return on a 0DTE vertical is not a number that can occur, and it should have
+been the tell.

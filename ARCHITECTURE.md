@@ -655,7 +655,7 @@ separate settings — they were briefly one rule by accident, see section 171.
 | stop — **SOFT** | **−10%**, held **30 min** | none — `LATER_STOP` covers weeklies | a slow bleed. Ignores the intrinsic guard. Below 30 min it fires on noise: 10 min ≈ −$1,400, 5 min ≈ −$9,500 (§181) |
 | stop — **HARD** | **−30%**, held **5 min** | **−45%**, 15 min | a fast drop. On a 5-day spread −25% of mark was a fifth of one ATR day (§192). Respects the intrinsic guard. **A cliff below −30%**: −25% ≈ −$5,500, −15% ≈ −$11,500 (§184) |
 | flatten | 15:45 | none — runs to expiry | |
-| opening quiet | **09:30** | **09:45** | `ORPHAN_HOLD_UNTIL` / `ORPHAN_LATER_HOLD_UNTIL`. Holds **10 of 12** branches; only `ACCOUNT_FLOOR` and `FORCE_CLOSE` can act before it (§182) |
+| opening quiet | **09:35** | **09:45** | `ORPHAN_HOLD_UNTIL` / `ORPHAN_LATER_HOLD_UNTIL`. Holds **10 of 12** branches; only `ACCOUNT_FLOOR` and `FORCE_CLOSE` can act before it (§182) |
 
 **All four profit-taking branches are drag-gated** — `TARGET`, `LATER_TARGET`,
 `STALL`, `STALL_LATER`. `TARGET` was the one that was not, until 2026-09-17,
@@ -1205,7 +1205,7 @@ restart.
 
 ```
 TRADING_ORPHAN_UNDERLYING=          empty = EVERY symbol
-TRADING_ORPHAN_HOLD_UNTIL=09:30     0DTE acts from the opening bell
+TRADING_ORPHAN_HOLD_UNTIL=09:35     0DTE waits five minutes for the open to settle
 TRADING_ORPHAN_LATER_HOLD_UNTIL=09:45   weeklies wait out the opening spread
 TRADING_ORPHAN_ACT_EXPIRY_DAY_ONLY=false
 TRADING_ORPHAN_LATER_STALL_ARM=25   arm only on a real run

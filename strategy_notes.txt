@@ -11810,3 +11810,11 @@ carry it. That is acceptable on a 15-wide spread expiring Monday, and it is
 the reason the plan sizes weekly debits to the name's ATR rather than to a
 fixed dollar width. A spread narrower than a quarter of the name's daily
 range is an intraday structure whatever its expiry.
+
+LATER THE SAME AFTERNOON: 0DTE HOLD_UNTIL 09:30 -> 09:35, operator's call for
+Monday's MU 1000/1015, now x9 at a blended 7.24 with MU bid up after hours.
+Five minutes for the open to settle before the +70% mark target (12.31) can
+book. The target is the rule the operator confirmed; the stall is its
+backstop, not a second target. Open item: TRADING_MAX_ORDER_CONTRACTS is 5,
+so a nine-lot target exit goes as 5 then 4 a cycle later -- raising it to 10
+is the operator's decision, recorded here as not yet taken.

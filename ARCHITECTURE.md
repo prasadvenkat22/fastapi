@@ -1121,7 +1121,7 @@ Four guards, each from an incident (sections 140–141):
 | guard | why |
 |---|---|
 | structures, never legs | legging out turns a long into a **naked short** |
-| clamped to holdings | the pairing said `SNDK 1750/1800 x5` when three existed |
+| clamped to holdings | the pairing said `SNDK 1750/1800 x5` when three existed. **`orphans._close()` got the same clamp on 2026-09-18** — it had none, and a rejected close reads as success (§185) |
 | paired from holdings too | a spread whose opening order aged out of the count-limited window is **invisible**, not stale |
 | market hours + `plan_token` | the same plan previewed at **$15,297** at 09:20 and **$6,721** at 09:33; and a boolean was one character between looking and trading |
 

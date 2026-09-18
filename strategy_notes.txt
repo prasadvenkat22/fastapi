@@ -11614,3 +11614,29 @@ chose for this position in particular.
     Two rolls, two different basis failures, both caught the same way: a
     return percentage a vertical cannot produce. +790% the first time, -21% on
     a spread pinned at max the second. That number is the alarm.
+
+
+190. ONE-SHOT TRIGGERS ON THE UNDERLYING, GENERALISED  (2026-09-18)
+--------------------------------------------------------------------------------
+
+scripts/underlying_trigger.py SYMBOL LONG SHORT LEVEL -- closes the named
+debit spread once the SHARE PRICE prints below LEVEL. Fires once through
+orphans._close (holdings clamp applies), then exits. Does not re-arm.
+Supersedes the SNDK-specific sndk_trigger.py from section 189, which stays
+running today as armed.
+
+Armed 11:18 ET on MU 975/990 at 989.50, beside SNDK 1605/1710 at 1709.50.
+MU at arming: 991.31, mark 10.75, intrinsic 15.00 (pinned), 1.8 points of
+cushion. A fire books about +415 against +840 at the bell -- the mark sits
+4.25 under intrinsic, same shape as SNDK.
+
+WHAT "THE UNDERLYING" MEANS, because the operator asked: the share price.
+Not the spread's cost (what was paid), not its mark (what it quotes at now),
+not its intrinsic (what it settles to at the bell). Four numbers; the trigger
+reads one of them, and it is the one that decides whether a pin holds.
+
+    This is the OTM stop of section 166 -- measured a coin flip across 221
+    positions and turned off -- re-armed by hand on two specific pinned
+    positions for one afternoon. The difference from a rule is that the
+    operator is choosing it knowing the trade: certainty at the short strike
+    against the last 400-1,600 dollars of premium at the bell.

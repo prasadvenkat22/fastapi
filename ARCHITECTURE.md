@@ -647,15 +647,15 @@ separate settings — they were briefly one rule by accident, see section 171.
 
 | rule | 0DTE | weekly | note |
 |---|---|---|---|
-| target | **+30%** on the mark | **95% of width on INTRINSIC** | a level, so a sub-minute spike books nothing |
-| stall quiet | **2 min** | **20 min** | 2 measured better or equal on *every* session (§172) |
-| stall giveback | **15% of band** | **20% of band** | band = width − entry, fixed at entry |
-| stall arms at | any positive peak | **+5%** | a multi-day position may pause without being finished |
+| target | **+70%** on the mark | **+70%** on the mark, and **95% of width on INTRINSIC** | a level, so a sub-minute spike books nothing |
+| stall quiet | **2 min** | **30 min** | 2 measured better or equal on *every* 0DTE session (§172); the weekly clock is a judgement (§192) |
+| stall giveback | **15% of band** | **0.25 ATR** of the underlying, in spread points | band = width − entry, fixed at entry. On SNDK 1700/1780 @38.65 the ATR basis is 24.8 spread points against 8.3 on the old 20% band (§192) |
+| stall arms at | any positive peak | **+25%** | a multi-day position may pause without being finished; below +25% a weekly's pauses are noise (§192) |
 
 | stop — **SOFT** | **−10%**, held **30 min** | none — `LATER_STOP` covers weeklies | a slow bleed. Ignores the intrinsic guard. Below 30 min it fires on noise: 10 min ≈ −$1,400, 5 min ≈ −$9,500 (§181) |
-| stop — **HARD** | **−30%**, held **5 min** | **−25%**, 15 min | a fast drop. Respects the intrinsic guard. **A cliff below −30%**: −25% ≈ −$5,500, −15% ≈ −$11,500 (§184) |
+| stop — **HARD** | **−30%**, held **5 min** | **−45%**, 15 min | a fast drop. On a 5-day spread −25% of mark was a fifth of one ATR day (§192). Respects the intrinsic guard. **A cliff below −30%**: −25% ≈ −$5,500, −15% ≈ −$11,500 (§184) |
 | flatten | 15:45 | none — runs to expiry | |
-| opening quiet | **09:45** | 09:45 | `ORPHAN_HOLD_UNTIL`. Holds **10 of 12** branches; only `ACCOUNT_FLOOR` and `FORCE_CLOSE` can act before it (§182) |
+| opening quiet | **09:30** | **09:45** | `ORPHAN_HOLD_UNTIL` / `ORPHAN_LATER_HOLD_UNTIL`. Holds **10 of 12** branches; only `ACCOUNT_FLOOR` and `FORCE_CLOSE` can act before it (§182) |
 
 **All four profit-taking branches are drag-gated** — `TARGET`, `LATER_TARGET`,
 `STALL`, `STALL_LATER`. `TARGET` was the one that was not, until 2026-09-17,
@@ -1205,13 +1205,15 @@ restart.
 
 ```
 TRADING_ORPHAN_UNDERLYING=          empty = EVERY symbol
-TRADING_ORPHAN_HOLD_UNTIL=09:30     acts from the opening bell
+TRADING_ORPHAN_HOLD_UNTIL=09:30     0DTE acts from the opening bell
+TRADING_ORPHAN_LATER_HOLD_UNTIL=09:45   weeklies wait out the opening spread
 TRADING_ORPHAN_ACT_EXPIRY_DAY_ONLY=false
-TRADING_ORPHAN_LATER_STALL_ARM=5    arm on any modest profit
+TRADING_ORPHAN_LATER_STALL_ARM=25   arm only on a real run
 TRADING_ORPHAN_LATER_STALL_GIVEBACK=40
-TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR=0   off; see below
-TRADING_ORPHAN_LATER_STALL_MINUTES=5
-TRADING_ORPHAN_LATER_TARGET_PCT=0.90    raised; see the ordering note below
+TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR=0.25   the weekly give-back basis; BAND=0 hands over to it
+TRADING_ORPHAN_LATER_STALL_MINUTES=30
+TRADING_ORPHAN_LATER_TARGET_PCT=0.95    see the ordering note below
+TRADING_ORPHAN_LATER_STOP_PCT=-45   held 15 min; respects intrinsic
 ```
 
 **It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and

@@ -197,6 +197,8 @@ async def get_broker_positions():
         drag_blocks = (orphans.ORPHAN_MAX_DRAG_WIDTH > 0 and drag_now is not None
                        and width > 0 and drag_now > drag_ceiling)
 
+        _hold = (orphans.ORPHAN_HOLD_UNTIL if zero_dte
+                 else (orphans.ORPHAN_LATER_HOLD_UNTIL or orphans.ORPHAN_HOLD_UNTIL))
         out.append(BrokerPosition(
             underlying=st["root"], right=st["right"],
             long_strike=st["long_strike"], short_strike=st["short_strike"],
@@ -228,8 +230,8 @@ async def get_broker_positions():
             drag_ceiling=round(drag_ceiling, 2),
             drag_now=drag_now,
             drag_blocks=drag_blocks,
-            hold_until=orphans.ORPHAN_HOLD_UNTIL or None,
-            past_hold=orphans._past_hold_until(),
+            hold_until=_hold or None,
+            past_hold=orphans._past_hold_until(_hold),
             expires_today=today,
             managed=managed,
             quote_tradeable=orphans._quotes_tradeable(

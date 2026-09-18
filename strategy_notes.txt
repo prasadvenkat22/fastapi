@@ -11726,3 +11726,87 @@ it: the 0.12-delta credit shadow book kept its whole credit on 12 of 15
 names and lost 2-3x its width on the three that moved (SNDK, STX, META);
 and the verdicts are mostly NEUTRAL (30 of 44 in the last week), so the
 book will often hold one position or none.
+
+
+192. THE WEEKLY LADDER GETS WEEKLY NUMBERS  (2026-09-18)
+--------------------------------------------------------------------------------
+
+Asked directly: should a 5-day position have different stops, stalls and
+targets from a same-day one? It already had a separate ladder (LATER_*), and
+the numbers in it were intraday numbers with the labels changed. SNDK made
+the case in one line:
+
+    SNDK 1700/1780 x2 @ 38.65, ATR14 99 points.
+    LATER_STOP -25% on mark = ~20 SNDK points = a fifth of ONE normal day.
+    LATER stall band 20% of (80 - 38.65) = 8.3 spread points, same order.
+    20 quiet minutes, on a position meant to sit through four overnight gaps.
+
+That stop fires on Tuesday noise with the thesis intact. Four changes, all
+env, plus one small piece of code, deployed 14:52 ET with SNDK 1700/1780 and
+MU 1000/1015 (expires Monday) open under it:
+
+    LATER_STOP_PCT              -25  -> -45     held 15 min, respects intrinsic
+    LATER_STALL_ARM               5  ->  25     a weekly's pauses under +25% are noise
+    LATER_STALL_MINUTES          20  ->  30
+    LATER_STALL_GIVEBACK_BAND  0.20  ->   0     hands the basis to...
+    LATER_STALL_GIVEBACK_ATR      0  ->  0.25   a quarter of the name's ATR, in
+                                                spread points, whatever the entry
+    LATER_HOLD_UNTIL            (new)   09:45   0DTE keeps 09:30
+
+EFFECTIVE ON THE TWO POSITIONS:
+
+    SNDK 1700/1780 @38.65   stop 21.26   stall gives back 24.8 pts once the
+                            peak has been +25% (mark 48.3)   intrinsic target
+                            76 = SNDK 1776   mark target 65.7
+    MU   1000/1015 @6.80    the same weekly rules today; ON MONDAY IT IS 0DTE
+                            and the 0DTE ladder takes over at 09:30: -30%/5,
+                            -10%/30, 2-min stall, +70%, flatten 15:45
+
+WHY ATR FOR THE BAND. The band basis (a share of width - entry) is the right
+unit intraday because it is fixed at entry and travels between structures.
+Over five days the thing the stall has to survive is the name's daily range,
+and ATR14 is that range. 0.25 ATR is a quarter of an average day: a pause
+smaller than that on a weekly is not information. _giveback_points already
+had the ATR basis (section 134's knob), behind the band; BAND=0 uncovers it.
+
+THE CODE: ORPHAN_LATER_HOLD_UNTIL, read only where zero_dte is False;
+_past_hold_until(setting) takes the window to ask about; /trading/positions
+reports the window that applies to each row. And a display bug found on the
+first verdict line after deploy: the weekly stall label called
+_giveback_points without the weekly band, so it printed the 0DTE-band figure
+(16.0 pts) while the rule in force was 64.2 pts of return. The label now
+passes ORPHAN_LATER_STALL_GIVEBACK_BAND. The rule itself was never wrong;
+the sentence describing it was, which is the class of error the verdict
+line exists to prevent (section 190's "say only what applies").
+
+BOTH FRAMES, because this widens loss before it improves anything:
+
+    expectancy   a directional weekly stops being shaken out by a normal day;
+                 the stall no longer books the first +6% pause
+    worst day    SNDK max realised on the stop goes from -$1,930 to -$3,480;
+                 MU 1000/1015 x5 from -$850 to -$1,530 for today and tomorrow
+
+NOT MEASURED, and that is the most important line in this section. Every
+0DTE number above was set by exit_backtest over ~200 positions. Every weekly
+number is reasoning about SNDK's ATR recorded as a setting. The harness
+cannot settle a position past its entry day; until expiry_closes.py settles
+at the EXPIRY close (WEEKLY_SINGLE_NAMES_PLAN.md section 7), these two
+positions are the entire sample.
+
+Also this afternoon, recorded so the log agrees with the account: the SNDK
+1720/1740 and INTC 102/107 hand triggers fired a shade under their short
+strikes (-54 and -105); the operator opened SNDK 1700/1780 x2 for 09-25 and
+MU 1000/1015 x5 for 09-21 by hand and asked that they be left to the engine;
+the NVDA 215/240 and GOOGL 345/380 picks from the ranker were not placed --
+the placement was blocked by the session's permission layer and then
+superseded by the operator's own entries. All hand triggers and the 15:00
+arming timer are removed; nothing outside the engine can place an order.
+
+ONE CONSEQUENCE TO KNOW ABOUT. 0.25 ATR is denominated in the UNDERLYING and
+the spread's profit band is denominated in its WIDTH. On MU 1000/1015 @6.80,
+ATR 42, the give-back is 10.6 spread points against a band of 8.2 -- the
+weekly stall cannot fire on that position at all; the targets and the stop
+carry it. That is acceptable on a 15-wide spread expiring Monday, and it is
+the reason the plan sizes weekly debits to the name's ATR rather than to a
+fixed dollar width. A spread narrower than a quarter of the name's daily
+range is an intraday structure whatever its expiry.

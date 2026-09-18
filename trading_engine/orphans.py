@@ -788,6 +788,14 @@ ORPHAN_FORCE_CLOSE = os.getenv("TRADING_ORPHAN_FORCE_CLOSE", "15:45").strip()
 # firing into the bell. A SNDK weekly sold on TARGET at 09:31 (section 174).
 ORPHAN_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_HOLD_UNTIL", "").strip()
 
+# THE WEEKLY BOOK HAS ITS OWN OPENING QUIET PERIOD. 09:30 was chosen for
+# PINNED 0DTE positions, where the first print can be the whole day's profit
+# and a rule that waits misses it. A position with days to run has nothing to
+# book at the open and a great deal to lose to the opening spread, so it waits
+# longer. Empty means "same as ORPHAN_HOLD_UNTIL", which is how every
+# deployment before 2026-09-18 behaved.
+ORPHAN_LATER_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_LATER_HOLD_UNTIL", "").strip()
+
 # THE SLOW STOP: A LEVEL THAT HAS TO HOLD, NOT A LEVEL THAT IS TOUCHED.
 #
 # ORPHAN_STOP_PCT is a FAST stop -- it fires on the first cycle through its
@@ -1503,18 +1511,22 @@ def _past_force_close() -> bool:
         return False
 
 
-def _past_hold_until() -> bool:
+def _past_hold_until(setting: "str | None" = None) -> bool:
     """Is it past the opening quiet period, in New York? See ORPHAN_HOLD_UNTIL.
+
+    `setting` lets the weekly ladder ask about ITS window
+    (ORPHAN_LATER_HOLD_UNTIL); the default is the 0DTE one.
 
     Fails OPEN on a bad value -- an unparseable time leaves the stop and the
     stall working as they do today rather than silently disabling two exit
     rules for a whole session.
     """
-    if not ORPHAN_HOLD_UNTIL:
+    hold = ORPHAN_HOLD_UNTIL if setting is None else setting
+    if not hold:
         return True
     try:
         from zoneinfo import ZoneInfo
-        hh, mm = (int(x) for x in ORPHAN_HOLD_UNTIL.split(":"))
+        hh, mm = (int(x) for x in hold.split(":"))
         now = datetime.now(ZoneInfo("America/New_York"))
         return (now.hour, now.minute) >= (hh, mm)
     except Exception:
@@ -2078,7 +2090,9 @@ def review(engine_symbols: "set | None" = None) -> list:
 
             # Computed once per structure so the log line below can say the
             # rules are waiting rather than just omitting them.
-            past_hold = _past_hold_until()
+            hold_until = (ORPHAN_HOLD_UNTIL if zero_dte
+                          else (ORPHAN_LATER_HOLD_UNTIL or ORPHAN_HOLD_UNTIL))
+            past_hold = _past_hold_until(hold_until)
 
             # THE GIVEBACK, AND ITS CONFIRMATION CLOCK.
             #
@@ -2478,7 +2492,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                     if ORPHAN_LATER_STOP_PCT < 0 and not st["credit"]:
                         parts.append("stop %+.0f%%/%.0fmin%s" % (
                             ORPHAN_LATER_STOP_PCT, ORPHAN_LATER_STOP_MINUTES,
-                            "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
+                            "" if past_hold else " from %s" % hold_until))
                     if ORPHAN_LATER_STALL_MINUTES > 0:
                         # REPORT THE EFFECTIVE GIVE-BACK, not the setting. Under
                         # the ATR configuration the number that actually applies
@@ -2486,9 +2500,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                         # raw setting would describe a rule the engine is not
                         # using -- exactly the class of quiet lie the verdict line
                         # exists to prevent.
+                        # And the WEEKLY band, not the 0DTE one: without it
+                        # this printed 16.0 pts on SNDK 1700/1780 while the
+                        # rule in force was 64.2 (2026-09-18).
                         _gb = _giveback_points(
                             st["root"], entry_abs, rec["peak"], None,
-                            abs(st["short_strike"] - st["long_strike"]))
+                            abs(st["short_strike"] - st["long_strike"]),
+                            ORPHAN_LATER_STALL_GIVEBACK_BAND)
                         _atr_note = ""
                         if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0:
                             _a = _atr_for(st["root"])

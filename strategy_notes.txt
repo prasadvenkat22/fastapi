@@ -11640,3 +11640,89 @@ reads one of them, and it is the one that decides whether a pin holds.
     positions for one afternoon. The difference from a rule is that the
     operator is choosing it knowing the trade: certainty at the short strike
     against the last 400-1,600 dollars of premium at the bell.
+
+
+191. THE TRIGGER TRAILS, A SELL-ALL, AND THE ROTATION IT COLLIDED WITH  (2026-09-18)
+--------------------------------------------------------------------------------
+
+QQQ 715/717 x10 showed "peak +49.3%" all morning and the operator asked how
+the stall watcher let it slip. It did not. 2.00 / 1.34 is +49.3%: the peak
+is INTRINSIC, pinned at the width with QQQ above 717 at 10:06 ET. The spread's
+QUOTE never exceeded 1.36 (+1.5%) -- a $2-wide 0DTE with the stock a dollar
+over the short strike carries 0.60-0.70 of time value in that short leg, so
+drag ran 32-35% of width against a 15% ceiling and every profit branch was
+correctly blocked. Selling at 1.30 with intrinsic 2.00 gives away $700 on
+ten lots and books a loss against cost. The stall needs a gain on mark (+8%
+floor); the mark was under cost. Nothing to protect, nothing slipped.
+
+    Confirmed later in the session: when QQQ pushed to 717.3 and the drag
+    shrank, the same ten lots sold at 1.47 and 1.52. The morning "profit" was
+    only ever reachable at 15:45 or on a smaller drag.
+
+THE TRIGGER NOW TRAILS. Section 190's fixed LEVEL protects the worst case and
+nothing else; with QQQ at 716.7 and a 715.50 floor, a run to 717.4 and back
+to 715.6 would have returned every cent of the run without the floor moving.
+
+    scripts/underlying_trigger.py SYM LONG SHORT FLOOR --cushion C --shade S
+
+    call:  level = max(FLOOR, min(high_water - cushion, SHORT - shade))
+    put:   level = min(FLOOR, max(low_water  + cushion, SHORT + shade))
+
+Moves only in the protective direction. Capped a shade inside the short
+strike, because past the short strike a debit spread has nothing more to
+earn -- intrinsic is the width -- and a trigger above it would only sell a
+full-width spread into its own drag. Puts are now handled (long > short).
+Without --cushion it is section 190's fixed trigger.
+
+    Armed 13:06 ET: SNDK 1605/1730 floor 1729.50 cushion 15 (already at cap,
+    SNDK 1744); QQQ 715/717 floor 715.50 cushion 1.00 shade 0.25, which
+    ratcheted to 715.95 on its first print. SNDK had been rolled a second
+    time (1710 -> 1730, basis 66.80 -> 80.25 by the section 189 walk, which
+    held) and the old sndk_trigger.py was still watching a structure that no
+    longer existed. Killed.
+
+    MU's trigger from section 190 fired at 11:47 ET at 989.48: closed
+    975/990 at 10.60 against 6.60, +400.
+
+SELL-ALL AT 13:15 ET, operator's call with SNDK pinned above 1730. Driven
+through orphans._close per structure (the /trading/flatten endpoint exists
+but needs a login bearer token the operator holds, not the shell). Fills:
+
+    SNDK C 1605/1730 x1   80.25 -> 117.46   +3,721
+    QQQ  C 715/717   x5    1.34 ->   1.47      +65
+    QQQ  C 715/717   x5    1.34 ->   1.52      +90
+    QQQ  P 720/717   x2    2.36 ->   2.33       -6
+    INTC C 106/109   x4    1.06 ->   1.02      -16
+    TSLA P 365/357.5 x1    2.51 ->   2.44       -7
+
+TWO THINGS THE SELL-ALL EXPOSED.
+
+    TRADING_MAX_ORDER_CONTRACTS=5 split the QQQ ten-lot into two orders. Both
+    filled inside 40 seconds; a bigger book would need more passes and the
+    second pass only exists because open_structures() was re-read after the
+    first fill. A flatten that submits once and walks away leaves half.
+
+    THE ROTATION COLLIDED WITH IT. dte0_trade --rotate fires */15 13-18 UTC.
+    Its 13:15 ET run placed TSLA P 365/357.5 and INTC C 106/109 x4 FOUR
+    SECONDS after the first close order, so the first pass saw three
+    structures and the second saw two new ones. Closed as well, -23 of
+    slippage. Its 13:00 run also left an INTC 107/110 put order working,
+    unfilled. A sell-all is not a stand-down: the entry cron does not know
+    the operator wants to be flat, and nothing tells it. If "be flat" is
+    ever a rule rather than a hand action, it needs to disable the rotation
+    for the session first, then close, in that order.
+
+A SMALLER LESSON, RECORDED SO IT IS NOT RELEARNED: `pkill -f underlying_trigger`
+over ssh matches the ssh session's OWN command line, kills the shell, and the
+session dies with exit 255 and no output before anything else runs. Three
+"transient" ssh failures were this. Anchor the pattern to the process:
+pkill -f '^python scripts/underlying_trigger'.
+
+THE WEEKLY SINGLE-NAME BOOK is designed and not built: WEEKLY_SINGLE_NAMES_PLAN.md.
+Budget 2,000, EV and Pwin both gate, structure chosen by the news verdict
+(bullish -> call debit, bearish -> put debit, neutral + IV rank >= 60 ->
+condor, otherwise nothing), shadow first. Two facts from the data that shape
+it: the 0.12-delta credit shadow book kept its whole credit on 12 of 15
+names and lost 2-3x its width on the three that moved (SNDK, STX, META);
+and the verdicts are mostly NEUTRAL (30 of 44 in the last week), so the
+book will often hold one position or none.

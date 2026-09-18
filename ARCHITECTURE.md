@@ -1358,6 +1358,20 @@ quote noise on a $17k position (section 134). **It alerts; it does not trade.**
 
 A trigger that must not be missed belongs at the **broker**, not here.
 
+`underlying_trigger.py SYM LONG SHORT FLOOR [--cushion C --shade S]` is the
+one operator tool that **does trade**: a one-shot close of a named debit spread
+when the **share price** crosses the level, through `orphans._close` so the
+holdings clamp applies. Below the level for a call spread, above it for a put.
+With `--cushion` the level trails the best print and only ever tightens, capped
+a `shade` inside the short strike because past the short strike a debit spread
+has nothing more to earn (sections 190–191). It runs as a detached process in
+the container; kill it with a pattern anchored to the process, never with a bare
+`pkill -f` over ssh, which matches the ssh session itself.
+
+**A sell-all is not a stand-down.** `dte0_trade --rotate` fires every 15 minutes
+and does not know the operator wants to be flat; on 2026-09-18 it opened two
+spreads four seconds into a sell-all. Disable the rotation first, then close.
+
 ---
 
 ## The rule that keeps this honest

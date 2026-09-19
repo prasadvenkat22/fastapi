@@ -435,6 +435,11 @@ async def screen_verticals(
     per_symbol: int = Query(0, ge=0, le=50),
     rr_min: float = Query(0.0, ge=0.0),
     rr_max: float = Query(0.0, ge=0.0),
+    expiry: str = Query("", description="exact date (2026-09-21) or \"+N\" for the "
+                                        "first expiry at least N days out; blank = "
+                                        "each name's NEAREST, which on Monday is the "
+                                        "same day for MU/NVDA/TSLA and Friday for "
+                                        "SNDK -- ask for one date to compare a board"),
 ):
     """Rank verticals, bought or sold. Same maths as weekly_pick.py, one import.
 
@@ -470,7 +475,7 @@ async def screen_verticals(
     try:
         out = rank(_symbols(symbols), side, by=by, top=top,
                    rr_min=rr_min, rr_max=rr_max,
-                   structure=structure, per_symbol=per_symbol)
+                   structure=structure, per_symbol=per_symbol, expiry=expiry)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:

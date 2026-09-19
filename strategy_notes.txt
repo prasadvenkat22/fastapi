@@ -11913,3 +11913,80 @@ NOT MEASURED AS A RULE. The fill table is measured; the VWAP stepping is the
 operator's logic, recorded as a setting. Monday's MU is the first data point.
 The MAX_CONTRACTS cap of 5 still applies to the ask: on x9 it rests 5, and
 the remaining 4 are asked on the pass after the first fill.
+
+
+194. THE TAPE AS A VETO: VWAP FLOW ON SINGLE-NAME ENTRIES  (2026-09-19)
+--------------------------------------------------------------------------------
+
+Asked: does the engine take single-name positions on its own, and if so the
+entry should read macro news, the name's own news, and a continuously rising
+VWAP -- "institutions getting in" -- before a call debit, the mirror before a
+put, then EV and Pwin. Answer to the first half: the 0DTE rotation already
+does, every 15 minutes from 09:00, $1,500 over two slots, behind the macro
+veto, the Polygon news veto and the EV/Pwin/edge ranking. Weekly single-name
+debits do not; that is still WEEKLY_SINGLE_NAMES_PLAN.md. VWAP was read
+nowhere in single names.
+
+THE SIGNAL EXISTED AND WAS UNUSABLE AT 09:45. weekly_signals.intraday_accumulation
+computes exactly the four readings asked for -- VWAP slope, share of bars
+above VWAP, volume-weighted close location, volume against ADV -- on yfinance
+HOURLY bars. At 09:45 the session has one bar and the function returns
+nothing until about 11:30. It was also only ever recorded on weekly rows, 15
+of them, all Friday-close credits, and never consulted.
+
+BUILT: trading_engine/vwap_gate.py, on Tradier 5-minute bars through the
+order client, three bars by the first 09:45 run, cached a minute. The gate
+for a call debit, all four required:
+
+    spot        above the running session VWAP
+    slope       running VWAP higher than 6 bars (30 min) ago
+    bars above  >= 60% of bars closed above the running VWAP
+    close loc   volume-weighted close location > 0
+
+Puts mirror. Unreadable tape = refusal: an entry gate that cannot read the
+tape does not wave a trade through. Wired into dte0_trade after the news
+veto: like it, the gate can only REMOVE. Every candidate logs one FLOW line
+with the four readings and the verdict, so the veto is scorable afterwards.
+TRADING_DTE0_VWAP_GATE = veto | record | off.
+
+WHAT IT IS NOT, said plainly because the request said "institutions": every
+buyer has a seller and OHLCV cannot tell them apart. It measures URGENCY --
+whether buyers paid up through the session -- which is the footprint a large
+order worked against a VWAP benchmark leaves behind. Same caveat
+intraday_accumulation carried.
+
+CHECKED ON FRIDAY'S REAL MU BARS, 78 of them:
+
+    09:40   3 bars   spot 991.00 above VWAP 986.94, slope +0.20%, 100% above,
+                     close-loc +0.68          call OK   put refused
+    10:25  12 bars   994.77 above 990.60, +0.16%, 100%, +0.46   call OK
+    11:55  30 bars   988.08 UNDER 991.24, -0.01%, 70%, +0.26    both refused
+    15:55  78 bars   1014.70 above 997.15, +0.21%, 82%, +0.20   call OK
+
+That is the shape wanted: open to calls while MU was being bought, shut both
+ways in the midday chop, open again on the afternoon run.
+
+REPLAYED OVER EVERY PAST ROTATION ENTRY THE LOG STILL HOLDS -- 13, on two
+sessions, scripts/flow_gate_replay.py. The gate would have refused 6: both
+TSLA puts on 09-14 (the day MU rose 22 and six put spreads stopped out), the
+NVDA call that lost 6, the AVGO put, and both INTC 106/109 call re-entries on
+09-18, which lost. Directionally right on every one with a known outcome.
+STATISTICALLY NOTHING: 13 entries, 3 with a clean outcome match. The join to
+trading_history is by day, name and strikes within half a point (the log
+prints 357.5 as 358), and most of Friday's picks were either rejected orders
+at 13:00 or closed by hand in the sell-all.
+
+LIVE IN VETO MODE FROM MONDAY, at the operator's decision, against the
+measure-first recommendation, which was to run it in record mode for two to
+three weeks first. Recorded as such. What will settle it: the FLOW lines.
+Every candidate's four readings and the verdict are in dte0-trade.log from
+Monday; in three weeks the replay has a sample, and record vs veto is a
+number. The cost side to watch: a gate that needs four agreements refuses
+most cycles on a two-sided tape, so the rotation will trade less. On the
+data so far that is the point.
+
+Tests: tests/test_vwap_gate.py -- seven cases on synthetic bars: too few
+bars refuses, steady buying passes calls and refuses puts, steady selling
+the mirror, a single late spike above VWAP does NOT pass (the slope and
+bars-above tests are what stop it), the spot override, the mirrored
+bars-below test for puts, describe() never raises.

@@ -1217,6 +1217,8 @@ TRADING_ORPHAN_LATER_STOP_PCT=-45   held 15 min; respects intrinsic
 TRADING_ORPHAN_ASK=true             rest a sell above the bid on a pinned 0DTE spread (§193)
 TRADING_ORPHAN_ASK_START_WIDTH=0.88 TRADING_ORPHAN_ASK_STEP=0.10 TRADING_ORPHAN_ASK_STEP_MINUTES=3
 TRADING_ORPHAN_ASK_VWAP_FROM=09:40  TRADING_ORPHAN_ASK_CANCEL_BY=15:40  floor = the TARGET level
+TRADING_DTE0_VWAP_GATE=veto         the tape veto on single-name entries (§194); record = log only
+TRADING_VWAP_MIN_BARS=3  TRADING_VWAP_SLOPE_BARS=6  TRADING_VWAP_BARS_ABOVE_MIN=0.60
 ```
 
 **It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and
@@ -1372,6 +1374,20 @@ a `shade` inside the short strike because past the short strike a debit spread
 has nothing more to earn (sections 190–191). It runs as a detached process in
 the container; kill it with a pattern anchored to the process, never with a bare
 `pkill -f` over ssh, which matches the ssh session itself.
+
+**Single-name 0DTE entries** (`dte0_trade.py --rotate --live`, every 15 min
+09:00–13:45 ET, budget $1,500 over two slots, no entries after 13:30) clear, in
+order: the **macro veto** (bearish read refuses call debits, bullish refuses
+puts), the **Polygon news veto** per symbol (BEARISH ≥ 0.50 confidence refuses
+calls, BULLISH refuses puts), the **VWAP flow veto** (`vwap_gate.py`, section
+194: a call debit needs spot above the running session VWAP, VWAP higher than
+30 minutes ago, ≥ 60% of 5-minute bars closing above it, and volume arriving on
+closes near bar highs; puts need the mirror; an unreadable tape refuses), then
+**EV, Pwin and edge** ranking under the structure limits. Every veto only
+removes; nothing in news or the tape proposes a trade. `TRADING_DTE0_VWAP_GATE`
+is `veto` | `record` | `off`; `scripts/flow_gate_replay.py` replays the gate
+over past rotation entries. Weekly single-name debits have **no automatic
+path** yet (WEEKLY_SINGLE_NAMES_PLAN.md).
 
 **ASK mode** (`TRADING_ORPHAN_ASK=true`, 0DTE only, section 193): when a debit
 spread sits at **full intrinsic** and nothing in the ladder wants to act, the

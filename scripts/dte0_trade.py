@@ -72,6 +72,7 @@ from trading_engine.macro_calendar import (  # noqa: E402
     blackout_active as event_blackout_active, describe as describe_event)
 from trading_engine.data_feed import fetch_option_chain, fetch_spot  # noqa: E402
 from trading_engine.screener import rank  # noqa: E402
+from trading_engine import vwap_gate  # noqa: E402
 from trading_engine.symbol_news import (classify_day,  # noqa: E402
                                         verdict_at)
 
@@ -220,6 +221,22 @@ NEWS_VETO = os.getenv("TRADING_DTE0_NEWS_VETO", "true").lower() == "true"
 NEWS_MIN_CONF = float(os.getenv("TRADING_DTE0_NEWS_MIN_CONF", "0.50"))
 NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
 NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
+
+# THE TAPE, AS A VETO ON DIRECTION -- section 194. After macro and news have
+# had their say, the flow gate asks whether the session is actually being
+# BOUGHT before a call debit goes on: spot above the running VWAP, VWAP higher
+# than 30 minutes ago, most bars closing above it, volume arriving on closes
+# near bar highs. Puts need the mirror. Read on Tradier 5-minute bars, so it
+# has three bars by the first 09:45 run.
+#
+# Like the news veto it can only REMOVE: nothing here proposes a trade, and a
+# structure still has to clear EV, edge and the constraints first. Unlike the
+# news veto it fires often -- a tape that is not clearly one-sided fails one of
+# four tests most of the time -- which is the point of it and also the cost.
+#
+# UNMEASURED at the time it went live. TRADING_DTE0_VWAP_GATE=record logs the
+# same lines and refuses nothing, which is how it should have started.
+VWAP_GATE = vwap_gate.MODE          # veto | record | off
 
 # THE MACRO READ, AS AN ASYMMETRIC VETO ON DIRECTION.
 #
@@ -701,6 +718,7 @@ def main() -> None:
 
     # Best surviving candidate per symbol per side.
     best: dict = {}
+    flow_logged: set = set()
     for side in ("call", "put"):
         try:
             res = rank(syms, side, by=args.by, top=60, structure="debit", expiry=exp)
@@ -803,6 +821,20 @@ def main() -> None:
                                 "bullish" if bullish else "bearish", verdict,
                                 conf or 0.0)
                     rejects["against the news read"] += 1
+                    continue
+            if VWAP_GATE in ("veto", "record"):
+                bullish = r.get("direction") != "bearish"
+                flow = vwap_gate.session_flow(r["sym"])
+                ok, why = vwap_gate.gate("bullish" if bullish else "bearish", flow)
+                if (r["sym"], side) not in flow_logged:
+                    flow_logged.add((r["sym"], side))
+                    logger.info("%s %s %s -> %s: %s", r["sym"], side.upper(),
+                                vwap_gate.describe(flow),
+                                "ok" if ok else ("REFUSED" if VWAP_GATE == "veto"
+                                                  else "would refuse"), why)
+                r["_flow"] = vwap_gate.describe(flow)
+                if not ok and VWAP_GATE == "veto":
+                    rejects["against the tape (VWAP flow)"] += 1
                     continue
             if r.get("conflict"):
                 logger.info("%s %s refused: %s", r["sym"], side.upper(), r["conflict"])

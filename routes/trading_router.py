@@ -184,10 +184,12 @@ async def get_broker_positions():
         else:
             band = orphans.ORPHAN_LATER_STALL_GIVEBACK_BAND
             flat = None
-            quiet_needed = orphans.ORPHAN_LATER_STALL_MINUTES
-            armed = peak is not None and peak >= orphans.ORPHAN_LATER_STALL_ARM_PCT
+            LP = orphans.later_params(st)         # scaled by sessions left (§199)
+            quiet_needed = LP["stall_minutes"]
+            armed = peak is not None and peak >= LP["stall_arm"]
         giveback = orphans._giveback_points(
-            st["root"], entry, peak or 0.0, flat, width, band)
+            st["root"], entry, peak or 0.0, flat, width, band,
+            None if zero_dte else LP["giveback_atr"])
 
         # The drag ceiling decides whether a PROFITABLE exit is allowed at all,
         # and it was the missing field: it is what held this position open.
@@ -218,10 +220,9 @@ async def get_broker_positions():
             # ORPHAN_LATER_STOP_PCT existed and has been wrong since.
             stop_pct=((orphans.ORPHAN_CREDIT_STOP_PCT if st["credit"]
                        else orphans.ORPHAN_STOP_PCT) if zero_dte
-                      else (orphans.ORPHAN_LATER_STOP_PCT
-                            if orphans.ORPHAN_LATER_STOP_PCT < 0 else None)),
+                      else (LP["stop_pct"] if LP["stop_pct"] < 0 else None)),
             stop_confirm_minutes=(orphans.ORPHAN_STOP_CONFIRM_MINUTES if zero_dte
-                                  else orphans.ORPHAN_LATER_STOP_MINUTES),
+                                  else LP["stop_minutes"]),
             stall_giveback_points=round(giveback, 2),
             stall_giveback_pct=round(giveback, 2),
             stall_quiet_minutes=quiet_needed,

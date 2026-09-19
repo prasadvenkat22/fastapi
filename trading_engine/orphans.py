@@ -903,6 +903,78 @@ ORPHAN_LATER_STOP_PCT = float(
     os.getenv("TRADING_ORPHAN_LATER_STOP_PCT", "0") or 0)
 ORPHAN_LATER_STOP_MINUTES = float(
     os.getenv("TRADING_ORPHAN_LATER_STOP_MINUTES", "15"))
+
+# THE LATER LADDER SCALES WITH THE SESSIONS LEFT -- section 199.
+#
+# Until 2026-09-19 every position not expiring today got the same numbers,
+# whether it had five sessions left or one. A -45% stop and a +25% stall arm
+# are set for a spread with a week to recover; on Thursday afternoon the same
+# spread has one session, the least time to come back from -45% and the most
+# to lose from a give-back, and the ladder treated it like Monday.
+#
+# So each LATER number is now interpolated between a ONE-SESSION anchor (the
+# 0DTE ladder's values, or close to them) and the FULL-WEEK value already set,
+# on f = (sessions_left - 1) / (SCALE_DAYS - 1), clamped to [0, 1]:
+#
+#     sessions left    1        2        3        4        5+
+#     stop            -30%    -33.8%   -37.5%   -41.3%   -45%
+#     stop confirm      5       7.5      10       12.5     15 min
+#     stall arms at    +5%     +10%     +15%     +20%     +25%
+#     stall quiet      10       15       20       25       30 min
+#     give-back ATR    0.10     0.14     0.18     0.21     0.25
+#
+# Sessions are TRADING days between the New York date and the expiry, so a
+# Friday weekly bought Monday runs 4, 3, 2, 1 and then the 0DTE ladder on
+# Friday itself. A stated assumption, like the rest of the weekly ladder; the
+# harness cannot settle a weekly to measure it. TRADING_ORPHAN_LATER_SCALE=false
+# restores the flat numbers.
+ORPHAN_LATER_SCALE = os.getenv("TRADING_ORPHAN_LATER_SCALE", "true").lower() == "true"
+ORPHAN_LATER_SCALE_DAYS = max(2, int(os.getenv("TRADING_ORPHAN_LATER_SCALE_DAYS", "5")))
+ORPHAN_LATER_STOP_PCT_1D = float(os.getenv("TRADING_ORPHAN_LATER_STOP_PCT_1D", "-30"))
+ORPHAN_LATER_STOP_MINUTES_1D = float(os.getenv("TRADING_ORPHAN_LATER_STOP_MINUTES_1D", "5"))
+ORPHAN_LATER_STALL_ARM_1D = float(os.getenv("TRADING_ORPHAN_LATER_STALL_ARM_1D", "5"))
+ORPHAN_LATER_STALL_MINUTES_1D = float(os.getenv("TRADING_ORPHAN_LATER_STALL_MINUTES_1D", "10"))
+ORPHAN_LATER_STALL_GIVEBACK_ATR_1D = float(os.getenv("TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR_1D", "0.10"))
+
+
+def _sessions_to_expiry(st: dict, today=None) -> int:
+    """Trading sessions from today (New York) to the structure's expiry, >= 0."""
+    try:
+        from zoneinfo import ZoneInfo
+        exp = datetime.strptime(str(st.get("expiry")), "%y%m%d").date()
+        d = today or datetime.now(ZoneInfo("America/New_York")).date()
+        try:
+            from .market_calendar import is_trading_day
+        except Exception:
+            is_trading_day = lambda x: x.weekday() < 5     # noqa: E731
+        n = 0
+        while d < exp:
+            d = d.fromordinal(d.toordinal() + 1)
+            if is_trading_day(d):
+                n += 1
+        return n
+    except Exception:
+        return ORPHAN_LATER_SCALE_DAYS
+
+
+def later_params(st: dict, today=None) -> dict:
+    """The LATER ladder's numbers for THIS structure, scaled by sessions left."""
+    full = {"stop_pct": ORPHAN_LATER_STOP_PCT, "stop_minutes": ORPHAN_LATER_STOP_MINUTES,
+            "stall_arm": ORPHAN_LATER_STALL_ARM_PCT, "stall_minutes": ORPHAN_LATER_STALL_MINUTES,
+            "giveback_atr": ORPHAN_LATER_STALL_GIVEBACK_ATR}
+    dte = _sessions_to_expiry(st, today)
+    if not ORPHAN_LATER_SCALE or ORPHAN_LATER_STOP_PCT >= 0:
+        return dict(full, dte=dte, f=1.0)
+    f = min(1.0, max(0.0, (dte - 1) / float(ORPHAN_LATER_SCALE_DAYS - 1)))
+    one = {"stop_pct": ORPHAN_LATER_STOP_PCT_1D, "stop_minutes": ORPHAN_LATER_STOP_MINUTES_1D,
+           "stall_arm": ORPHAN_LATER_STALL_ARM_1D, "stall_minutes": ORPHAN_LATER_STALL_MINUTES_1D,
+           "giveback_atr": ORPHAN_LATER_STALL_GIVEBACK_ATR_1D}
+    out = {k: round(one[k] + f * (full[k] - one[k]), 4) for k in full}
+    # The ATR give-back only applies when the full-week configuration uses it.
+    if ORPHAN_LATER_STALL_GIVEBACK_ATR <= 0:
+        out["giveback_atr"] = 0.0
+    out.update(dte=dte, f=round(f, 3))
+    return out
 ORPHAN_SLOW_STOP_MINUTES = float(
     os.getenv("TRADING_ORPHAN_SLOW_STOP_MINUTES", "30") or 30)
 
@@ -1133,7 +1205,8 @@ def _atr_for(root: str) -> "float | None":
 
 def _giveback_points(root: str, entry_abs: float, peak_pct: float = 0.0,
                      flat: "float | None" = None, width: float = 0.0,
-                     band: "float | None" = None) -> float:
+                     band: "float | None" = None,
+                     atr_factor: "float | None" = None) -> float:
     """Points of RETURN that count as a give-back for this structure.
 
     THREE BASES, tried in the order of how well each travels between
@@ -1164,10 +1237,11 @@ def _giveback_points(root: str, entry_abs: float, peak_pct: float = 0.0,
         return _band * (width - entry_abs) / entry_abs * 100.0
     if ORPHAN_STALL_GIVEBACK_FRACTION > 0 and peak_pct > 0:
         return peak_pct * ORPHAN_STALL_GIVEBACK_FRACTION
-    if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0 and entry_abs:
+    _af = ORPHAN_LATER_STALL_GIVEBACK_ATR if atr_factor is None else atr_factor
+    if _af > 0 and entry_abs:
         atr = _atr_for(root)
         if atr:
-            return ORPHAN_LATER_STALL_GIVEBACK_ATR * atr / entry_abs * 100.0
+            return _af * atr / entry_abs * 100.0
     return ORPHAN_LATER_STALL_GIVEBACK_PCT if flat is None else flat
 
 
@@ -2428,21 +2502,22 @@ def review(engine_symbols: "set | None" = None) -> list:
             # The later-expiry stop. Guards live in the condition rather
             # than the branch so the reason line below stays a plain elif.
             later_stop_held = False
-            if (ORPHAN_LATER_STOP_PCT < 0 and not zero_dte and past_hold
+            LP = later_params(st)      # the LATER numbers for THIS expiry -- section 199
+            if (LP["stop_pct"] < 0 and not zero_dte and past_hold
                     and not st["credit"] and not intrinsic_ok):
-                if ret_pct <= ORPHAN_LATER_STOP_PCT:
+                if ret_pct <= LP["stop_pct"]:
                     rec.setdefault("later_stop_since", now.isoformat())
                     _lheld = (now - datetime.fromisoformat(
                         rec["later_stop_since"])).total_seconds() / 60.0
-                    later_stop_held = _lheld >= ORPHAN_LATER_STOP_MINUTES
+                    later_stop_held = _lheld >= LP["stop_minutes"]
                     if not later_stop_held:
                         logger.info(
-                            "ORPHAN %s %g/%g has been %+.1f%% for %.0f of the %.0f "
-                            "minutes the later-expiry stop needs — watching. It "
-                            "expires %s, so there is time for this to be noise.",
+                            "ORPHAN %s %g/%g has been %+.1f%% for %.0f of the %.1f "
+                            "minutes the later-expiry stop needs (%d session(s) left, "
+                            "stop %+.1f%%) — watching. It expires %s.",
                             st["root"], st["long_strike"], st["short_strike"],
-                            ret_pct, _lheld, ORPHAN_LATER_STOP_MINUTES,
-                            st.get("expiry"),
+                            ret_pct, _lheld, LP["stop_minutes"], LP["dte"],
+                            LP["stop_pct"], st.get("expiry"),
                         )
                 else:
                     rec.pop("later_stop_since", None)
@@ -2528,13 +2603,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                 drag_blocks = False
 
             stall_later_armed = (
-                (not zero_dte) and past_hold and ORPHAN_LATER_STALL_MINUTES > 0
-                and rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
-                and quiet >= ORPHAN_LATER_STALL_MINUTES
+                (not zero_dte) and past_hold and LP["stall_minutes"] > 0
+                and rec["peak"] >= LP["stall_arm"]
+                and quiet >= LP["stall_minutes"]
                 and stall_pct <= rec["peak"] - _giveback_points(
                     st["root"], entry_abs, rec["peak"], None,
                     abs(st["short_strike"] - st["long_strike"]),
-                    ORPHAN_LATER_STALL_GIVEBACK_BAND))
+                    ORPHAN_LATER_STALL_GIVEBACK_BAND, LP["giveback_atr"]))
 
             stall_armed = (
                 zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0
@@ -2769,11 +2844,11 @@ def review(engine_symbols: "set | None" = None) -> list:
                     # weekly had no downside rule and becomes a lie the moment
                     # one exists -- the same failure the zero_dte split above
                     # was written to fix.
-                    if ORPHAN_LATER_STOP_PCT < 0 and not st["credit"]:
-                        parts.append("stop %+.0f%%/%.0fmin%s" % (
-                            ORPHAN_LATER_STOP_PCT, ORPHAN_LATER_STOP_MINUTES,
+                    if LP["stop_pct"] < 0 and not st["credit"]:
+                        parts.append("stop %+.1f%%/%.0fmin%s" % (
+                            LP["stop_pct"], LP["stop_minutes"],
                             "" if past_hold else " from %s" % hold_until))
-                    if ORPHAN_LATER_STALL_MINUTES > 0:
+                    if LP["stall_minutes"] > 0:
                         # REPORT THE EFFECTIVE GIVE-BACK, not the setting. Under
                         # the ATR configuration the number that actually applies
                         # is derived per structure, and a log line printing the
@@ -2786,18 +2861,18 @@ def review(engine_symbols: "set | None" = None) -> list:
                         _gb = _giveback_points(
                             st["root"], entry_abs, rec["peak"], None,
                             abs(st["short_strike"] - st["long_strike"]),
-                            ORPHAN_LATER_STALL_GIVEBACK_BAND)
+                            ORPHAN_LATER_STALL_GIVEBACK_BAND, LP["giveback_atr"])
                         _atr_note = ""
-                        if ORPHAN_LATER_STALL_GIVEBACK_ATR > 0:
+                        if LP["giveback_atr"] > 0:
                             _a = _atr_for(st["root"])
                             if _a:
                                 _atr_note = " =%.2f%s@%.2fATR" % (
-                                    ORPHAN_LATER_STALL_GIVEBACK_ATR * _a,
-                                    st["root"], ORPHAN_LATER_STALL_GIVEBACK_ATR)
+                                    LP["giveback_atr"] * _a, st["root"], LP["giveback_atr"])
                         parts.append("stall %.1fpts%s/%.0fmin %s" % (
-                            _gb, _atr_note, ORPHAN_LATER_STALL_MINUTES,
-                            "ARMED" if rec["peak"] >= ORPHAN_LATER_STALL_ARM_PCT
-                            else "arms +%.0f%%" % ORPHAN_LATER_STALL_ARM_PCT))
+                            _gb, _atr_note, LP["stall_minutes"],
+                            "ARMED" if rec["peak"] >= LP["stall_arm"]
+                            else "arms +%.0f%%" % LP["stall_arm"]))
+                    parts.append("%d session(s) left" % LP["dte"])
                 verdict = "holding (%s)" % ", ".join(parts) if parts else "holding"
                 verdict_scope = "" if zero_dte else "  [expires %s]" % st.get("expiry")
             iv_note = ""

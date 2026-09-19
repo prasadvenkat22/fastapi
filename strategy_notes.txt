@@ -12340,3 +12340,49 @@ the LATER ladder these positions will exit through. The rotation log and
 the LATER ladder's marks are the record; the harness still cannot settle a
 weekly (section 191), and that is the next thing to build if this book is
 to be judged rather than believed.
+
+
+199. THE LATER LADDER LEARNS HOW MANY SESSIONS ARE LEFT  (2026-09-19)
+--------------------------------------------------------------------------------
+
+Asked whether stops, stalls and targets differ for 0DTE, mid-week and weekly.
+Two regimes, not three, keyed on whether the position expires TODAY. A weekly
+bought Monday ran the same -45% stop and +25% stall arm on Thursday afternoon
+with one session left as it had on Monday with five. Thursday is when it has
+the least time to recover from -45% and the most to lose from a give-back.
+The operator said fix it.
+
+THE FIX. Every LATER number interpolates between a ONE-SESSION anchor and the
+full-week value, on f = (sessions_left - 1) / 4, clamped to [0, 1]:
+
+    sessions left    1        2        3        4        5+
+    stop            -30%    -33.8%   -37.5%   -41.3%   -45%
+    stop confirm      5       7.5      10       12.5     15 min
+    stall arms at    +5%     +10%     +15%     +20%     +25%
+    stall quiet      10       15       20       25       30 min
+    give-back ATR    0.10     0.14     0.18     0.21     0.25
+
+    Sessions are trading days between the New York date and the expiry, so
+    a Friday weekly bought Monday runs 4, 3, 2, 1 and then the 0DTE ladder on
+    Friday. The one-session anchors are the 0DTE stop and confirm, the
+    original +5% LATER arm, 10 quiet minutes, and section 134's 0.10 ATR.
+    Targets do not scale: +70% on mark and 95% of width on intrinsic are the
+    two ways a weekly finishes on any day. The hold window stays 09:45.
+
+    later_params(st) is the one place the numbers come from; the ladder, the
+    verdict line and /trading/positions all read it, and the verdict now ends
+    with "N session(s) left" so the log says which row of the table applied.
+    TRADING_ORPHAN_LATER_SCALE=false restores the flat numbers.
+
+ON THE OPEN POSITIONS: SNDK 1700/1780 has 5 sessions to 09-25 on Monday
+morning... no -- Monday itself counts from Monday: Tue, Wed, Thu, Fri = 4
+sessions, f = 0.75: stop -41.3% held 12.5 min, stall arms +20% after 25
+quiet minutes, give-back 0.21 ATR. Tuesday 3 sessions, -37.5%; Wednesday
+-33.8%; Thursday -30% held 5 min, arms +5%, 10 minutes, 0.10 ATR; Friday the
+0DTE ladder. MU 1000/1015 expires Monday and is 0DTE from the open.
+
+STATED, NOT MEASURED, like every LATER number (sections 191, 192). The
+interpolation is linear because nothing argues for another shape yet. What
+would settle it is the same instrument the weekly book needs anyway: a
+harness that settles at the expiry close. Five tests on the arithmetic and
+the session count.

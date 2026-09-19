@@ -82,6 +82,44 @@ NY = ZoneInfo("America/New_York")
 
 LIVE_ENABLED = os.getenv("TRADING_DTE0_LIVE", "false").lower() == "true"
 MAX_BUDGET = float(os.getenv("TRADING_DTE0_MAX_BUDGET", "1500"))
+# THE WEEKLY BOOK RUNS THROUGH THIS SAME SCRIPT -- section 198. `--book weekly`
+# changes four things and nothing else: the expiry resolves to a Friday
+# instead of today, the budget ceiling is its own knob, a name the account
+# holds on ANY expiry is refused (a weekly on top of a 0DTE in the same name
+# is the same bet twice), and the closing log names the ladder that will
+# manage it (the LATER rules, not the 15:45 flatten). Every gate -- macro,
+# news, tape, options flow, EV/Pwin/edge, structure limits, rotation cooldown
+# -- is the one the 0DTE book has been measured under. The ranker's Pwin
+# already scales with days to expiry, so the structure constraints hold.
+WEEKLY_MAX_BUDGET = float(os.getenv("TRADING_WEEKLY_MAX_BUDGET", "5000"))
+WEEKLY_MIN_DAYS = int(os.getenv("TRADING_WEEKLY_MIN_DAYS", "2"))
+# THE STRUCTURE BAND IS A 0DTE BAND. "Entry 30-75% of width, short strike
+# within 0.40 ATR" was measured for a spread that has to finish TODAY. Over
+# five sessions the same 0.40 ATR is a fifth of the expected move
+# (0.40 / sqrt(6) sessions), and the first weekly dry run on 2026-09-19
+# rejected all 48 candidates on "entry 9-26% of width". The weekly book gets
+# its own band -- the plan's moderate geometry, R:R 1..3 ranked by edge --
+# and a short-strike allowance scaled for the horizon. Unmeasured, stated.
+WEEKLY_MIN_EW = float(os.getenv("TRADING_WEEKLY_MIN_ENTRY_WIDTH", "0.20"))
+WEEKLY_MAX_EW = float(os.getenv("TRADING_WEEKLY_MAX_ENTRY_WIDTH", "0.75"))
+WEEKLY_MAX_SHORT_ATR = float(os.getenv("TRADING_WEEKLY_MAX_SHORT_ATR", "9.0"))
+WEEKLY_RR = (float(os.getenv("TRADING_WEEKLY_RR_MIN", "1.0")),
+             float(os.getenv("TRADING_WEEKLY_RR_MAX", "3.0")))
+# Two more 0DTE numbers that cannot survive a week: "extrinsic <= 25% of
+# premium" (a five-day spread IS mostly time value -- the second dry run
+# rejected 52 of 52 on it) and "target within N ATR" (the ATR is a daily
+# figure and the target has five sessions to get there).
+# Third dry run: with 80% extrinsic and 1.0 ATR the board rejected 52 of 52
+# again -- 32 on "extrinsic 97-100%" (a slightly-OTM weekly IS all time value
+# until it is not) and 20 on "short strike 1.9-3.1 ATR out" (a DAILY ATR; six
+# sessions expect about 2.4 of them). So the weekly book does not use those
+# two limits at all. Its guard against the lottery ticket is the plan's:
+# entry >= 20% of width, R:R 1..3 by edge, and Pwin >= WEEKLY_MIN_PWIN. The
+# ranker's Pwin already carries the horizon.
+WEEKLY_MAX_EXTRINSIC = float(os.getenv("TRADING_WEEKLY_MAX_EXTRINSIC", "100.0"))
+WEEKLY_MAX_TARGET_ATR = float(os.getenv("TRADING_WEEKLY_MAX_TARGET_ATR", "9.0"))
+WEEKLY_MIN_PWIN = float(os.getenv("TRADING_WEEKLY_MIN_PWIN", "0.45"))
+BOOK = "dte0"           # set by --book; read by _passes
 # QQQ IS DELIBERATELY ABSENT. The engine trades QQQ 0DTE itself from 09:45
 # through its own playbook, and a second QQQ position placed here would be an
 # independent bet on the same underlying, sized separately, with the engine
@@ -401,6 +439,8 @@ def _passes(r: dict) -> "str | None":
     ew = cost / w
     if not (MIN_EW <= ew <= MAX_EW):
         return f"entry {ew:.0%} of width, outside {MIN_EW:.0%}-{MAX_EW:.0%}"
+    if BOOK == "weekly" and float(r.get("pwin") or 0) < WEEKLY_MIN_PWIN:
+        return f"Pwin {float(r.get('pwin') or 0):.0%} below the weekly floor {WEEKLY_MIN_PWIN:.0%}"
     # For a debit the long leg is the strike nearer the money: the LOW strike
     # on a call, the HIGH strike on a put.
     bullish = r.get("direction") != "bearish"
@@ -558,6 +598,27 @@ def _held_today(symbols: set, expiry: str) -> set:
     return held
 
 
+def _resolve_expiry(arg: str, book: str, today: "date | None" = None) -> str:
+    """An ISO date from --expiry.
+
+    ''            today for the 0DTE book; 'friday' for the weekly book
+    'friday'     the next Friday at least WEEKLY_MIN_DAYS calendar days out --
+                 this Friday from Monday to Wednesday, next Friday after
+    '+N'         the first Friday at least N days out
+    YYYY-MM-DD   as given
+    """
+    today = today or date.today()
+    if not arg:
+        arg = "friday" if book == "weekly" else today.isoformat()
+    if arg.startswith("+") or arg == "friday":
+        min_days = int(arg[1:]) if arg.startswith("+") else WEEKLY_MIN_DAYS
+        d = today
+        while d.weekday() != 4 or (d - today).days < min_days:
+            d = d.fromordinal(d.toordinal() + 1)
+        return d.isoformat()
+    return arg
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     ap = argparse.ArgumentParser()
@@ -565,7 +626,9 @@ def main() -> None:
     ap.add_argument("--budget", type=float, default=1500.0)
     ap.add_argument("--max-trades", type=int, default=3)
     ap.add_argument("--by", default="ev", choices=("ev", "evpct", "prob", "edge"))
-    ap.add_argument("--expiry", default="")
+    ap.add_argument("--expiry", default="",
+                    help="YYYY-MM-DD, \"friday\", or \"+N\" (first Friday >= N days out); blank = today, or friday for --book weekly")
+    ap.add_argument("--book", default="dte0", choices=("dte0", "weekly"))
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--rotate", action="store_true",
                     help="re-entry pass: skip names already held, still in "
@@ -573,11 +636,23 @@ def main() -> None:
                          "TRADING_DTE0_ROTATE=true as well.")
     args = ap.parse_args()
 
-    budget = min(args.budget, MAX_BUDGET)
+    ceiling = WEEKLY_MAX_BUDGET if args.book == "weekly" else MAX_BUDGET
+    budget = min(args.budget, ceiling)
     if budget < args.budget:
-        logger.info("Budget clamped to the $%.0f ceiling.", MAX_BUDGET)
+        logger.info("Budget clamped to the $%.0f ceiling.", ceiling)
     syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    exp = args.expiry or date.today().isoformat()
+    exp = _resolve_expiry(args.expiry, args.book)
+    if args.book == "weekly":
+        global MIN_EW, MAX_EW, MAX_SHORT_ATR, MAX_EXTRINSIC, MAX_TARGET_ATR, BOOK
+        BOOK = "weekly"
+        MIN_EW, MAX_EW, MAX_SHORT_ATR = WEEKLY_MIN_EW, WEEKLY_MAX_EW, WEEKLY_MAX_SHORT_ATR
+        MAX_EXTRINSIC, MAX_TARGET_ATR = WEEKLY_MAX_EXTRINSIC, WEEKLY_MAX_TARGET_ATR
+        if args.by == "ev":
+            args.by = "edge"        # the board's default; ev alone finds the OTM lottery ticket
+        logger.info("WEEKLY BOOK: expiry %s (%d days), budget $%.0f over %d slot(s); exits are "
+                    "the LATER ladder (-45%% stop, 30-min stall from +25%%, 0.25 ATR "
+                    "give-back, 95%% intrinsic target, +70%% mark target, 09:45 hold).",
+                    exp, (date.fromisoformat(exp) - date.today()).days, budget, args.max_trades)
     now = datetime.now(NY)
 
     # A SCHEDULED MACRO EVENT. This gate lived only in trading_engine/nodes.py,
@@ -735,7 +810,9 @@ def main() -> None:
     flow_logged: set = set()
     for side in ("call", "put"):
         try:
-            res = rank(syms, side, by=args.by, top=60, structure="debit", expiry=exp)
+            rr_lo, rr_hi = WEEKLY_RR if args.book == "weekly" else (0.0, 0.0)
+            res = rank(syms, side, by=args.by, top=60, structure="debit", expiry=exp,
+                       rr_min=rr_lo, rr_max=rr_hi)
         except Exception:
             logger.warning("rank() failed for %s — skipped.", side, exc_info=True)
             continue
@@ -896,6 +973,14 @@ def main() -> None:
     # of the board was untradeable. Unspent budget stays unspent.
     per = per_trade_cap
     held = _held_today({r["sym"] for r in chosen}, exp)
+    if args.book == "weekly":
+        # Any expiry: a weekly on a name already held 0DTE is the same bet twice.
+        try:
+            held |= {r["sym"] for r in chosen
+                     if any(str(p.get("symbol", "")).startswith(r["sym"])
+                            for p in (tradier_orders.open_positions() or []))}
+        except Exception:
+            held |= {r["sym"] for r in chosen}     # fail closed
 
     logger.info("%s  budget $%.0f over %d trade(s) = $%.0f each  ranked by %s",
                 now.strftime("%Y-%m-%d %H:%M %Z"), budget, len(chosen), per, args.by)

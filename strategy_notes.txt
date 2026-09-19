@@ -12260,3 +12260,83 @@ seconds at 1.47 and 1.52, both filled clean. With MU 1000/1015 at nine
 contracts, a cap of 5 meant every exit -- the target, the ask, a stop -- went
 as two orders a cycle apart with four contracts exposed in between. One order
 now covers it. Sections 191 and 193 described the split; this closes it.
+
+
+198. TWO BOOKS, $5,000 EACH, AND THE WEEKLY BOOK GOES LIVE THROUGH THE ROTATION  (2026-09-19)
+--------------------------------------------------------------------------------
+
+Operator: "allocate 5000 for 0DTE and 5000 for weekly calls and puts, make
+entries and rotation possible so funds are not idle."
+
+THE 0DTE SIDE is one cron argument and one ceiling: --budget 5000
+--max-trades 4 ($1,250 a slot, was 1,500 over 3), TRADING_DTE0_MAX_BUDGET
+2,500 -> 5,000. Nothing else about the rotation changed.
+
+THE WEEKLY SIDE DID NOT EXIST. WEEKLY_SINGLE_NAMES_PLAN.md described it and
+proposed a new script. It is built instead as a MODE of dte0_trade.py,
+because the rotation already owns the whole entry chain this book needs and
+had been measured under it: macro veto, Polygon news veto, the tape veto
+(section 194), the options-flow line (197), EV/Pwin/edge ranking, the
+rotation cooldown and daily exit cap, the quote-width ceiling, the per-slot
+budget, the already-held check. --book weekly changes four things:
+
+    expiry     "friday": this Friday from Monday to Wednesday (>= 2 days
+               out), next Friday from Thursday. Or "+N", or a date.
+    ceiling    TRADING_WEEKLY_MAX_BUDGET (5,000)
+    held       a name the account holds on ANY expiry is refused -- a weekly
+               on top of a 0DTE in the same name is the same bet twice
+    exits      the LATER ladder (section 192), which is what the log says
+
+AND THE STRUCTURE BAND, WHICH TOOK THREE DRY RUNS TO GET RIGHT. Each run
+rejected all ~50 candidates and said why:
+
+    run 1   "entry 9-26% of width"       MIN_ENTRY_WIDTH 30% is a 0DTE floor;
+                                          the plan's is 20%. Ranked by ev, the
+                                          board was all OTM lottery tickets:
+                                          weekly ranks by EDGE in R:R 1..3.
+    run 2   "extrinsic 97-100%"          25% max extrinsic asks a five-day
+            "short strike 1.9-3.1 ATR"    spread to be intrinsic; a DAILY ATR
+                                          rules six sessions with one day's
+                                          ruler (six expect ~2.4 of them)
+    run 3   both limits off for weekly; the guard against the lottery ticket
+            is the plan's own: entry >= 20% of width, R:R 1..3, Pwin >= 0.45.
+            The ranker's Pwin already carries the horizon.
+
+    Fourth run, Friday's closing quotes, budget 5,000 over 3 slots:
+
+    TSLA PUT  370/330  w40  x1 @ 10.25   Pwin 45.2%  edge +19.6  EV +202
+    AVGO PUT  365/325  w40  x1 @ 11.00   Pwin 47.1%  edge +19.6  EV +151
+    NVDA CALL 218/242  w25  x2 @  6.43   Pwin 45.7%  edge +20.0  EV +140
+
+    The same three the board in section 195 put at the top. The options-flow
+    line beside AVGO read BULLISH (calls 2.4x puts, call turnover 1.18) and
+    said "would refuse" the put -- record mode, so it was not refused. That
+    is the first conflict the new read has produced, and it is logged.
+
+CRON. 0DTE: */15 13-18 UTC weekdays, --budget 5000 --max-trades 4. Weekly:
+13:50 and 17:50 UTC (09:50 and 13:50 ET), Monday to Wednesday only -- no
+Thursday or Friday entries into that week's expiry, which is the 0DTE
+book's territory. The 09:50 run has the tape veto; the 13:50 run has it in
+record mode (section 194's clock).
+
+WHAT WILL ACTUALLY HAPPEN MONDAY, AND IT IS NOT $10,000 OF ENTRIES. The
+account is a CASH account (preflight, section 40s) with about 1,650 of cash
+on Friday's close and 14,000 of equity, most of it in MU 1000/1015 x9 and
+SNDK 1700/1780 x2. A debit spread needs settled cash. The weekly run at
+09:50 will rank its board and the broker will refuse what the cash does not
+cover; the log will say "order failed" per name, which is the correct
+outcome and not a bug. Cash comes back as MU exits Monday and settles. The
+budgets are CEILINGS on what the books may deploy, not commitments.
+
+BUDGET IS NOT AN ENDPOINT. Asked directly. It is the --budget argument on
+each cron line, capped by TRADING_DTE0_MAX_BUDGET and
+TRADING_WEEKLY_MAX_BUDGET in the server env. Changing either is an edit to
+the crontab or the env file plus a container recreate for the env. There is
+no HTTP route that sets or reports it; /trading/screener/verticals shows
+the board, not the budget.
+
+UNMEASURED, ALL OF IT, on this account: the weekly band, the Pwin floor,
+the LATER ladder these positions will exit through. The rotation log and
+the LATER ladder's marks are the record; the harness still cannot settle a
+weekly (section 191), and that is the next thing to build if this book is
+to be judged rather than believed.

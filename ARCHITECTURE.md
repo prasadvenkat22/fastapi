@@ -1235,6 +1235,9 @@ TRADING_DTE0_OPTIONS_FLOW=record    OPTIONS line per candidate; veto refuses aga
 TRADING_OPTFLOW_CP_RATIO=2.0  TRADING_OPTFLOW_TURNOVER=0.5  TRADING_OPTFLOW_MIN_VOLUME=500
 TRADING_INDEX_EVENT_LIVE=false      "would place" until true (§197)
 TRADING_INDEX_EVENT_BUDGET=1000  TRADING_INDEX_EVENT_MIN_PWIN=0.40  TRADING_INDEX_EVENT_MIN_DAYS=1
+TRADING_DTE0_MAX_BUDGET=5000        ceiling on the 0DTE rotation's --budget (cron passes 5000 / 4 slots)
+TRADING_WEEKLY_MAX_BUDGET=5000      ceiling on the weekly book's --budget (cron passes 5000 / 3 slots)
+TRADING_WEEKLY_MIN_ENTRY_WIDTH=0.20 TRADING_WEEKLY_MIN_PWIN=0.45 TRADING_WEEKLY_RR_MIN=1.0 TRADING_WEEKLY_RR_MAX=3.0
 TRADING_MAX_ORDER_CONTRACTS=10      raised from 5 on 2026-09-19 after 5+5 fills on the QQQ close; one order covers the 9-lot MU exit and its ask
 ```
 
@@ -1412,6 +1415,21 @@ notional. `bullish` needs calls ≥ 2× puts, call turnover ≥ 0.5 and ≥ 500
 contracts; `bearish` mirrors; else `neutral`. `TRADING_DTE0_OPTIONS_FLOW` is
 `record` (default: one OPTIONS line per candidate) | `veto` | `off`.
 
+**The weekly book** (section 198) runs through the same script: `dte0_trade.py
+--book weekly --rotate --live --budget 5000 --max-trades 3 --expiry friday`, cron
+**09:50 and 13:50 ET, Monday to Wednesday**, over the 18-name universe. Same
+gate chain in the same order (macro veto, news veto, tape veto until 10:30,
+options-flow line, EV/Pwin/edge ranking, rotation cooldown, quote-width
+ceiling, per-slot budget, already-held check on **any** expiry). Four things
+differ and nothing else: the expiry resolves to this Friday from Monday to
+Wednesday and next Friday after; the ceiling is `TRADING_WEEKLY_MAX_BUDGET`;
+the structure band is the plan's, not the day's — entry 20–75% of width, R:R
+1..3 ranked by edge, **Pwin ≥ 0.45**, with the 0DTE extrinsic and ATR-distance
+limits switched off because a five-day spread is mostly time value and a daily
+ATR is the wrong ruler; and the positions land in the LATER ladder. Budgets are
+**not** an endpoint: each is the `--budget` argument on a cron line, capped by
+`TRADING_DTE0_MAX_BUDGET` / `TRADING_WEEKLY_MAX_BUDGET` in the server env.
+
 **News sources, after 2026-09-19.** The hourly sweep (`news_enrich.py`, cron
 13–20 UTC weekdays) reads two kinds of feed. **Macro wires** — Fed, CNBC,
 MarketWatch, Investing.com, Yahoo — are classified by Gemini into the macro
@@ -1430,7 +1448,7 @@ Filing and index-release feeds are quiet by nature and are exempt from the
 dead/stale warnings. Section 196.
 
 **Single-name 0DTE entries** (`dte0_trade.py --rotate --live`, every 15 min
-09:00–13:45 ET, budget $1,500 over two slots, no entries after 13:30) clear, in
+09:00–13:45 ET, budget **$5,000 over four slots** since 2026-09-19, no entries after 13:30) clear, in
 order: the **macro veto** (bearish read refuses call debits, bullish refuses
 puts), the **Polygon news veto** per symbol (BEARISH ≥ 0.50 confidence refuses
 calls, BULLISH refuses puts), the **VWAP flow veto** (`vwap_gate.py`, section

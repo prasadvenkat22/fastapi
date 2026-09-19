@@ -12043,3 +12043,63 @@ These are price moves, not P&L: 38 bp of underlying at 09:45 is a meaningful
 edge for a spread struck a third of an ATR out, and 63% down at 13:00 is a
 meaningful warning, but neither has been run through the ranker's EV. That
 is what the FLOW lines are for.
+
+
+195. THE INCLUSION WAS SPOTTED ON 09-04; THE BOARD PRICES ODDS, NOT DIRECTION  (2026-09-19)
+--------------------------------------------------------------------------------
+
+Asked why the engine did not catch SanDisk's S&P news that "spiked VWAP" on
+Friday. It caught it two weeks earlier. news_verdicts for SNDK:
+
+    09-04  BULLISH       0.72   S&P 100 inclusion announced, 22:11 ET
+    09-05..06  BULLISH   0.72
+    09-07..08  VERY_BULLISH 0.85  "index re-rating event that mechanically
+                                   drives inflows"; Nike out after 18 years
+    09-09, 09-11  NEUTRAL        re-reports and transcripts
+    09-18  BULLISH       0.27   "Why Sandisk Stock Rallied Today", 13:28 ET
+
+No headline on 09-18 said "inclusion" because there was nothing new to say.
+Friday's 15:50 print -- eight times average volume in the final bar -- was
+the index funds buying at the close on the EFFECTIVE date of the quarterly
+rebalance, the scheduled consequence of the 09-04 announcement. The tape
+gate did not exist yet; the news read saw a stock that had rallied.
+
+WHAT THE ENGINE DID WITH THE GRADE: refused to write a short call on SNDK on
+09-04 (section 156's near miss) and nothing else, because the news path can
+only veto. It never proposed the long. The run from the low 1500s to 1793
+between announcement and effective date is the documented inclusion pattern,
+and the operator's rolled weeklies rode it by hand.
+
+BUILDABLE, AND SPECIFIC: an index-event rule. A verdict whose rationale
+names an inclusion writes an event (symbol, announcement day, effective
+date, default the next quarterly rebalance close); from the announcement the
+name is a call-debit candidate in the weekly book with expiry at or before
+the effective date; on the effective day no new longs after 15:00, since
+that close is the END of the demand. One event on this account is not a
+measurement; the pattern is measured in the literature and would ship
+labelled that way. Not built; waiting on a go.
+
+THE BOARD. Asked for the engine's best call and best put for Monday and
+whether an endpoint shows why. /trading/screener/verticals does, per row:
+p_win, need, edge, ev, ev_adj, ev_raw, the implied and Monte Carlo
+probabilities, news verdict and confidence, flow, conflict, direction. It
+gained an `expiry` parameter tonight -- without one each name ranks on its
+NEAREST expiry, same-day for the MWF names and Friday for the rest, which is
+not a board. scripts/board.py prints the same ranking from the shell.
+
+Monday 09-21, on Friday's closing quotes, edge-sorted, R:R 1..3:
+
+    call  TSLA 355/392.5   10.36  Pwin 44.8%  need 27.6%  edge +17.2  EV +40
+    call  NVDA 220/230      3.00       46.0%       30.0%       +16.0     +44
+    call  MU   990/1100    29.80       42.6%       27.1%       +15.5    +116
+    put   TSLA 337.5/372.5  9.07       46.5%       25.9%       +20.6     +78
+    put   TSLA 342.5/370    7.03       44.9%       25.6%       +19.4     +86
+
+    TSLA tops BOTH lists. That is the ranker working: edge is Pwin minus the
+    win rate the price demands, and TSLA's options are cheap against how far
+    it actually moves, so both directions score. The board prices the odds
+    and does not pick the direction. Direction on Monday is the macro veto,
+    the day's verdict (NVDA carried BULLISH 0.50 into the weekend; the
+    board's news column is blank on a Saturday because verdicts are per
+    trading day) and the tape gate at 09:45. The rotation re-ranks all of
+    this on live quotes and takes the top two survivors by EV within 1,500.

@@ -1093,10 +1093,20 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 GET  /trading/positions        every structure the BROKER holds + its live ladder state
 GET  /trading/position         the ENGINE's own row only
 GET  /trading/screener/verticals?symbols=CRWV,AVGO&side=call&structure=debit&by=edge&per_symbol=2
+GET  /trading/screener/verticals?...&expiry=2026-09-21      one date for the whole board; "+3" = first expiry >= 3 days out
 GET  /trading/screener/flow?symbols=CRWV,AVGO,SNDK
 POST /trading/flatten?confirm=LIQUIDATE&preview=true
 POST /trading/flatten?confirm=LIQUIDATE&preview=false&plan_token=<from the preview>
 ```
+
+**`expiry` matters on a Monday.** Without it each name ranks on its NEAREST
+expiry, which is the same day for MU, NVDA, TSLA, AMZN, AAPL, META, MSFT, GOOGL,
+AMD, AVGO and INTC and the Friday for SNDK, CRWV, MRVL, PANW, DELL, STX and WDC.
+`scripts/board.py <date> [--weekly]` prints the same ranking from the shell.
+The board prices the ODDS, not the direction: a name whose options are cheap
+against its realised moves tops both the call and the put list (TSLA, 2026-09-21).
+Direction comes from the macro veto, the day's news verdict and the tape gate,
+none of which exist before the session opens.
 
 **`/trading/positions` answers "why is this still open?"** Per structure it
 returns entry, mark, `intrinsic`/`extrinsic`, return and peak, then the ladder

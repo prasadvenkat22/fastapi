@@ -12253,3 +12253,10 @@ The dust filter on the top list came from the same read: the chain listed a
 P190 strike, 81% below spot, at 11,668 contracts against an open interest of
 one. Aggregates count everything; the top list now wants OI >= 10 and a
 strike within 30% of spot.
+
+ORDER CAP 5 -> 10, 2026-09-19 12:54 ET, operator's decision. The evidence the
+knob's own comment asked for: Friday's QQQ ten-lot closed as 5 + 5 inside 40
+seconds at 1.47 and 1.52, both filled clean. With MU 1000/1015 at nine
+contracts, a cap of 5 meant every exit -- the target, the ask, a stop -- went
+as two orders a cycle apart with four contracts exposed in between. One order
+now covers it. Sections 191 and 193 described the split; this closes it.

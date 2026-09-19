@@ -1235,6 +1235,7 @@ TRADING_DTE0_OPTIONS_FLOW=record    OPTIONS line per candidate; veto refuses aga
 TRADING_OPTFLOW_CP_RATIO=2.0  TRADING_OPTFLOW_TURNOVER=0.5  TRADING_OPTFLOW_MIN_VOLUME=500
 TRADING_INDEX_EVENT_LIVE=false      "would place" until true (§197)
 TRADING_INDEX_EVENT_BUDGET=1000  TRADING_INDEX_EVENT_MIN_PWIN=0.40  TRADING_INDEX_EVENT_MIN_DAYS=1
+TRADING_MAX_ORDER_CONTRACTS=10      raised from 5 on 2026-09-19 after 5+5 fills on the QQQ close; one order covers the 9-lot MU exit and its ask
 ```
 
 **It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and

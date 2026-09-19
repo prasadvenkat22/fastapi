@@ -28,6 +28,12 @@ services:
     # Override env_file to use production config
     env_file:
       - .env.production
+    # LOOPBACK ONLY (section 201). The base file publishes 8000 on every
+    # interface, and a port Docker publishes bypasses UFW -- the API was
+    # reachable from the internet by IP, bearer or not. nginx is the only way
+    # in now; anything on the host still reaches it at 127.0.0.1:8000.
+    ports: !override
+      - "127.0.0.1:8000:8000"
     deploy:
       resources:
         limits:
@@ -58,6 +64,15 @@ services:
         limits:
           memory: 64M
     restart: always
+    # 443 for the site, and the two certbot volumes: the webroot the ACME
+    # challenge is answered from, and the issued certificates. Section 201.
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./app/nginx/conf.d:/etc/nginx/conf.d
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
 
   # Disable pgAdmin in production to save ~200MB RAM
   # To enable for debugging, run with: --profile debug

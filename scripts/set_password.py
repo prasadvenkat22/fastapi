@@ -16,6 +16,18 @@ or in production:
 
     docker compose -f docker-compose.yml -f docker-compose.prod.yml \
         exec app python scripts/set_password.py user@example.com
+
+IT NEEDS A TERMINAL. The hidden prompt is getpass, which needs a TTY. Run
+from an interactive shell ON the droplet, or through `ssh -t`. Over plain
+`ssh host "..."`, from a script, or with `exec -T`, there is no TTY and the
+prompt fails -- on 2026-09-19 that surfaced as a getpass traceback that read
+like a broken script. Without a terminal, use --password-stdin and pipe the
+password in from a hidden prompt in YOUR shell:
+
+    read -s PW; printf '%s' "$PW" | docker compose ... exec -T app \
+        python scripts/set_password.py user@example.com --password-stdin
+
+It still never appears on a command line or in a log.
 """
 
 import getpass
@@ -37,12 +49,27 @@ from models_pgdb import models
 MIN_LENGTH = 12
 
 
+def _read_password(from_stdin: bool) -> "tuple[str, str | None] | None":
+    """(password, confirmation-or-None). None when nothing could be read safely."""
+    if from_stdin:
+        pw = sys.stdin.readline().rstrip("\r\n")
+        return pw, pw
+    if not sys.stdin.isatty():
+        print("No terminal for the hidden prompt. Run this from an interactive "
+              "shell on the host (or `ssh -t`), without `exec -T` -- or pipe the "
+              "password in with --password-stdin.")
+        return None
+    return getpass.getpass("New password: "), None
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
-        print(f"usage: python {sys.argv[0]} <email>")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    if len(args) != 1 or flags - {"--password-stdin"}:
+        print(f"usage: python {sys.argv[0]} <email> [--password-stdin]")
         return 2
 
-    email = sys.argv[1]
+    email = args[0]
     db = SessionLocal()
     try:
         user = db.query(models.User).filter(models.User.email == email).first()
@@ -53,11 +80,16 @@ def main() -> int:
         role = user.role.role if user.role is not None else None
         print(f"Setting password for id={user.id} {user.email} (role: {role or 'none'})")
 
-        password = getpass.getpass("New password: ")
+        got = _read_password("--password-stdin" in flags)
+        if got is None:
+            return 3
+        password, confirm = got
         if len(password) < MIN_LENGTH:
             print(f"Password must be at least {MIN_LENGTH} characters.")
             return 1
-        if password != getpass.getpass("Confirm password: "):
+        if confirm is None:
+            confirm = getpass.getpass("Confirm password: ")
+        if password != confirm:
             print("Passwords do not match.")
             return 1
 

@@ -57,6 +57,23 @@ deployment_notes.txt and it removes the TTY that getpass needs to hide
 typing. With -T the password is printed to the terminal and into your
 shell's scrollback. If that happens, set a different password.
 
+IT NEEDS A TERMINAL, FULL STOP. Run it from an interactive shell on the
+droplet (`ssh -t root@...` then `cd /opt/fastapi`), not as a one-line remote
+command and not from a tool. Without a TTY getpass has nothing to read from
+and fails at "New password:" with a traceback -- that was the "does not
+work" of 2026-09-19; the script and the account were fine. The script now
+says so in one line instead of a traceback.
+
+From your own machine in one go:
+
+    ssh -t root@159.223.127.31 "cd /opt/fastapi && docker compose         -f docker-compose.yml -f docker-compose.prod.yml         exec app python scripts/set_password.py venkatangirala@gmail.com"
+
+Without any terminal at all (a script, or a tool that cannot open one):
+
+    read -s PW; printf '%s' "$PW" | ssh root@159.223.127.31 "cd /opt/fastapi         && docker compose -f docker-compose.yml -f docker-compose.prod.yml         exec -T app python scripts/set_password.py venkatangirala@gmail.com         --password-stdin"
+
+The password crosses only stdin -- not the command line, not a log.
+
 The same command CHANGES a password, and is the way back when nobody can
 log in at all. For an ordinary forgotten password there are now two better
 routes that do not need SSH — see section 6.

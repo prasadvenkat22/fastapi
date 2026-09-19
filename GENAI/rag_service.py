@@ -30,7 +30,21 @@ class AnthropicLLM(BaseLLM):
         except Exception as e:
             return LLMResponse(content=f"Error calling Anthropic: {e}", metadata={"source": "error"})
 
+class GeminiLLM(BaseLLM):
+    """The same model, key and endpoint the news grader runs on (section 200)."""
+    async def generate(self, request: LLMRequest) -> LLMResponse:
+        from .gemini_llm import agenerate, GEMINI_MODEL
+        try:
+            model = request.llm_model if request.llm_model.startswith("gemini") else GEMINI_MODEL
+            text = await agenerate(request.prompt, max_tokens=request.max_tokens, model=model)
+            return LLMResponse(content=text, metadata={"source": "gemini", "model": model})
+        except Exception as e:
+            return LLMResponse(content=f"Error calling Gemini: {e}", metadata={"source": "error"})
+
+
 def llm_factory(provider: str) -> BaseLLM:
+    if provider in ("gemini", "google"):
+        return GeminiLLM()
     if provider == "anthropic":
         return AnthropicLLM()
     # Add other providers here

@@ -1,7 +1,7 @@
 # GENAI RAG API Documentation
 
 ## Overview
-This API provides RAG (Retrieval-Augmented Generation) capabilities with document upload, vector storage, and intelligent querying using Claude (Anthropic) LLMs, Voyage AI embeddings, and PostgreSQL pgvector.
+This API provides RAG (Retrieval-Augmented Generation) capabilities with document upload, vector storage, and intelligent querying using Gemini (the same gemini-3.1-flash-lite the trading news grader runs on), Voyage AI embeddings, and PostgreSQL pgvector.
 
 ---
 
@@ -37,8 +37,8 @@ Upload documents, store them in the vector database, and ask questions about the
 | `username` | string | No | `test_user` | User who uploaded the file (auto-registered in MongoDB if new) |
 | `vector_store_name` | string | No | `pgvector` | Vector store (pgvector only — everything is persisted, nothing is kept only in process memory) |
 | `embedding_provider` | string | No | `voyage` | Embedding provider |
-| `llm_provider` | string | No | `anthropic` | LLM provider |
-| `llm_model` | string | No | `claude-opus-5` | LLM model to use |
+| `llm_provider` | string | No | `gemini` | LLM provider (`gemini`; `anthropic` still accepted if a key is set) |
+| `llm_model` | string | No | `gemini-3.1-flash-lite` | LLM model to use |
 | `max_tokens` | int | No | `800` | Max tokens in response |
 | `top_k` | int | No | `4` | Number of similar documents to retrieve |
 
@@ -178,8 +178,8 @@ Send a direct query to the LLM without RAG.
 ```json
 {
   "prompt": "Explain quantum computing in simple terms",
-  "llm_provider": "anthropic",
-  "llm_model": "claude-opus-5",
+  "llm_provider": "gemini",
+  "llm_model": "gemini-3.1-flash-lite",
   "max_tokens": 500
 }
 ```
@@ -189,7 +189,7 @@ Send a direct query to the LLM without RAG.
 {
   "content": "Quantum computing is...",
   "metadata": {
-    "source": "anthropic"
+    "source": "gemini"
   }
 }
 ```
@@ -202,7 +202,7 @@ Send a direct query to the LLM without RAG.
 Upload a CSV and/or a PDF and ask a question about it. A LangGraph supervisor inspects
 which file type(s) were uploaded and routes the query to the matching specialist agent:
 a pandas-dataframe agent for CSV analysis, a pgvector-backed RAG agent for PDF Q&A, or both
-(with a final Claude call synthesizing the two answers into one).
+(with a final Gemini call synthesizing the answers into one).
 
 #### Request Parameters
 
@@ -326,7 +326,7 @@ VOYAGE_API_KEY=pa-...
 1. **File Size Limits:** Default FastAPI limit is 10MB. Adjust in main.py if needed.
 2. **Batch Processing:** Upload multiple files in a single request for efficiency.
 3. **Top-K Selection:** Higher `top_k` values provide more context but slower responses.
-4. **Effort/model choice:** Claude Opus 5 doesn't accept `temperature` (sampling params are rejected) — steer response style via the prompt itself, or swap `llm_model` for a cheaper/faster Claude model.
+4. **Effort/model choice:** Gemini Opus 5 doesn't accept `temperature` (sampling params are rejected) — steer response style via the prompt itself, or swap `llm_model` for a cheaper/faster Gemini model.
 
 ---
 
@@ -401,7 +401,7 @@ print(response.json())
 - Added real metadata-filter support to `PGVectorStore.get_documents` (the `filters` parameter was previously accepted but silently ignored)
 
 ### v1.2.0
-- Migrated LLM calls from OpenAI to Claude (Anthropic Messages API, default `claude-opus-5`)
+- Migrated LLM calls from OpenAI to Gemini (Anthropic Messages API, default `claude-opus-5`)
 - Migrated embeddings from OpenAI to Voyage AI (`voyage-4`, 1024 dimensions, 200M free tokens/account)
 - Added `POST /api/genai/agent/upload` — a LangGraph supervisor that routes CSV uploads to a pandas-dataframe agent and PDF uploads to a RAG Q&A agent
 
@@ -415,3 +415,24 @@ print(response.json())
 - Initial release with RAG capabilities
 - Support for PDF, CSV, TXT, DOCX, images
 - PostgreSQL pgvector and FAISS support
+
+
+### 5. Ask the Trading Book (multi-agent, no upload)
+**POST** `/api/genai/agent/ask`  (admin bearer token)
+
+The supervisor routes a plain question to the **trading-database agent**. Gemini
+writes one `SELECT` against a whitelist of trading and news tables (positions,
+history, news verdicts, weekly and 0DTE shadow books, index events, macro
+readings); the query is guarded (single statement, no write verbs, whitelisted
+tables only, `LIMIT` added) and run in a `READ ONLY` transaction with a
+10-second timeout. Questions about news also search `market_news_vectors` by
+voyage-4 cosine similarity. The answer ends with the SQL that produced it.
+
+```json
+{"query": "Which underlying made the most realized P&L this week, and what did the news say about it?"}
+```
+
+Response: `final_answer`, `db_answer`, `db_sql`, `agents_used: ["trading_db_agent"]`.
+Uploads via `/agent/upload` still route to the CSV and PDF agents; a question
+with both an upload and a trading angle can be sent to `/agent/ask` and the
+upload endpoint separately.

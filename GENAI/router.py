@@ -142,8 +142,8 @@ async def genai_query_upload(
     username: str = Form("test_user"),
     vector_store_name: str = Form("pgvector"),
     embedding_provider: str = Form("voyage"),
-    llm_provider: str = Form("anthropic"),
-    llm_model: str = Form("claude-opus-5"),
+    llm_provider: str = Form("gemini"),
+    llm_model: str = Form("gemini-3.1-flash-lite"),
     max_tokens: int = Form(512),
     top_k: int = Form(2),
 ):
@@ -156,8 +156,8 @@ async def genai_query_upload(
     - username: User who uploaded the file (default: test_user)
     - vector_store_name: Vector store to use (default: pgvector)
     - embedding_provider: Embedding provider (default: voyage)
-    - llm_provider: LLM provider (default: anthropic)
-    - llm_model: LLM model (default: claude-opus-5)
+    - llm_provider: LLM provider (default: gemini)
+    - llm_model: LLM model (default: gemini-3.1-flash-lite)
     - max_tokens: Maximum tokens for LLM response (default: 800)
     - top_k: Number of similar documents to retrieve (default: 4)
     """
@@ -202,7 +202,29 @@ class AgentUploadResponse(BaseModel):
     final_answer: str
     csv_answer: Optional[str] = None
     pdf_answer: Optional[str] = None
+    db_answer: Optional[str] = None
+    db_sql: Optional[str] = None
     agents_used: List[str]
+
+
+class AskRequest(BaseModel):
+    query: str
+
+
+@router.post("/agent/ask", response_model=AgentUploadResponse)
+async def genai_agent_ask(request: AskRequest):
+    """Ask the trading book a question. No upload: the supervisor routes to the
+    trading-database agent, which has Gemini write one guarded read-only SELECT
+    over the trading and news tables, runs it, searches the news vectors when
+    the question is about news, and answers with the SQL it used (section 200).
+    """
+    try:
+        state = await run_supervisor(query=request.query, use_db=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return AgentUploadResponse(
+        final_answer=state.get("final_answer", ""), db_answer=state.get("db_answer"),
+        db_sql=state.get("db_sql"), agents_used=["trading_db_agent"] if state.get("db_answer") else [])
 
 
 @router.post("/agent/upload", response_model=AgentUploadResponse)
@@ -245,10 +267,14 @@ async def genai_agent_upload(
         agents_used.append("csv_agent")
     if state.get("pdf_answer"):
         agents_used.append("pdf_agent")
+    if state.get("db_answer"):
+        agents_used.append("trading_db_agent")
 
     return AgentUploadResponse(
         final_answer=state.get("final_answer", ""),
         csv_answer=state.get("csv_answer"),
         pdf_answer=state.get("pdf_answer"),
+        db_answer=state.get("db_answer"),
+        db_sql=state.get("db_sql"),
         agents_used=agents_used,
     )

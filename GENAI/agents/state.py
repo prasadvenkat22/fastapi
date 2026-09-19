@@ -8,4 +8,8 @@ class SupervisorState(TypedDict, total=False):
     pdf_text: Optional[str]
     csv_answer: Optional[str]
     pdf_answer: Optional[str]
+    use_db: bool
+    db_answer: Optional[str]
+    db_sql: Optional[str]
+    db_rows: int
     final_answer: str

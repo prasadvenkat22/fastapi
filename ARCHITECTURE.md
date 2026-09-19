@@ -1087,6 +1087,29 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 
 ---
 
+## GENAI: the agents run on Gemini and one of them reads the trading database
+
+`/api/genai/*` (admin bearer token) is the RAG and multi-agent surface. Since
+2026-09-19 (section 200) every model call in it goes to **gemini-3.1-flash-lite
+over the same REST endpoint and `GEMINI_API_KEY` the news grader uses**
+(`GENAI/gemini_llm.py`; `GeminiChat` is a LangChain chat model over that call,
+`GeminiLLM` the provider behind `/llm` and `/query/upload`). Claude is gone
+from the defaults; `llm_provider=anthropic` still works if a key is set.
+
+The LangGraph supervisor has three specialists. `csv_agent` (pandas dataframe
+agent) and `pdf_agent` (chunks into pgvector, then RAG) route on what was
+uploaded. **`trading_db_agent`** routes when nothing was uploaded or `use_db`
+is set, and answers questions about the book: Gemini writes **one `SELECT`**
+against a whitelist of trading and news tables shown with a one-line note each
+(never users, customers, tokens); the query is **guarded** — single statement,
+no write or admin verb, whitelisted tables only, `LIMIT` added — and run in a
+`READ ONLY` transaction with a 10-second timeout; questions about news also
+embed the question with voyage-4 and cosine-search `market_news_vectors`
+(1024 dims, the same model and width as GENAI's `documents` table); the answer
+ends with the SQL. `POST /api/genai/agent/ask {"query": ...}` is the entry
+point. First live answers on 2026-09-19: realised P&L by underlying for the
+week with close reasons, and SanDisk's September verdict history.
+
 ## HTTP: the screener is callable
 
 ```
@@ -1095,6 +1118,7 @@ GET  /trading/position         the ENGINE's own row only
 GET  /trading/screener/verticals?symbols=CRWV,AVGO&side=call&structure=debit&by=edge&per_symbol=2
 GET  /trading/screener/verticals?...&expiry=2026-09-21      one date for the whole board; "+3" = first expiry >= 3 days out
 GET  /trading/screener/flow?symbols=CRWV,AVGO,SNDK
+POST /api/genai/agent/ask   {"query": "..."}   ask the trading book; Gemini writes a guarded SELECT (§200)
 POST /trading/flatten?confirm=LIQUIDATE&preview=true
 POST /trading/flatten?confirm=LIQUIDATE&preview=false&plan_token=<from the preview>
 ```

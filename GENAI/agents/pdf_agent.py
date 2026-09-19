@@ -1,6 +1,6 @@
 import uuid
 
-from langchain_anthropic import ChatAnthropic
+from GENAI.gemini_llm import GeminiChat
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import CharacterTextSplitter
 
@@ -32,7 +32,7 @@ async def run_pdf_agent(state: SupervisorState) -> dict:
     docs = await vs.get_documents(query=state["query"], top_k=4, filters={"upload_id": upload_id})
     context = "\n\n".join(doc.content for doc in docs)
 
-    llm = ChatAnthropic(model="claude-opus-5", max_tokens=1024)
+    llm = GeminiChat(max_tokens=1024)
     prompt = ChatPromptTemplate.from_template(
         "Use the following context to answer the question.\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"
     )

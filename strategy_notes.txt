@@ -12386,3 +12386,98 @@ interpolation is linear because nothing argues for another shape yet. What
 would settle it is the same instrument the weekly book needs anyway: a
 harness that settles at the expiry close. Five tests on the arithmetic and
 the session count.
+
+
+200. GENAI MOVES TO GEMINI, AND GETS AN AGENT THAT READS THE TRADING BOOK  (2026-09-19)
+--------------------------------------------------------------------------------
+
+Operator: the GENAI folder points at a Claude model; change it to the Gemini
+model the RSS grader uses, make sure the other GENAI endpoints work, and see
+whether the multi-agent setup can answer trading questions against the
+Postgres/pgvector store.
+
+WHAT WAS THERE. GENAI/ is the RAG + LangGraph surface: /api/genai/query
+(pgvector search over a `documents` table, voyage-4 embeddings), /llm (direct
+model call), /query/upload (RAG over uploads), /agent/upload (a supervisor
+routing CSV to a pandas agent and PDF to a pgvector RAG agent, with a
+synthesis step). Every model call was ChatAnthropic("claude-opus-5") or the
+anthropic SDK; ANTHROPIC_API_KEY is set on the server but that key has been
+on the rotation list since the leak (section 18x). No agent could see the
+trading tables.
+
+THE MODEL. gemini-3.1-flash-lite through generativelanguage.googleapis.com
+with GEMINI_API_KEY -- exactly what news_enrich and news_hourly have graded
+headlines with since 2026-09-14. langchain-google-genai is not in the image
+and adding it is a rebuild, so GENAI/gemini_llm.py is a LangChain
+BaseChatModel over the same REST call the grader already proved: system
+messages become systemInstruction, human/AI turns become user/model contents
+with the alternation Gemini requires, text comes back as a string. Enough for
+the pandas agent's ReAct loop, the PDF chain and the synthesis. No tool
+binding; nothing here needs it. GeminiLLM is the provider behind /llm and
+/query/upload; defaults everywhere are gemini / gemini-3.1-flash-lite;
+anthropic still works as an explicit provider if its key is valid.
+
+THE TRADING-DATABASE AGENT. GENAI/agents/trading_db_agent.py, a third node in
+the supervisor graph, routed to when nothing was uploaded (or use_db=True):
+
+    1. Gemini is shown the schema of a WHITELIST of tables -- trading_history
+       and its archive, open positions, logs, news_verdicts and its history
+       and outcomes, news_symbol_impact, news_seen, market_news_vectors,
+       weekly_shadow, dte0_shadow, index_events, the macro and breadth
+       readings, symbol_sentiment_hourly, trade_setup_vectors -- with a
+       one-line note per table saying what it IS, and asked for ONE SELECT
+       as JSON. users, customers, tokens, invoices are not in the list and
+       cannot be reached by name.
+    2. guard(): one statement, SELECT or WITH only, no write or admin verb
+       (checked with string literals blanked, so a headline containing
+       "delete" does not trip it), every FROM/JOIN target whitelisted or a
+       CTE, LIMIT added if absent. Refusal is an answer, not an exception.
+       The query runs in BEGIN READ ONLY with a 10-second statement timeout
+       and is rolled back.
+    3. If the question is about news (a small word list), the question is
+       embedded with voyage-4 and cosine-searched against
+       market_news_vectors -- vector(1024), the same model and width as
+       GENAI's documents table, so one embedding call serves both -- and
+       the nearest headlines go in beside the rows. Gemini answers from
+       both and ends with "SQL: <the query>".
+
+    POST /api/genai/agent/ask {"query": ...} is the entry point. The
+    synthesis step now combines any subset of csv / pdf / db answers.
+
+WHAT IT ANSWERED, FIRST RUN, LIVE DATA:
+
+    "Which underlyings made or lost the most realized P&L in the last 7
+     days, and what were the top close reasons?"
+        SELECT underlying, SUM(realized_pnl_dollars), string_agg(DISTINCT
+        close_reason) FROM trading_history WHERE closed_at >= CURRENT_DATE -
+        INTERVAL '7 days' GROUP BY 1 ORDER BY 2 DESC
+        -> SNDK +3,910 (OTM_STOP, STALL_LATER, TARGET), MU +531, ... INTC -91,
+           TSLA -80, AVGO -72. Nine rows, correct against the history table.
+
+    "What news did the pipeline record about Sandisk this month and how was
+     it graded?"
+        First attempt read news_symbol_impact, whose sentiment columns are
+        mostly empty, and said so honestly. The fix was the table notes
+        above; the second attempt read news_verdicts and returned the
+        month's verdict history correctly -- BULLISH 0.72 on 09-04,
+        VERY_BULLISH 0.85 on 09-07/08 on the S&P 100 inclusion, NEUTRAL on
+        09-09 and 09-11, BULLISH 0.27 on 09-18 -- the same table section 195
+        pulled by hand.
+
+    The CSV agent on Gemini: a five-row P&L file, "highest and total" ->
+    "SNDK, 3721" correct. /llm on gemini: a one-sentence definition, source
+    gemini. /agent/ask is in the OpenAPI schema behind the admin dependency.
+
+WHAT IT IS NOT. It is not connected to any order path and cannot be: the
+whitelist has no route to tradier_orders, the transaction is read-only, and
+the model never sees credentials. It is a reading tool for the operator --
+the questions this conversation has been answering by hand with psql
+(realised P&L by name, verdict histories, shadow-book statistics) are now
+one POST. It runs on the free-tier model the grader runs on and shares its
+quota; a long answer costs a few thousand tokens.
+
+Tests: tests/test_genai_gemini.py -- message flattening and alternation,
+blocked-response handling, and eleven guard cases: SELECT accepted with
+LIMIT added, CTE names allowed, DELETE refused, two statements refused, a
+non-whitelisted table refused, a UNION into users refused, INTO refused,
+empty refused, and write verbs inside string literals ignored.

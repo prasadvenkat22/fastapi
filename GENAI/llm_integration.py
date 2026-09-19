@@ -12,8 +12,8 @@ class DocumentRequest(BaseModel):
 
 class LLMRequest(BaseModel):
     prompt: str
-    llm_provider: str = "anthropic"
-    llm_model: str = "claude-opus-5"
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-3.1-flash-lite"
     max_tokens: int = 800
 
 

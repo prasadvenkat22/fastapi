@@ -2,11 +2,11 @@ from typing import Any
 
 
 def extract_text(content: Any) -> str:
-    """Extract the plain text answer from a langchain_anthropic AIMessage.content.
+    """Extract the plain text answer from a chat model's AIMessage.content.
 
-    Claude Opus 5 has adaptive thinking on by default — when it decides to think,
-    .content becomes a list of blocks (e.g. thinking + text) instead of a bare
-    string, so callers must not assume content is always `str`.
+    GeminiChat returns a plain string; the list-of-blocks branch is kept because
+    some LangChain models return content as blocks, and a caller must not assume
+    `str`.
     """
     if isinstance(content, str):
         return content

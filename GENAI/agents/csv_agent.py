@@ -1,7 +1,7 @@
 import io
 
 import pandas as pd
-from langchain_anthropic import ChatAnthropic
+from GENAI.gemini_llm import GeminiChat
 from langchain_experimental.agents import create_pandas_dataframe_agent
 
 from .state import SupervisorState
@@ -10,7 +10,7 @@ from .state import SupervisorState
 async def run_csv_agent(state: SupervisorState) -> dict:
     """Answer the query against the uploaded CSV using a pandas dataframe agent."""
     df = pd.read_csv(io.StringIO(state["csv_text"]))
-    llm = ChatAnthropic(model="claude-opus-5", max_tokens=1024)
+    llm = GeminiChat(max_tokens=1024)
     agent = create_pandas_dataframe_agent(
         llm,
         df,

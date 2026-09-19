@@ -73,6 +73,7 @@ from trading_engine.macro_calendar import (  # noqa: E402
 from trading_engine.data_feed import fetch_option_chain, fetch_spot  # noqa: E402
 from trading_engine.screener import rank  # noqa: E402
 from trading_engine import vwap_gate  # noqa: E402
+from trading_engine import options_flow  # noqa: E402
 from trading_engine.symbol_news import (classify_day,  # noqa: E402
                                         verdict_at)
 
@@ -433,6 +434,19 @@ def _passes(r: dict) -> "str | None":
     r["_ew"], r["_ex_pct"], r["_move_atr"] = ew, ex_pct, move_atr
     r["_target_spot"], r["_long"] = tgt_spot, long_k
     return None
+
+
+def _optflow_expiries(exp: str, symbol: str) -> list:
+    """The traded expiry plus the next listed one, for the options-flow read."""
+    out = [exp]
+    try:
+        exps = sorted(str(e) for e in (tradier_orders.expirations(symbol) or []))
+        later = [e for e in exps if e > exp]
+        if later:
+            out.append(later[0])
+    except Exception:
+        pass
+    return out
 
 
 def _quote_pct(symbol: str, expiry: str) -> "float | None":
@@ -837,6 +851,24 @@ def main() -> None:
                 r["_flow"] = vwap_gate.describe(flow)
                 if not ok and gate_mode == "veto":
                     rejects["against the tape (VWAP flow)"] += 1
+                    continue
+            if options_flow.MODE in ("veto", "record"):
+                # THE CHAIN'S OWN VOLUME AGAINST OPEN INTEREST -- section 197.
+                # Read on the traded expiry plus the next weekly, once per name
+                # per run. Record by default: logged beside FLOW, refuses nothing
+                # until it has been scored.
+                bullish = r.get("direction") != "bearish"
+                oflow = options_flow.read(r["sym"], _optflow_expiries(exp, r["sym"]),
+                                          r.get("spot"))
+                ook, owhy = options_flow.gate("bullish" if bullish else "bearish", oflow)
+                if (r["sym"], side, "opt") not in flow_logged:
+                    flow_logged.add((r["sym"], side, "opt"))
+                    logger.info("%s %s %s -> %s: %s", r["sym"], side.upper(),
+                                options_flow.describe(oflow),
+                                "ok" if ook else ("REFUSED" if options_flow.MODE == "veto"
+                                                   else "would refuse"), owhy)
+                if not ook and options_flow.MODE == "veto":
+                    rejects["against the options flow"] += 1
                     continue
             if r.get("conflict"):
                 logger.info("%s %s refused: %s", r["sym"], side.upper(), r["conflict"])

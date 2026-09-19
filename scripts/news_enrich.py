@@ -753,6 +753,22 @@ def main() -> None:
 
     now = datetime.now(NY)
     arts = dedupe(fetch(), persist=not args.dry_run)
+    # INDEX EVENTS, before the promo filter and before the macro split: an
+    # inclusion release is a company story and would be dropped from the
+    # macro path a line later. Section 197. Never raises.
+    if arts and not args.dry_run:
+        try:
+            from trading_engine import index_events
+            conn = psycopg2.connect(_dsn())
+            try:
+                n_ev = index_events.scan_and_record(
+                    conn, [(a["guid"], a["source"], a["title"], a.get("published")) for a in arts])
+            finally:
+                conn.close()
+            if n_ev:
+                print(f"{n_ev} INDEX EVENT row(s) recorded — see index_events")
+        except Exception as exc:
+            logger.warning("index_events scan skipped: %s", exc)
     # BEFORE ANY MODEL CALL. Cheap, and it shrinks the NER payload too.
     arts, promos = drop_promos(arts)
     print(f"\n{len(arts)} new article(s) inside {LOOKBACK_HOURS}h "

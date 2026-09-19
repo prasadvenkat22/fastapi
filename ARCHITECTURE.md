@@ -1231,6 +1231,10 @@ TRADING_DTE0_VWAP_GATE=veto         the tape veto on single-name entries (§194)
 TRADING_VWAP_MIN_BARS=3  TRADING_VWAP_SLOPE_BARS=6  TRADING_VWAP_BARS_ABOVE_MIN=0.60
 TRADING_VWAP_GATE_UNTIL=10:30       veto until here, record after (§194)
 TRADING_SEC_USER_AGENT=<name email>  required by EDGAR; the edgar-* feeds are skipped without it (§196)
+TRADING_DTE0_OPTIONS_FLOW=record    OPTIONS line per candidate; veto refuses against the read (§197)
+TRADING_OPTFLOW_CP_RATIO=2.0  TRADING_OPTFLOW_TURNOVER=0.5  TRADING_OPTFLOW_MIN_VOLUME=500
+TRADING_INDEX_EVENT_LIVE=false      "would place" until true (§197)
+TRADING_INDEX_EVENT_BUDGET=1000  TRADING_INDEX_EVENT_MIN_PWIN=0.40  TRADING_INDEX_EVENT_MIN_DAYS=1
 ```
 
 **It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and
@@ -1386,6 +1390,26 @@ a `shade` inside the short strike because past the short strike a debit spread
 has nothing more to earn (sections 190–191). It runs as a detached process in
 the container; kill it with a pattern anchored to the process, never with a bare
 `pkill -f` over ssh, which matches the ssh session itself.
+
+**Index events** (`index_events.py`, section 197). Every headline the sweep
+stores is scanned for "<names> set to join / will replace / added to the S&P
+500 | S&P 100 | Nasdaq-100" and the inclusion phrasing; only names **before the
+verb** are matched against the alias table, so "(Not Micron or Sandisk)" after
+the verb cannot fire. A hit becomes a row in `index_events` with an effective
+close: the third Friday when announced in a rebalance month at least three
+days ahead, otherwise announcement + 7 days. `scripts/index_event_trade.py`
+(cron 10:05 ET weekdays) takes one call debit per join event on the latest
+expiry on or before that close, edge-ranked, Pwin ≥ 0.40, EV > 0, one contract
+within `TRADING_INDEX_EVENT_BUDGET`; **never on the effective day**, because
+the closing tape predicts nothing after (§193). Live only when
+`TRADING_INDEX_EVENT_LIVE=true`; otherwise "would place".
+
+**Options flow** (`options_flow.py`, section 197). From the chain the rotation
+already fetches, on the traded expiry plus the next: call vs put volume,
+turnover (volume / open interest) per side, the top strikes by turnover with
+notional. `bullish` needs calls ≥ 2× puts, call turnover ≥ 0.5 and ≥ 500
+contracts; `bearish` mirrors; else `neutral`. `TRADING_DTE0_OPTIONS_FLOW` is
+`record` (default: one OPTIONS line per candidate) | `veto` | `off`.
 
 **News sources, after 2026-09-19.** The hourly sweep (`news_enrich.py`, cron
 13–20 UTC weekdays) reads two kinds of feed. **Macro wires** — Fed, CNBC,

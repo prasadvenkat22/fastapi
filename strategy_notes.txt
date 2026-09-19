@@ -12173,3 +12173,62 @@ not read options flow; the direct signal for Friday's block is the chain's
 own volume against open interest, which the rotation already fetches and
 does not yet read (section 194's second offer). A Benzinga story about a
 block is the market noticing; the block itself is in the chain.
+
+
+197. THE INDEX-EVENT RULE AND THE OPTIONS-FLOW READ  (2026-09-19)
+--------------------------------------------------------------------------------
+
+Both approved after sections 195 and 196. Built the same afternoon.
+
+INDEX EVENTS. trading_engine/index_events.py scans every headline the sweep
+stores. The grammar is the release's: "<names> set to join / will join /
+added to / will replace ... the S&P 500 | S&P 100 | Nasdaq-100", plus the
+"<name>'s inclusion in the S&P 100" phrasing and the leave verbs. THE NAMES
+ARE MATCHED ONLY IN THE SEGMENT BEFORE THE VERB. Two real headlines fixed
+that: "Bloom Energy, Illumina, and Everpure Set to Join S&P 500; Others to
+Join S&P 100..." names three joiners we do not trade and must record
+nothing; "This Little-Known AI Storage Stock Will Join the S&P 500 (Not
+Micron or Sandisk)" names two of ours AFTER the verb and must record
+nothing. A whole-title alias match would have written two false SNDK/MU
+events from the second one.
+
+    A hit is a row: symbol, index, action, announcement, EFFECTIVE CLOSE --
+    the session on which the funds buy, the day before the change takes
+    effect. Third Friday when announced in Mar/Jun/Sep/Dec at least three
+    days before it (09-04 -> 09-18, the SanDisk case); otherwise announcement
+    + 7 days to the previous weekday. Neither is read from the headline,
+    which does not carry the date; the row records which assumption it used.
+
+    scripts/index_event_trade.py, cron 10:05 ET weekdays: for each join
+    event still ahead of its effective close, the best call debit on the
+    name by edge on the latest expiry on or before that close, Pwin >= 0.40,
+    EV > 0, one contract inside TRADING_INDEX_EVENT_BUDGET (1,000). One
+    trade per event, written back on the row. NEVER ON THE EFFECTIVE DAY:
+    that close is where the demand ends, and section 193 measured the
+    closing tape as predicting nothing after. TRADING_INDEX_EVENT_LIVE=false
+    logs "would place"; true sends the order.
+
+    Backfilled over the stored headlines: the 09-04 SanDisk release itself
+    was never stored (the PR Newswire feed did not exist then) and the
+    stored 09-08/09-09 stories are about the move, not the announcement, so
+    the table starts empty. The next release is the first row.
+
+OPTIONS FLOW. trading_engine/options_flow.py, from the chain the rotation
+already fetches, on the traded expiry plus the next listed one: call and
+put volume, turnover (volume over open interest) per side, the top strikes
+by turnover with notional and moneyness. bullish = calls >= 2x puts, call
+turnover >= 0.5, >= 500 contracts; bearish mirrors; else neutral. In
+dte0_trade it logs one OPTIONS line per candidate beside FLOW. RECORD by
+default: it refuses nothing until the replay can score it -- unlike the
+tape gate, this one ships the way the measure-first rule says, because
+there is no 540-day study behind it and one Friday is not one.
+
+    What it is not: volume is two-sided and open interest settles
+    overnight, so "bought" means "traded in size". Covered-call writing over
+    a rally reads exactly like call buying here. The tape gate beside it is
+    the check: paper that is being bought moves the underlying.
+
+Tests: tests/test_index_events.py (eight cases on the real headlines above,
+the effective-date rules, and scan()); tests/test_options_flow.py (five:
+a call block reads bullish, a put block bearish, lopsided churn is neutral,
+thin volume is neutral, chains sum across expiries).

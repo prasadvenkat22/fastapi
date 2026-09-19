@@ -1219,6 +1219,7 @@ TRADING_ORPHAN_ASK_START_WIDTH=0.88 TRADING_ORPHAN_ASK_STEP=0.10 TRADING_ORPHAN_
 TRADING_ORPHAN_ASK_VWAP_FROM=09:40  TRADING_ORPHAN_ASK_CANCEL_BY=15:40  floor = the TARGET level
 TRADING_DTE0_VWAP_GATE=veto         the tape veto on single-name entries (§194); record = log only
 TRADING_VWAP_MIN_BARS=3  TRADING_VWAP_SLOPE_BARS=6  TRADING_VWAP_BARS_ABOVE_MIN=0.60
+TRADING_VWAP_GATE_UNTIL=10:30       veto until here, record after (§194)
 ```
 
 **It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and
@@ -1382,7 +1383,9 @@ puts), the **Polygon news veto** per symbol (BEARISH ≥ 0.50 confidence refuses
 calls, BULLISH refuses puts), the **VWAP flow veto** (`vwap_gate.py`, section
 194: a call debit needs spot above the running session VWAP, VWAP higher than
 30 minutes ago, ≥ 60% of 5-minute bars closing above it, and volume arriving on
-closes near bar highs; puts need the mirror; an unreadable tape refuses), then
+closes near bar highs; puts need the mirror; an unreadable tape refuses; **vetoes only on runs up to 10:30**, records
+after, because the tape's direction measured as continuing into the flatten from the open and
+reversing from 11:00), then
 **EV, Pwin and edge** ranking under the structure limits. Every veto only
 removes; nothing in news or the tape proposes a trade. `TRADING_DTE0_VWAP_GATE`
 is `veto` | `record` | `off`; `scripts/flow_gate_replay.py` replays the gate

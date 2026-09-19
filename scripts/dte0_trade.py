@@ -822,7 +822,8 @@ def main() -> None:
                                 conf or 0.0)
                     rejects["against the news read"] += 1
                     continue
-            if VWAP_GATE in ("veto", "record"):
+            gate_mode = vwap_gate.effective_mode()
+            if gate_mode in ("veto", "record"):
                 bullish = r.get("direction") != "bearish"
                 flow = vwap_gate.session_flow(r["sym"])
                 ok, why = vwap_gate.gate("bullish" if bullish else "bearish", flow)
@@ -830,10 +831,11 @@ def main() -> None:
                     flow_logged.add((r["sym"], side))
                     logger.info("%s %s %s -> %s: %s", r["sym"], side.upper(),
                                 vwap_gate.describe(flow),
-                                "ok" if ok else ("REFUSED" if VWAP_GATE == "veto"
-                                                  else "would refuse"), why)
+                                "ok" if ok else ("REFUSED" if gate_mode == "veto"
+                                                  else "would refuse (record after %s)"
+                                                  % vwap_gate.UNTIL), why)
                 r["_flow"] = vwap_gate.describe(flow)
-                if not ok and VWAP_GATE == "veto":
+                if not ok and gate_mode == "veto":
                     rejects["against the tape (VWAP flow)"] += 1
                     continue
             if r.get("conflict"):

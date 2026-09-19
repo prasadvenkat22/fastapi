@@ -11990,3 +11990,56 @@ bars refuses, steady buying passes calls and refuses puts, steady selling
 the mirror, a single late spike above VWAP does NOT pass (the slope and
 bars-above tests are what stop it), the spot override, the mirrored
 bars-below test for puts, describe() never raises.
+
+MEASURED THE SAME AFTERNOON, AND IT CHANGED THE DEPLOYMENT. Two questions,
+540 symbol-days, 18 names, 40 sessions of Tradier 5-minute bars.
+
+FIRST: does the tape at 15:45 -- the MU/SNDK Friday reading that motivated the
+operator's weekly calls -- predict the next day or the next week?
+
+    flow @15:45      n  next-day  median   up%    5-day   median   up%
+    STRONG_BUY      32   +0.82%   -0.09%   44%   +0.26%  -1.43%   41%
+    call_ok         90   +0.01%   +0.18%   52%   -0.12%  +0.21%   54%
+    mixed          274   +0.27%   +0.14%   51%   +0.56%  -0.20%   50%
+    put_ok          85   +0.37%   -0.06%   46%   +1.54%  +1.78%   63%
+    STRONG_SELL     41   +0.07%   +0.03%   51%   +0.99%  +1.34%   58%
+
+    STRONG_BUY = above VWAP, slope up, >=80% of bars above, close-loc > 0.10.
+    It does not predict the next day (median -0.09%, up 44%) and leans
+    NEGATIVE over five days (median -1.43%, up 41%). Strong selling into the
+    close leans positive after. SNDK's own two prior STRONG_BUY closes:
+    08-13 -> +7.5% next day; 09-04 (the inclusion print) -> -0.1%, then
+    -10.8% over five days. The mean on STRONG_BUY is carried by outliers of
+    exactly that kind. An entry rule that BUYS the closing tape for a weekly
+    is not supported by this data; if anything the data points the other
+    way, and it is not built.
+
+SECOND: does the tape at the rotation's entry times predict the rest of the
+same session -- the question the live veto actually depends on? Move from
+the entry print to the 15:45 flatten:
+
+    cut    tape      n     mean   median    up
+    09:45  call_ok  166   +0.19%  +0.03%   51%
+    09:45  put_ok   158   -0.19%  -0.19%   44%     agrees with the tape
+    10:00  call_ok  149   +0.10%  +0.04%   50%
+    10:30  call_ok  156   +0.03%  -0.13%   46%     nothing
+    11:00  call_ok  160   -0.16%  -0.32%   40%
+    12:00  call_ok  156   -0.21%  -0.17%   45%
+    13:00  call_ok  154   -0.26%  -0.24%   37%     REVERSES it
+
+    Early, the one-sided tape continues: buying the 09:45 buyers beat buying
+    the 09:45 sellers by 38 bp into the flatten, and the put side is the
+    mirror. From 11:00 the same tape gives back, and by 13:00 a call-ok tape
+    finishes DOWN 63% of the time. A veto that refuses puts on a bought tape
+    at 13:00 is refusing the side the data favours.
+
+    So the veto now has a clock: TRADING_VWAP_GATE_UNTIL=10:30. Runs at 09:45,
+    10:00, 10:15 and 10:30 refuse; every later run logs the same FLOW line
+    with "would refuse (record after 10:30)" and refuses nothing. The
+    afternoon reversal is left as a record rather than turned into a
+    contrarian rule on the same afternoon it was found -- section 119 again.
+
+These are price moves, not P&L: 38 bp of underlying at 09:45 is a meaningful
+edge for a spread struck a third of an ATR out, and 63% down at 13:00 is a
+meaningful warning, but neither has been run through the ranker's EV. That
+is what the FLOW lines are for.

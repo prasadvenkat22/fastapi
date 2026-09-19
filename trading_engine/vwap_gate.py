@@ -51,6 +51,34 @@ MODE = os.getenv("TRADING_DTE0_VWAP_GATE", "veto").strip().lower()
 MIN_BARS = int(os.getenv("TRADING_VWAP_MIN_BARS", "3"))
 SLOPE_BARS = int(os.getenv("TRADING_VWAP_SLOPE_BARS", "6"))
 BARS_ABOVE_MIN = float(os.getenv("TRADING_VWAP_BARS_ABOVE_MIN", "0.60"))
+# THE VETO HAS A CLOCK. Measured 2026-09-19 over 540 symbol-days (18 names,
+# 40 sessions), move from the entry print to the 15:45 flatten:
+#
+#     cut    tape      n     mean   median   up
+#     09:45  call_ok  166   +0.19%  +0.03%   51%
+#     09:45  put_ok   158   -0.19%  -0.19%   44%     <- agrees with the tape
+#     11:00  call_ok  160   -0.16%  -0.32%   40%
+#     13:00  call_ok  154   -0.26%  -0.24%   37%     <- REVERSES it
+#
+# A one-sided tape at the open tends to continue into the flatten; the same
+# tape at 11:00 or later tends to give back. So the gate refuses only on runs
+# up to UNTIL and records (logs, refuses nothing) after it. The afternoon
+# reading is kept as a line because the reversal, if it holds up, is a
+# signal in its own right and needs the same record to be measured.
+UNTIL = os.getenv("TRADING_VWAP_GATE_UNTIL", "10:30").strip()
+
+
+def effective_mode(now=None) -> str:
+    """MODE, downgraded from veto to record once New York time is past UNTIL."""
+    if MODE != "veto" or not UNTIL:
+        return MODE
+    try:
+        from zoneinfo import ZoneInfo
+        now = now or datetime.now(ZoneInfo("America/New_York"))
+        hh, mm = (int(x) for x in UNTIL.split(":"))
+        return "veto" if (now.hour, now.minute) <= (hh, mm) else "record"
+    except Exception:
+        return "record"
 
 _CACHE: dict = {}
 _TTL_S = 60.0

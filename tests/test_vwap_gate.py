@@ -76,3 +76,14 @@ def test_bars_above_is_mirrored_for_puts(vg):
 def test_describe_never_raises(vg):
     assert vg.describe(None) == "FLOW n/a"
     assert "VWAP" in vg.describe(vg.flow_from_bars(rising()))
+
+
+def test_veto_downgrades_to_record_after_until(vg, monkeypatch):
+    from datetime import datetime
+    monkeypatch.setattr(vg, "MODE", "veto")
+    monkeypatch.setattr(vg, "UNTIL", "10:30")
+    assert vg.effective_mode(datetime(2026, 9, 21, 9, 45)) == "veto"
+    assert vg.effective_mode(datetime(2026, 9, 21, 10, 30)) == "veto"
+    assert vg.effective_mode(datetime(2026, 9, 21, 10, 31)) == "record"
+    monkeypatch.setattr(vg, "MODE", "record")
+    assert vg.effective_mode(datetime(2026, 9, 21, 9, 45)) == "record"

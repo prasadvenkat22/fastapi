@@ -12232,3 +12232,24 @@ Tests: tests/test_index_events.py (eight cases on the real headlines above,
 the effective-date rules, and scan()); tests/test_options_flow.py (five:
 a call block reads bullish, a put block bearish, lopsided churn is neutral,
 thin volume is neutral, chains sum across expiries).
+
+FIRST REAL READ, AND WHAT IT SAYS ABOUT THE RULE. MU's chain for 09-21 and
+09-25 on Saturday, i.e. Friday's volume:
+
+    calls 174,769   puts 179,224   (1.0x)     -> bias NEUTRAL
+    turnover        calls 2.06x OI, puts 1.76x OI
+    notional        calls $339M    puts $60M  (5.6x)
+
+The count-based bias calls Friday neutral. The dollars do not: five and a
+half times as much premium changed hands in calls, which IS the Cramer
+block. A rule that counts contracts weights a $0.30 lottery put the same as
+a $30 in-the-money call. Before anyone flips TRADING_DTE0_OPTIONS_FLOW to
+veto, the bias needs a notional term, and the OPTIONS record lines from
+Monday are the sample to set it on. Recorded rather than fixed tonight
+because it is one chain on one day, and the fix is a threshold nobody has
+measured -- section 119.
+
+The dust filter on the top list came from the same read: the chain listed a
+P190 strike, 81% below spot, at 11,668 contracts against an open interest of
+one. Aggregates count everything; the top list now wants OI >= 10 and a
+strike within 30% of spot.

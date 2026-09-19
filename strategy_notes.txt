@@ -11892,6 +11892,8 @@ TRADING_ORPHAN_ASK=true:
     inside the interval, walk to the floor and stop, fill-races-cancel, the
     15:40 withdrawal, deep-ITM entries with no room (floor above width), and
     credit spreads (never).
+    They live in tests/test_orphan_ask.py (eleven cases, pytest) so the next
+    change to the ask path has something to break.
 
 WHAT THE LOG SAYS ABOUT WHETHER IT IS WORTH HAVING. Of 45 positions that
 reached full intrinsic after 09:35:

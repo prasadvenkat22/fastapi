@@ -1087,6 +1087,33 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 
 ---
 
+## The site: data-ai-systems.com, one nginx, the API on loopback
+
+Section 201. The Next.js app (GitHub `prasadvenkat22/data-ai-solutions`, on the
+droplet at `/opt/data-ai-solutions`, container `data-ai-web`) runs on the same
+Docker network as this stack with **no published port**. The stack's nginx is
+the only thing listening on 80/443: it proxies `/auth`, `/trading`, `/api`,
+`/CRUD`, `/images`, `/static`, `/docs` to `app:8000` and everything else to
+`data-ai-web:3000`, so the browser talks to **one origin** and no CORS is
+involved. The API's own port is published on `127.0.0.1` only — a
+Docker-published port bypasses UFW, and 8000 had been reachable from the
+internet — and UFW allows 22, 80 and 443.
+
+`app/nginx/conf.d/00-security.conf` sets per-IP request-rate zones (site 30/s,
+API 10/s, **login 5/min**), a 30-connection cap, `server_tokens off`;
+`data-ai-systems.conf` is the HTTP server with security headers and the ACME
+path; `scripts/issue_cert.sh` issues the Let's Encrypt certificate by webroot
+and writes the HTTPS block **only once the files exist**. It refuses to run
+while DNS points elsewhere (on 2026-09-19 the apex and www resolved to
+74.91.138.134, not this droplet). Renewal: the same script from cron.
+
+The site: public landing page describing the auto-trader; everything under
+`/trading` (positions with the live ladder, closed trades, screener board,
+engine controls with a two-step flatten) needs a `trader` or `admin` login;
+`/ai` (ask the book, upload analysis, direct prompt) needs `admin`. Tokens
+come from `/auth/login`, refresh through `/auth/refresh`, and travel as a
+bearer on every call. Budgets, cron and env are not exposed in the UI.
+
 ## GENAI: the agents run on Gemini and one of them reads the trading database
 
 `/api/genai/*` (admin bearer token) is the RAG and multi-agent surface. Since
@@ -1119,6 +1146,8 @@ GET  /trading/screener/verticals?symbols=CRWV,AVGO&side=call&structure=debit&by=
 GET  /trading/screener/verticals?...&expiry=2026-09-21      one date for the whole board; "+3" = first expiry >= 3 days out
 GET  /trading/screener/flow?symbols=CRWV,AVGO,SNDK
 POST /api/genai/agent/ask   {"query": "..."}   ask the trading book; Gemini writes a guarded SELECT (§200)
+
+All of these are reachable only through nginx on the site's origin since §201; the API port is loopback-only.
 POST /trading/flatten?confirm=LIQUIDATE&preview=true
 POST /trading/flatten?confirm=LIQUIDATE&preview=false&plan_token=<from the preview>
 ```

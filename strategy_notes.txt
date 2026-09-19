@@ -12481,3 +12481,115 @@ blocked-response handling, and eleven guard cases: SELECT accepted with
 LIMIT added, CTE names allowed, DELETE refused, two statements refused, a
 non-whitelisted table refused, a UNION into users refused, INTO refused,
 empty refused, and write verbs inside string literals ignored.
+
+
+201. THE SITE GOES UP BESIDE THE ENGINE, AND THE API COMES OFF THE INTERNET  (2026-09-19)
+--------------------------------------------------------------------------------
+
+Operator: the Next.js UI on GitHub (prasadvenkat22/data-ai-solutions) has
+none of the trading system; add the endpoints with a good-looking positions
+display and controls for the rest; trading and GenAI behind login, the
+landing page open; the brand is Data AI Systems (not DataIQ, not DataAI
+Solutions); describe the auto-trader; harden against web attacks; deploy to
+the same droplet; the domain data-ai-systems.com is registered.
+
+WHAT WAS THERE. A Next 14 pages-router app with Tailwind: CRUD pages against
+/CRUD, a chat widget calling GenAI with "openai / gpt-4o-mini" defaults, an
+API client with no auth at all, rewrites pointing at an old server IP
+(142.93.177.153), a Dockerfile (standalone build) and a compose file
+publishing 3000. On the droplet: nginx in the fastapi stack on :80 only,
+proxying to the API by path and the bare IP to the API root; the API port
+8000 published on 0.0.0.0 -- and a Docker-published port bypasses UFW, so
+the API had been reachable from the internet by IP, bearer or not.
+
+THE UI. src/lib/auth.ts: login/refresh/me against FastAPI, tokens in
+localStorage, a bearer on every call, one shared in-flight refresh on 401.
+AuthProvider + RequireAuth (with roles) wrap the protected pages; anonymous
+visitors go to /login and come back. src/lib/trading.ts is the typed client
+for /trading/* and /api/genai/*. Pages:
+
+    /trading            positions: every spread the broker holds with entry,
+                        mark, return and P&L, peak and minutes since, the
+                        intrinsic-vs-width bar with drag %, and the ladder
+                        column (stop/confirm, stall give-back/quiet/floor,
+                        ceiling), badges for 0DTE/expiry, drag guard, stall
+                        armed, hold window; a row expands to every field
+                        /trading/positions returns. Status chips: kill
+                        switch, scheduler; cards: open spreads, unrealized,
+                        realized all time, last cycle. Auto-refresh 30 s.
+    /trading/history    closed trades with a window picker, per-underlying
+                        P&L and win rate, playbook stats.
+    /trading/board      the screener for calls and puts at once, edge-sorted,
+                        R:R band, expiry, structure; explained on the page:
+                        the board prices odds, not direction.
+    /trading/controls   kill switch (confirm), scheduler start/stop, tape
+                        read, and flatten as preview -> type LIQUIDATE ->
+                        execute with the preview's token; admin only in the
+                        UI, on top of the router's own double confirm.
+    /ai                 ask the book (section 200's agent, SQL shown),
+                        analyze an upload, direct prompt. Admin only.
+    /login              the one form.
+
+    Landing page: Data AI Systems, an auto-trader section that says what the
+    system does -- two books, the gates, the ladders, the agent -- with the
+    risk line, and links that land on /login for anyone not signed in. The
+    chat widget renders only for signed-in admins, since the GenAI routes
+    require admin and an anonymous visitor got a 401 for every message. All
+    GenAI defaults are gemini. The dev-only /api/genai proxy routes forward
+    the bearer; in production nginx owns /api and they are never reached.
+
+    npm run build: clean, 24 routes.
+
+THE SERVER. One nginx, one origin:
+
+    app/nginx/conf.d/00-security.conf   server_tokens off; per-IP zones site
+                                        30r/s, api 10r/s, login 5r/m; 30
+                                        connections per IP; 429 on limit
+    data-ai-systems.conf                default server for the domain and
+                                        the bare IP; /auth /trading /api
+                                        /CRUD /images /static /docs -> app;
+                                        /_next/static cached 30d; / -> the
+                                        web container by name; security
+                                        headers; the ACME challenge path
+    proxy_params.inc                    the proxy headers, included once
+    docker-compose.prod.yml             app ports !override 127.0.0.1:8000;
+                                        nginx 80+443 and the certbot volumes
+    scripts/issue_cert.sh               certbot webroot issue/renew, writes
+                                        the HTTPS block AFTER the files exist
+                                        (a missing cert file stops nginx from
+                                        starting), refuses while DNS points
+                                        elsewhere
+    UFW                                 8000 removed; 22, 80, 443 remain
+
+    The web container: /opt/data-ai-solutions, docker-compose.server.yml,
+    joins fastapi_default, no published port, 512M cap, NEXT_PUBLIC_API_URL
+    empty (same origin). Built on the droplet (2G swap, took the build).
+
+    Verified through nginx: / serves the site, /openapi.json 200,
+    /auth/login GET 405, /trading/positions without a token 401, ss shows
+    8000 on 127.0.0.1 only and 80/443 on all interfaces.
+
+WHAT "SECURED FROM WEB ATTACKS" MEANS HERE, honestly. UFW closes ports;
+nginx rate limits slow the password guesser (five tries a minute) and the
+scraper (ten API calls a second per IP) and caps connections; DigitalOcean
+absorbs volumetric floods at its network edge; every trading and GenAI
+route needs a bearer from a password login and the roles are checked in the
+database on every request. None of that is a WAF and none of it stops a
+distributed application-layer flood; if the site ever matters enough to
+draw one, Cloudflare in front is the next step, and it is a DNS change.
+
+TWO THINGS ONLY THE OPERATOR CAN DO.
+
+    DNS. data-ai-systems.com and www resolve to 74.91.138.134. This droplet
+    is 159.223.127.31. Until the A records point here the site answers on
+    http://159.223.127.31 and the certificate cannot be issued. After the
+    change: /opt/fastapi/scripts/issue_cert.sh, and HTTPS is on.
+
+    THE GITHUB TOKEN IN THE REMOTE URL. The UI repo's origin is configured
+    as https://<token>@github.com/..., a personal access token in plaintext
+    in .git/config. It worked for tonight's push and it should be revoked
+    and replaced with a credential helper; a token in a URL ends up in shell
+    history, logs and screenshots.
+
+The old default.conf is kept on the server as default.conf.disabled-20260919
+and removed from the repo.

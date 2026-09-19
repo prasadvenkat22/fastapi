@@ -12593,3 +12593,20 @@ TWO THINGS ONLY THE OPERATOR CAN DO.
 
 The old default.conf is kept on the server as default.conf.disabled-20260919
 and removed from the repo.
+
+FIRST DEPLOY, TWO CORRECTIONS. Through nginx: / and /login served, security
+headers present, the login zone returned 429 on the seventh rapid POST,
+/trading/positions without a token 401, /api/genai/agent/ask without a token
+401, port 8000 unreachable from outside, the site reachable by IP. Then:
+
+    /trading/board -> 404 from FastAPI. The UI's pages were under /trading,
+    the same prefix the API owns, and nginx sends /trading/ to the API. The
+    desk pages moved to /desk (positions, /desk/history, /desk/board,
+    /desk/controls); /ai stays. One origin means one namespace.
+
+    data-ai-web "unhealthy" while serving fine: the healthcheck's wget hit
+    localhost, which resolves to ::1 in the alpine image, and the Next
+    standalone server listens on IPv4. A node probe against 127.0.0.1 now.
+
+    The page titles were inside RequireAuth and so missing from the
+    server-rendered HTML; hoisted above it.

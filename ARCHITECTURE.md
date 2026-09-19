@@ -1108,7 +1108,7 @@ while DNS points elsewhere (on 2026-09-19 the apex and www resolved to
 74.91.138.134, not this droplet). Renewal: the same script from cron.
 
 The site: public landing page describing the auto-trader; everything under
-`/trading` (positions with the live ladder, closed trades, screener board,
+`/desk` (positions with the live ladder, closed trades, screener board,
 engine controls with a two-step flatten) needs a `trader` or `admin` login;
 `/ai` (ask the book, upload analysis, direct prompt) needs `admin`. Tokens
 come from `/auth/login`, refresh through `/auth/refresh`, and travel as a

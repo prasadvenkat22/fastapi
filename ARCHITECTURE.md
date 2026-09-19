@@ -1230,6 +1230,7 @@ TRADING_ORPHAN_ASK_VWAP_FROM=09:40  TRADING_ORPHAN_ASK_CANCEL_BY=15:40  floor = 
 TRADING_DTE0_VWAP_GATE=veto         the tape veto on single-name entries (§194); record = log only
 TRADING_VWAP_MIN_BARS=3  TRADING_VWAP_SLOPE_BARS=6  TRADING_VWAP_BARS_ABOVE_MIN=0.60
 TRADING_VWAP_GATE_UNTIL=10:30       veto until here, record after (§194)
+TRADING_SEC_USER_AGENT=<name email>  required by EDGAR; the edgar-* feeds are skipped without it (§196)
 ```
 
 **It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and
@@ -1385,6 +1386,23 @@ a `shade` inside the short strike because past the short strike a debit spread
 has nothing more to earn (sections 190–191). It runs as a detached process in
 the container; kill it with a pattern anchored to the process, never with a bare
 `pkill -f` over ssh, which matches the ssh session itself.
+
+**News sources, after 2026-09-19.** The hourly sweep (`news_enrich.py`, cron
+13–20 UTC weekdays) reads two kinds of feed. **Macro wires** — Fed, CNBC,
+MarketWatch, Investing.com, Yahoo — are classified by Gemini into the macro
+verdict. **Company feeds** are stored in `news_seen` for the per-symbol grader
+in `news_hourly.py` (alias match on the title) and never reach the macro model:
+Benzinga's wire; Google News RSS searches for index changes (`"set to join"`,
+`"will replace"`, `"rebalance"` against S&P 500/100 and Nasdaq-100), for S&P
+Dow Jones Indices releases on PR Newswire, for Business Wire and Benzinga
+stories naming the universe, and for Benzinga options-flow stories; and SEC
+EDGAR Atom feeds per company by numeric CIK, 8-K and SC 13D, each with the
+filer's name prefixed to the title so the alias matcher can attribute a
+filing titled only "8-K - Current report". spglobal.com and its RSS answer 403
+to every non-browser client; Google News is the only public route to those
+releases. EDGAR requires `TRADING_SEC_USER_AGENT` with a contact address.
+Filing and index-release feeds are quiet by nature and are exempt from the
+dead/stale warnings. Section 196.
 
 **Single-name 0DTE entries** (`dte0_trade.py --rotate --live`, every 15 min
 09:00–13:45 ET, budget $1,500 over two slots, no entries after 13:30) clear, in

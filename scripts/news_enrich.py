@@ -109,6 +109,69 @@ FEEDS = [
     ("yahoo-finance", "https://finance.yahoo.com/news/rssindex"),
 ]
 
+# COMPANY FEEDS: STORED FOR THE TICKER GRADER, NEVER SENT TO THE MACRO MODEL.
+#
+# Added 2026-09-19 after Friday's miss. Polygon held ONE SanDisk article all
+# day (a Zacks roundup); the Cramer flag on $90M of short-dated call blocks in
+# Sandisk, Micron and Marvell (Benzinga, 10:39 ET) reached none of the feeds
+# above, and the S&P 100 inclusion that produced the closing spike had been
+# announced two weeks earlier on a PR Newswire release this sweep never read.
+# The ticker leg in news_hourly matches news_seen titles on symbol aliases, so
+# a headline stored here is graded for its name on the next hourly run.
+#
+# These are single-name wires and filings. They go into news_seen like every
+# other row and are NOT classified for the macro verdict: 400 company
+# headlines an hour would swamp a macro read that counts one vote per topic,
+# and would cost a Gemini call each for nothing the macro gate can use.
+#
+#   benzinga       the whole Benzinga wire, the one feed that carried Friday
+#   gnews-*        Google News RSS search, which is the only public feed that
+#                  reaches S&P Dow Jones Indices releases (spglobal.com and
+#                  its RSS 403 every non-browser client) and Business Wire
+#                  corporate releases by name. Titles arrive "Headline - Source".
+#   edgar-*        SEC EDGAR Atom per company, 8-K and SC 13D, by numeric CIK
+#                  (the ticker form of the URL returned nothing for SNDK).
+#                  EDGAR entries are titled "8-K - Current report" with no
+#                  company name, so each feed carries a PREFIX that puts the
+#                  filer's name in the title -- without it the alias matcher
+#                  could never attribute the filing. The SEC requires a
+#                  User-Agent with a contact address and answers 403 without
+#                  one: TRADING_SEC_USER_AGENT.
+_UNIVERSE = "Sandisk OR Micron OR Marvell OR Broadcom OR Intel OR Nvidia OR CoreWeave OR Seagate OR \"Western Digital\" OR Dell OR \"Palo Alto\" OR Tesla OR Amazon OR Apple OR Meta OR Microsoft OR Alphabet OR AMD"
+_GN = "https://news.google.com/rss/search?hl=en-US&gl=US&ceid=US:en&q="
+SEC_USER_AGENT = os.getenv("TRADING_SEC_USER_AGENT", "").strip()
+# ticker -> (CIK, filer name) from https://www.sec.gov/files/company_tickers.json, 2026-09-19
+EDGAR_CIK = {
+    "SNDK": (2023554, "Sandisk Corp"), "MU": (723125, "Micron Technology"),
+    "NVDA": (1045810, "Nvidia Corp"), "TSLA": (1318605, "Tesla Inc"),
+    "AMZN": (1018724, "Amazon.com Inc"), "AAPL": (320193, "Apple Inc"),
+    "META": (1326801, "Meta Platforms"), "MSFT": (789019, "Microsoft Corp"),
+    "GOOGL": (1652044, "Alphabet Inc"), "AMD": (2488, "Advanced Micro Devices"),
+    "AVGO": (1730168, "Broadcom Inc"), "INTC": (50863, "Intel Corp"),
+    "CRWV": (1769628, "CoreWeave Inc"), "MRVL": (1835632, "Marvell Technology"),
+    "PANW": (1327567, "Palo Alto Networks"), "DELL": (1571996, "Dell Technologies"),
+    "STX": (1137789, "Seagate Technology"), "WDC": (106040, "Western Digital Corp"),
+}
+COMPANY_FEEDS = [
+    {"name": "benzinga", "url": "https://www.benzinga.com/feed"},
+    {"name": "gnews-index", "url": _GN + (
+        "(%22S%26P+500%22+OR+%22S%26P+100%22+OR+%22Nasdaq-100%22)+"
+        "(%22set+to+join%22+OR+%22to+join+the%22+OR+%22will+replace%22+OR+"
+        "%22added+to+the%22+OR+%22rebalance%22)")},
+    {"name": "gnews-spdji", "url": _GN + "site:prnewswire.com+%22S%26P+Dow+Jones+Indices%22"},
+    {"name": "gnews-businesswire", "url": _GN + "site:businesswire.com+(" + _UNIVERSE.replace(" ", "+") + ")"},
+    {"name": "gnews-benzinga", "url": _GN + "site:benzinga.com+(" + _UNIVERSE.replace(" ", "+") + ")"},
+    {"name": "gnews-benzinga-options", "url": _GN + (
+        "site:benzinga.com+(%22option%22+OR+%22options%22+OR+%22calls%22+OR+%22puts%22)+("
+        + _UNIVERSE.replace(" ", "+") + ")")},
+] + [
+    {"name": f"edgar-{t.lower()}-{form.lower().replace(' ', '')}",
+     "url": ("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+             f"&CIK={cik}&type={form.replace(' ', '%20')}&output=atom&count=10"),
+     "prefix": f"{filer} {form} filing: ", "agent": SEC_USER_AGENT}
+    for t, (cik, filer) in EDGAR_CIK.items() for form in ("8-K", "SC 13D")
+]
+
 # "This story is about the economy, not a company." ORG alone cannot decide it
 # -- every company story has an ORG and most carry MONEY and PERCENT, so a
 # type-based rule keeps everything, which is the failure this filter exists to
@@ -323,20 +386,37 @@ def fetch() -> list:
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
     out = []
-    for name, url in FEEDS:
+    plan = [{"name": n, "url": u, "macro": True} for n, u in FEEDS]
+    plan += [dict(f, macro=False) for f in COMPANY_FEEDS
+             if not (f.get("agent") == "" and "agent" in f)]   # EDGAR without a UA is a 403: skip, say so once
+    if SEC_USER_AGENT == "" and any("agent" in f for f in COMPANY_FEEDS):
+        logger.warning("edgar-*                skipped: TRADING_SEC_USER_AGENT is empty and the SEC "
+                       "answers 403 without a contact address")
+    for feed in plan:
+        name, url = feed["name"], feed["url"]
         try:
-            entries = feedparser.parse(url).entries or []
+            kwargs = {"agent": feed["agent"]} if feed.get("agent") else {}
+            entries = feedparser.parse(url, **kwargs).entries or []
         except Exception:
             logger.warning("%-22s unreachable", name, exc_info=True)
             continue
+        # A filings feed or an index-release feed is QUIET most of the time --
+        # a company files an 8-K every few weeks and S&P announces changes a
+        # few times a quarter. Empty or old is the normal state for those, not
+        # a broken URL, so the dead/stale warnings apply to the wires only.
+        quiet_ok = name.startswith("edgar-") or name == "gnews-spdji" or name == "gnews-index"
         if not entries:
-            logger.warning("%-22s 0 entries -- feed may be dead", name)
+            if not quiet_ok:
+                logger.warning("%-22s 0 entries -- feed may be dead", name)
             continue
+        prefix = feed.get("prefix") or ""
         newest, kept = None, 0
         for e in entries:
             title = (e.get("title") or "").strip()
             if not title:
                 continue
+            if prefix:
+                title = prefix + title
             pub = None
             for key in ("published_parsed", "updated_parsed"):
                 if e.get(key):
@@ -356,11 +436,15 @@ def fetch() -> list:
                 "link": (e.get("link") or "")[:500],
                 "source": name,
                 "published": pub,
+                # Company wires and filings are stored for the ticker grader
+                # and kept out of the macro classifier. See COMPANY_FEEDS.
+                "macro_eligible": feed["macro"],
             })
             kept += 1
         # A DEAD FEED READS AS QUIET, NOT BROKEN -- the failure mw_marketpulse
         # produced on 2026-09-12. Say it out loud.
-        if newest and (datetime.now(timezone.utc) - newest) > timedelta(days=3):
+        if (newest and not quiet_ok
+                and (datetime.now(timezone.utc) - newest) > timedelta(days=3)):
             logger.warning("%-22s newest item %s -- STALE, check the URL",
                            name, newest.date())
         logger.info("%-22s %3d entries, %2d inside %dh", name, len(entries),
@@ -683,6 +767,11 @@ def main() -> None:
     if not arts:
         print("nothing new to score -- verdict still recomputed from the window")
 
+    company = [a for a in arts if not a.get("macro_eligible", True)]
+    arts = [a for a in arts if a.get("macro_eligible", True)]
+    if company:
+        print(f"{len(company)} company-wire/filing headline(s) stored for the ticker "
+              f"grader, not sent to the macro model")
     arts = classify(arts) if arts else []
     macro = [a for a in arts if a["is_macro"]]
     print(f"{len(macro)} macro after the NER filter "

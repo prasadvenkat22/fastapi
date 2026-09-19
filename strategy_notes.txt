@@ -12103,3 +12103,73 @@ Monday 09-21, on Friday's closing quotes, edge-sorted, R:R 1..3:
     board's news column is blank on a Saturday because verdicts are per
     trading day) and the tape gate at 09:45. The rotation re-ranks all of
     this on live quotes and takes the top two survivors by EV within 1,500.
+
+
+196. THE FEEDS THAT WOULD HAVE CARRIED FRIDAY  (2026-09-19)
+--------------------------------------------------------------------------------
+
+What the operator brought: a Benzinga item, 10:39 ET Friday -- Cramer flagging
+about $90M of short-dated call blocks in Sandisk, Micron and Marvell -- and
+the timeline: that flag as the intraday spark, the S&P 100 inclusion's
+Monday-morning effective date as the reason the index funds' market-on-close
+orders hit in the last ten minutes.
+
+WHAT THE PIPELINE HAD. Polygon: one SanDisk article all day, a Zacks roundup
+at 09:30. Five for Micron, one for Marvell, none from Benzinga, none about
+options. The RSS leg: CNBC, Yahoo, MarketWatch, Investing.com -- no Benzinga,
+no X. CNBC's 07:20 "AI trade rebound sparks flurry of unusually bullish
+options activity" was stored and tagged to no name. SNDK read "no articles in
+the last 24h" at 09:08 and 10:08 and went BULLISH 0.27 at 13:28 on "Why
+Sandisk Stock Rallied Today". A coverage gap, not a query bug: the grader
+read about the move after the move.
+
+WHAT THE TAPE HAD, at 10:40, from price and volume alone (section 194's
+gate): SNDK 1708 above VWAP 1680, 100% of bars above, call OK. MU 994 above
+991, 100% above, call OK. MRVL 238.70 UNDER VWAP 240.71, 0% above, REFUSED.
+Two of the three names in the flag were clean buys on the tape before the
+flag; the third was being sold and stayed sold. That is the footprint
+argument in one row, and it is why the gate is the primary signal and the
+feeds are the secondary one.
+
+WHAT WAS ADDED, and what was tried and could not be. The operator's note
+named spglobal.com, businesswire.com and SEC EDGAR as feeds. spglobal.com and
+every SPDJI RSS URL answer 403 to any non-browser client, browser User-Agent
+included. Business Wire's public RSS index is JavaScript and its encoded feed
+URLs cannot be enumerated. PR Newswire's category feeds work but roll twenty
+items, so an hourly poll can miss a release. Google News RSS search is the
+one public route that reaches all three, and it is what carries them now:
+
+    benzinga                 the Benzinga wire's own feed (works; on a
+                             weekend it is crypto price-prediction pages)
+    gnews-index              "set to join" / "will replace" / "rebalance"
+                             against S&P 500, S&P 100, Nasdaq-100. First
+                             pull returned "Bloom Energy, Illumina, and
+                             Everpure Set to Join S&P 500; Others to Join S&P
+                             100..." -- the exact release format that carried
+                             SanDisk on 09-04.
+    gnews-spdji              site:prnewswire.com "S&P Dow Jones Indices"
+    gnews-businesswire       site:businesswire.com naming the universe
+    gnews-benzinga           site:benzinga.com naming the universe
+    gnews-benzinga-options   the same, restricted to option/calls/puts
+    edgar-<sym>-8-k          SEC EDGAR Atom per company, by numeric CIK --
+    edgar-<sym>-sc13d        the ticker form returned nothing for SNDK. The
+                             SEC answers 403 without a User-Agent carrying a
+                             contact address (TRADING_SEC_USER_AGENT). Entries
+                             are titled "8-K - Current report" with no filer
+                             name, so each feed prefixes the filer's name or
+                             the alias matcher could never attribute it.
+
+HOW THEY ARE USED. Stored in news_seen like every RSS row, matched by
+news_hourly's alias leg and graded for the name on the next hourly run.
+NOT sent to the macro classifier: 400 company headlines an hour would swamp
+a verdict that counts one vote per topic and cost a Gemini call each for
+nothing the macro gate reads. Filing and index-release feeds are quiet most
+of the time -- a company files an 8-K every few weeks -- so they are exempt
+from the dead/stale warnings that guard the wires.
+
+WHAT THIS DOES NOT DO. It does not turn an inclusion release into a position;
+that is the index-event rule of section 195, still waiting on a go. It does
+not read options flow; the direct signal for Friday's block is the chain's
+own volume against open interest, which the rotation already fetches and
+does not yet read (section 194's second offer). A Benzinga story about a
+block is the market noticing; the block itself is in the chain.

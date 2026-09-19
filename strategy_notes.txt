@@ -11818,3 +11818,96 @@ book. The target is the rule the operator confirmed; the stall is its
 backstop, not a second target. Open item: TRADING_MAX_ORDER_CONTRACTS is 5,
 so a nine-lot target exit goes as 5 then 4 a cycle later -- raising it to 10
 is the operator's decision, recorded here as not yet taken.
+
+
+193. THE ASK: A RESTING SELL ABOVE THE BID, WALKED DOWN ON VWAP  (2026-09-19)
+--------------------------------------------------------------------------------
+
+The operator's note for Monday's open on MU 1000/1015 x9: if MU opens above
+1025, rest a sell at 14.00; hold it while MU is above VWAP; step it down 0.10
+every 3-5 minutes while MU is below VWAP; never below 13.50. Sound shape,
+wrong numbers, and a mechanism that would have switched the ladder off.
+
+WHAT PINNED SPREADS ACTUALLY BID. From the engine log, every cycle where a
+call debit sat at FULL intrinsic (46 positions, 9 sessions, 5,159 cycles):
+
+    ET window      cycles   median   p75   >=90%   >=93%
+    09:30-10:00       334     59%    72%     0%      0%
+    10:00-10:30       354     72%    78%     0%      0%
+    10:30-12:00     1,848     79%    85%     2%      0%
+    12:00-14:00     1,293     72%    90%    22%      0%
+    14:00-15:00       886     69%    76%     0%      0%
+    15:00-15:45       345     60%    61%     0%      0%
+
+Best first-half-hour bid across the 13 positions pinned then: 86% of width.
+14.00 on a 15-wide is 93%, which never printed. 13.50 is 90%, a midday event
+one cycle in five. The note's order does not fill at a 1025 open; it rests.
+
+AND A RESTING ORDER FROM OUTSIDE THE ENGINE IS A POSITION WITH NO EXIT. Any
+working order on a structure's legs makes the ladder stand down (in_flight),
+correctly -- it must not sell twice. So a limit placed by a script turns off
+the stop, the stall, the target AND the 15:45 flatten for as long as it
+rests. The in_flight comment already records this happening once and being
+worked around by a watcher that cancelled five minutes before the flatten.
+
+A CORRECTION RECORDED AGAINST MYSELF: section 192 and the conversation before
+it said the +70% target "fires at 09:35" at a 1025 open. The table says the
+median pinned bid in that half hour is 59% of width -- about 8.85 on this
+spread, +22%. The target needs ~12.75 (its 12.31 level with drag under the
+2.25 ceiling), which is a 10:30-14:00 bid at best. The realistic Monday was
+always: hold through the morning, book midday if the bid gets there,
+otherwise the full 15.00 at the flatten.
+
+WHAT WAS BUILT. ASK mode inside orphans.py, 0DTE only, off unless
+TRADING_ORPHAN_ASK=true:
+
+    when      a debit spread is at full intrinsic, past the hold window,
+              nothing in the ladder wants to act, no order working on it
+    place     a sell at START_WIDTH (0.88) of the width -- 13.20 on MU --
+              through the same _send_close path every exit uses (holdings
+              clamp, MAX_CONTRACTS clamp, one multileg order)
+    hold      while the underlying is at or above its session VWAP
+    step      -0.10 every 3 min while below VWAP, from 09:40 (VWAP at
+              09:30:05 is one print), cancel-then-replace, never PUT
+    floor     the TARGET level, entry x 1.70 = 12.31 on MU: the ask can
+              never ask LESS than the rule it stands in for
+    withdraw  15:40, so the 15:45 flatten runs as it always has
+    suppress  TARGET, CEILING, LATER_TARGET while it rests -- the ask IS that
+              exit, asking more
+    yield     to STALL, GIVEBACK and every stop: they cancel the ask first,
+              confirm the cancel, then act. A cancel that comes back FILLED is
+              booked, not replaced. A cancel that is not confirmed in four
+              seconds sends NOTHING -- that is exactly how a spread gets sold
+              twice, and the pass stands down instead.
+
+    New in tradier_orders: cancel_order (DELETE) -- the first use of the
+    cancel endpoint in this codebase. _close was split into _send_close
+    (returns the order id) and _close (waits for the fill), so an order can
+    be sent that is MEANT to rest.
+
+    State lives in rec["ask"] beside the peaks, persisted every pass, so a
+    restart neither forgets a working ask nor places a second one. Ten
+    scenarios exercised against a faked broker before deploy: place, no-place
+    when the bid is already there, hold above VWAP, step below it, no step
+    inside the interval, walk to the floor and stop, fill-races-cancel, the
+    15:40 withdrawal, deep-ITM entries with no room (floor above width), and
+    credit spreads (never).
+
+WHAT THE LOG SAYS ABOUT WHETHER IT IS WORTH HAVING. Of 45 positions that
+reached full intrinsic after 09:35:
+
+    28  were still pinned at their last logged cycle  (62%)
+    17  had come off the pin                          (38%)
+     8  ever bid 88% of width or better               (18%)
+
+So the START rarely fills; the FLOOR fills more often; and on the 38% that
+come off the pin, an ask resting at the target level books what the stop
+would otherwise have chased down. On the 62% that hold, the flatten pays
+100% of width and any fill below it is money given up -- which is why the
+ask never rests below the target the operator already accepted, and why the
+rule for a strong tape (above VWAP) is to leave it alone.
+
+NOT MEASURED AS A RULE. The fill table is measured; the VWAP stepping is the
+operator's logic, recorded as a setting. Monday's MU is the first data point.
+The MAX_CONTRACTS cap of 5 still applies to the ask: on x9 it rests 5, and
+the remaining 4 are asked on the pass after the first fill.

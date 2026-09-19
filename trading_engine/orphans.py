@@ -796,6 +796,43 @@ ORPHAN_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_HOLD_UNTIL", "").strip()
 # deployment before 2026-09-18 behaved.
 ORPHAN_LATER_HOLD_UNTIL = os.getenv("TRADING_ORPHAN_LATER_HOLD_UNTIL", "").strip()
 
+# ASK MODE: REST A SELL ABOVE THE BID ON A PINNED SPREAD, AND WALK IT DOWN.
+#
+# Measured 2026-09-19 over 46 positions / 9 sessions: a debit spread sitting
+# at FULL intrinsic was bid a median 59% of its width in the first half hour,
+# 72-79% through midday, and 90%+ in one cycle in five between 12:00 and
+# 14:00 -- never 93%. Selling at the mark the moment a target is met takes
+# the discount; holding to the flatten takes the pin risk. This is the third
+# option: ask for a price the market has actually paid, and step toward the
+# bid only while the underlying is weakening (below its session VWAP).
+#
+# WHY IT LIVES HERE AND NOT IN A SCRIPT. A working order on a structure's
+# legs makes the ladder stand down (in_flight) -- correctly, it must not sell
+# a position twice. A resting limit placed from OUTSIDE therefore switches off
+# the stop, the stall and the flatten for as long as it rests, which is the
+# failure the in_flight comment records. Placed from inside, the engine knows
+# the order is its own, keeps every loss rule live, and cancels the ask first
+# whenever one of them needs to act.
+#
+# The floor is the TARGET level (entry * (1 + TARGET_RETURN_PCT)), so the ask
+# can never end up asking LESS than the rule it replaces. START_WIDTH is a
+# fraction of the width; 0.88 is just above the best first-half-hour bid in
+# the sample (86%). TARGET and CEILING are suppressed while an ask rests --
+# the ask IS that exit, asking more; STALL, GIVEBACK and every loss rule are
+# not suppressed, they cancel the ask and act. Off unless TRADING_ORPHAN_ASK
+# is true. 0DTE only by default: a weekly's extrinsic is days away from zero.
+ORPHAN_ASK = os.getenv("TRADING_ORPHAN_ASK", "false").lower() == "true"
+ORPHAN_ASK_START_WIDTH = float(os.getenv("TRADING_ORPHAN_ASK_START_WIDTH", "0.88") or 0)
+ORPHAN_ASK_FLOOR_WIDTH = float(os.getenv("TRADING_ORPHAN_ASK_FLOOR_WIDTH", "0") or 0)
+ORPHAN_ASK_STEP = float(os.getenv("TRADING_ORPHAN_ASK_STEP", "0.10") or 0.10)
+ORPHAN_ASK_STEP_MINUTES = float(os.getenv("TRADING_ORPHAN_ASK_STEP_MINUTES", "3") or 3)
+ORPHAN_ASK_VWAP_FROM = os.getenv("TRADING_ORPHAN_ASK_VWAP_FROM", "09:40").strip()
+ORPHAN_ASK_CANCEL_BY = os.getenv("TRADING_ORPHAN_ASK_CANCEL_BY", "15:40").strip()
+ORPHAN_ASK_ZERO_DTE_ONLY = os.getenv("TRADING_ORPHAN_ASK_ZERO_DTE_ONLY", "true").lower() == "true"
+# Level-based profit exits the ask replaces while it rests. Everything else
+# -- stalls, give-back, every stop, the flatten -- cancels the ask and acts.
+_ASK_SUPPRESSED = {"TARGET", "CEILING", "LATER_TARGET"}
+
 # THE SLOW STOP: A LEVEL THAT HAS TO HOLD, NOT A LEVEL THAT IS TOUCHED.
 #
 # ORPHAN_STOP_PCT is a FAST stop -- it fires on the first cycle through its
@@ -1730,8 +1767,11 @@ def _fill_value(order_id) -> "tuple | None":
     return None
 
 
-def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
-    """Send the closing order; return (filled value, contracts), or None.
+def _send_close(st: dict, reason: str, limit_price: float) -> "tuple | None":
+    """Send the closing order; return (order id, contracts sent), or None.
+
+    _close wraps this and waits for the fill. The ask path calls it directly,
+    because an ask is MEANT to rest.
 
     None means it did not fill -- rejected, or still working. The caller must
     not book a result for it: the position is either still open or never left,
@@ -1808,10 +1848,196 @@ def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
             "ORPHAN %s: %s %s %g/%g x%d — %s",
             reason, "NOT closing (orders suppressed)" if suppressed else "closing",
             st["root"], st["long_strike"], st["short_strike"], st["qty"], res)
-        return _fill_value((res or {}).get("id"))
+        return (res or {}).get("id"), int(st["qty"])
     except Exception:
         logger.exception("ORPHAN close failed for %s — position left open.", st["key"])
         return None
+
+
+def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
+    """Send the closing order and wait; return (filled value, contracts), or None.
+
+    None means it did not fill -- rejected, or still working. The caller must
+    not book a result for it: the position is either still open or never left,
+    and the next pass will see it again.
+    """
+    sent = _send_close(st, reason, limit_price)
+    if not sent:
+        return None
+    return _fill_value(sent[0])
+
+
+def _past_clock(hhmm: str) -> bool:
+    """Is it at or past HH:MM New York time? Empty or unparseable -> False."""
+    if not hhmm:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+        hh, mm = (int(x) for x in hhmm.split(":"))
+        now = datetime.now(ZoneInfo("America/New_York"))
+        return (now.hour, now.minute) >= (hh, mm)
+    except Exception:
+        return False
+
+
+_VWAP_CACHE: dict = {}
+
+
+def _session_vwap(root: str) -> "float | None":
+    """Session VWAP of the underlying from Tradier's 5-minute bars, cached 60 s.
+
+    Same construction as data_feed._tradier_session_vwap, which is QQQ-only:
+    the volume-weighted mean of the per-bar vwap Tradier already returns,
+    regular hours only. None on any failure, and the caller HOLDS on None --
+    a missing read must never step an ask down.
+    """
+    import httpx
+    from zoneinfo import ZoneInfo
+    hit = _VWAP_CACHE.get(root)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    out = None
+    try:
+        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        r = httpx.get(f"{tradier_orders._base()}/markets/timesales",
+                      params={"symbol": root, "interval": "5min",
+                              "start": f"{today} 09:30", "end": f"{today} 16:00",
+                              "session_filter": "open"},
+                      headers=tradier_orders._headers(), timeout=10.0)
+        r.raise_for_status()
+        data = ((r.json() or {}).get("series") or {}).get("data") or []
+        if isinstance(data, dict):
+            data = [data]
+        num = den = 0.0
+        for bar in data:
+            vol, vw = bar.get("volume"), bar.get("vwap")
+            if not vol or vw is None:
+                continue
+            num += float(vw) * float(vol)
+            den += float(vol)
+        out = num / den if den > 0 else None
+    except Exception:
+        out = None
+    _VWAP_CACHE[root] = (time.time(), out)
+    return out
+
+
+def _ask_cancel(ask: dict, st: dict) -> str:
+    """Cancel a resting ask and say what became of it: 'canceled', 'filled', 'unknown'.
+
+    'filled' means the market took it between our decision and the cancel;
+    the caller must book it, not replace it. 'unknown' means the broker did
+    not confirm either way inside four seconds, and the caller must NOT send
+    another order -- that is exactly how a spread gets sold twice.
+    """
+    oid = str(ask.get("id"))
+    try:
+        tradier_orders.cancel_order(oid)
+    except Exception:
+        logger.exception("ORPHAN ASK %s %g/%g: cancel of order %s failed.",
+                         st["root"], st["long_strike"], st["short_strike"], oid)
+    for _ in range(8):
+        try:
+            status = (tradier_orders.order_status(oid).get("status") or "").lower()
+        except Exception:
+            status = ""
+        if status == "filled":
+            return "filled"
+        if status in _DEAD:
+            return "canceled"
+        time.sleep(0.5)
+    return "unknown"
+
+
+def _ask_manage(st: dict, rec: dict, value: "float | None", entry_abs: float,
+                width: float, own_ask_working: bool) -> None:
+    """Place, hold, step, or withdraw the resting ask for one structure.
+
+    Called only when nothing else in the ladder wants to act this pass and
+    the structure is manageable. Mutates rec["ask"], which is persisted with
+    the peaks so a restart neither forgets a working order nor places a
+    second one.
+    """
+    if not ORPHAN_ASK or st["credit"] or width <= 0 or not entry_abs:
+        return
+    if ORPHAN_ASK_FLOOR_WIDTH > 0:
+        floor = width * ORPHAN_ASK_FLOOR_WIDTH
+    elif ORPHAN_TARGET_RETURN_PCT > 0:
+        floor = entry_abs * (1.0 + ORPHAN_TARGET_RETURN_PCT / 100.0)
+    else:
+        return
+    if floor <= entry_abs or floor >= width:
+        return          # no room between cost and the width: nothing to ask for
+    floor = round(floor, 2)
+    start = max(round(width * ORPHAN_ASK_START_WIDTH, 2), floor)
+    ask = rec.get("ask") if isinstance(rec.get("ask"), dict) else None
+    now = datetime.now(timezone.utc)
+    tag = "ORPHAN ASK %s %g/%g" % (st["root"], st["long_strike"], st["short_strike"])
+
+    if ask and own_ask_working:
+        if _past_clock(ORPHAN_ASK_CANCEL_BY):
+            outcome = _ask_cancel(ask, st)
+            logger.info("%s: %s — withdrawing the %.2f ask (%s); the flatten takes it from here.",
+                        tag, ORPHAN_ASK_CANCEL_BY, ask["price"], outcome)
+            if outcome != "filled":
+                rec["ask"] = None
+            return
+        if not _past_clock(ORPHAN_ASK_VWAP_FROM):
+            return
+        last = datetime.fromisoformat(ask.get("last_step") or ask["placed"])
+        if (now - last).total_seconds() < ORPHAN_ASK_STEP_MINUTES * 60:
+            return
+        if ask["price"] <= floor + 1e-9:
+            return          # at the floor: it fills or the ladder acts
+        from .data_feed import fetch_spot
+        spot = fetch_spot(st["root"])
+        vwap = _session_vwap(st["root"])
+        if spot is None or vwap is None:
+            logger.info("%s: no spot/VWAP read (%s / %s) — holding the %.2f ask.",
+                        tag, spot, vwap, ask["price"])
+            return
+        if spot >= vwap:
+            logger.info("%s: %s %.2f at or above VWAP %.2f — holding the %.2f ask.",
+                        tag, st["root"], spot, vwap, ask["price"])
+            return
+        new = max(round(ask["price"] - ORPHAN_ASK_STEP, 2), floor)
+        outcome = _ask_cancel(ask, st)
+        if outcome == "filled":
+            return          # the next pass books it
+        if outcome == "unknown":
+            logger.warning("%s: cancel of the %.2f ask unconfirmed — not replacing it this pass.",
+                           tag, ask["price"])
+            return
+        sent = _send_close(st, "ASK", new)
+        if sent and sent[0]:
+            rec["ask"] = {"id": str(sent[0]), "price": new, "qty": sent[1],
+                          "placed": ask["placed"], "last_step": now.isoformat(),
+                          "steps": int(ask.get("steps", 0)) + 1, "floor": floor}
+            logger.info("%s: %s %.2f under VWAP %.2f — stepped %.2f -> %.2f (floor %.2f, step %d).",
+                        tag, st["root"], spot, vwap, ask["price"], new, floor, rec["ask"]["steps"])
+        else:
+            rec["ask"] = None
+            logger.warning("%s: replacement at %.2f was not accepted — the ask is off; the ladder resumes.",
+                           tag, new)
+        return
+
+    if ask:
+        return              # recorded but not confirmed working: do not stack a second order
+    if value is None or value >= start:
+        return              # already bid at the start: TARGET sells at the mark
+    if _past_clock(ORPHAN_ASK_CANCEL_BY):
+        return
+    sent = _send_close(st, "ASK", start)
+    if sent and sent[0]:
+        rec["ask"] = {"id": str(sent[0]), "price": start, "qty": sent[1],
+                      "placed": now.isoformat(), "last_step": now.isoformat(),
+                      "steps": 0, "floor": floor}
+        logger.info("%s x%d: pinned at the %g width, bid %.2f — resting a sell at %.2f "
+                    "(%.0f%% of width). Steps %.2f every %.0f min while %s is under "
+                    "VWAP, from %s; floor %.2f; withdrawn at %s.",
+                    tag, sent[1], width, value, start, 100 * start / width,
+                    ORPHAN_ASK_STEP, ORPHAN_ASK_STEP_MINUTES, st["root"],
+                    ORPHAN_ASK_VWAP_FROM, floor, ORPHAN_ASK_CANCEL_BY)
 
 
 def _book(st: dict, value: float, ret_pct: float, reason: str,
@@ -2093,6 +2319,48 @@ def review(engine_symbols: "set | None" = None) -> list:
             hold_until = (ORPHAN_HOLD_UNTIL if zero_dte
                           else (ORPHAN_LATER_HOLD_UNTIL or ORPHAN_HOLD_UNTIL))
             past_hold = _past_hold_until(hold_until)
+
+            # A RESTING ASK OF OUR OWN. Read its state before anything decides,
+            # so in_flight can tell our order from a stranger's and a fill is
+            # booked before any rule tries to sell the same contracts again.
+            own_ask_working = False
+            _ask = rec.get("ask") if isinstance(rec.get("ask"), dict) else None
+            if _ask:
+                try:
+                    _ast = (tradier_orders.order_status(str(_ask["id"])).get("status") or "").lower()
+                except Exception:
+                    _ast = "unknown"
+                if _ast == "filled":
+                    got = _fill_value(_ask["id"])
+                    rec["ask"] = None
+                    if got:
+                        filled, filled_qty = got
+                        real_pct = ((filled - entry_abs) / entry_abs * 100.0) if entry_abs else 0.0
+                        logger.info(
+                            "ORPHAN ASK FILLED: %s %g/%g x%d at %.2f (asked %.2f, entry %.2f, "
+                            "%+.1f%%) — booking.", st["root"], st["long_strike"],
+                            st["short_strike"], filled_qty, filled, _ask["price"],
+                            entry_abs, real_pct)
+                        _book(st, filled, real_pct, "ASK", qty=filled_qty)
+                        if filled_qty >= st["qty"]:
+                            peaks.pop(key, None)
+                            state["structures"].pop(key, None)
+                        else:
+                            rec_s = state["structures"].get(key)
+                            if rec_s:
+                                rec_s["qty"] = st["qty"] - filled_qty
+                    else:
+                        logger.error("ORPHAN ASK: order %s reports filled but the fill could not "
+                                     "be read — not booking; the next pass sees what remains.",
+                                     _ask["id"])
+                    continue
+                if _ast in _DEAD:
+                    logger.info("ORPHAN ASK: %s %g/%g order %s at %.2f came back %s — the ask "
+                                "is off; the ladder resumes.", st["root"], st["long_strike"],
+                                st["short_strike"], _ask["id"], _ask["price"], _ast)
+                    rec["ask"] = None
+                else:
+                    own_ask_working = True
 
             # THE GIVEBACK, AND ITS CONFIRMATION CLOCK.
             #
@@ -2437,7 +2705,15 @@ def review(engine_symbols: "set | None" = None) -> list:
             # rather than tracking submissions locally -- orders placed by
             # hand, from a phone, or by a previous run of this process all
             # count, and none of them would appear in local state.
-            in_flight = bool(working & {st["long"], st["short"]})
+            if own_ask_working and reason in _ASK_SUPPRESSED:
+                logger.info(
+                    "ORPHAN %s %g/%g: %s would sell at the %.2f bid, but a %.2f ask is "
+                    "resting above it — the ask is that exit, asking more. Holding.",
+                    st["root"], st["long_strike"], st["short_strike"], reason, value,
+                    rec["ask"]["price"])
+                reason = None
+            # Our own resting ask is not a stranger's order: the ladder stays live.
+            in_flight = bool(working & {st["long"], st["short"]}) and not own_ask_working
             if in_flight and reason:
                 logger.info(
                     "ORPHAN %s %g/%g wants %s but an order is already working "
@@ -2483,6 +2759,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                             "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
                     if ORPHAN_FORCE_CLOSE:
                         parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)
+                    if isinstance(rec.get("ask"), dict):
+                        parts.append("ASK %.2f resting, floor %.2f, %d step(s)" % (
+                            rec["ask"]["price"], rec["ask"].get("floor", 0.0),
+                            int(rec["ask"].get("steps", 0))))
                 else:
                     # A LATER EXPIRY NOW HAS A STOP TOO, so the line has to say
                     # so. It printed only the stall, which was honest while a
@@ -2536,6 +2816,25 @@ def review(engine_symbols: "set | None" = None) -> list:
                  else ("" if manageable else "  [observation only]")),
             )
             if reason and manageable:
+                if own_ask_working and isinstance(rec.get("ask"), dict):
+                    outcome = _ask_cancel(rec["ask"], st)
+                    if outcome == "filled":
+                        logger.info("ORPHAN %s %g/%g wanted %s, but the resting ask filled first "
+                                    "— booking on the next pass.", st["root"],
+                                    st["long_strike"], st["short_strike"], reason)
+                        reported.append(st)
+                        continue
+                    if outcome == "unknown":
+                        logger.warning("ORPHAN %s %g/%g wants %s but the ask's cancel is "
+                                       "unconfirmed — standing down this pass rather than "
+                                       "selling it twice.", st["root"], st["long_strike"],
+                                       st["short_strike"], reason)
+                        reported.append(st)
+                        continue
+                    logger.info("ORPHAN %s %g/%g: %s — withdrew the %.2f ask first.",
+                                st["root"], st["long_strike"], st["short_strike"], reason,
+                                rec["ask"]["price"])
+                    rec["ask"] = None
                 got = _close(st, reason, value)
                 if got is not None:
                     filled, filled_qty = got
@@ -2562,6 +2861,15 @@ def review(engine_symbols: "set | None" = None) -> list:
                         rec_s = state["structures"].get(key)
                         if rec_s:
                             rec_s["qty"] = st["qty"] - filled_qty
+            elif manageable and ORPHAN_ASK and (
+                    own_ask_working
+                    or (past_hold and parts_iv
+                        and (zero_dte or not ORPHAN_ASK_ZERO_DTE_ONLY)
+                        and parts_iv[0] >= abs(st["short_strike"] - st["long_strike"]) - 0.01)):
+                # Nothing in the ladder wants to act. Pinned at full width, or
+                # an ask already resting: place, hold, step or withdraw it.
+                _ask_manage(st, rec, value, entry_abs,
+                            abs(st["short_strike"] - st["long_strike"]), own_ask_working)
             reported.append(st)
 
         # A structure that has vanished since the last pass was closed by

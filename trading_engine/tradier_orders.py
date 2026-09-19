@@ -273,6 +273,29 @@ def order_status(order_id: str) -> dict:
     return (r.json() or {}).get("order", {})
 
 
+def cancel_order(order_id: str) -> dict:
+    """Cancel a working order. Accepted is not cancelled: read order_status
+    afterwards, because a limit that filled in the same second comes back
+    'filled', not 'canceled', and the caller has to book it rather than
+    replace it. The first use of this endpoint in the codebase (2026-09-19);
+    before it, every unfilled limit was cancelled by hand or by a watcher
+    outside the engine.
+    """
+    if not LIVE_ORDERS:
+        return {"status": "suppressed"}
+    url = f"{_base()}/accounts/{_account()}/orders/{order_id}"
+    try:
+        r = httpx.delete(url, headers=_headers(), timeout=10.0)
+    except httpx.HTTPError as e:
+        raise OrderError(f"Cancel request failed for {order_id}: {e}") from e
+    if r.status_code >= 400:
+        raise OrderError(f"Tradier refused to cancel {order_id} ({r.status_code}): {r.text[:300]}")
+    body = r.json() or {}
+    result = body.get("order") or body
+    logger.info("Order %s cancel requested: %s", order_id, result)
+    return result
+
+
 def occ_root(symbol: str) -> str:
     """The underlying an OCC option symbol belongs to.
 

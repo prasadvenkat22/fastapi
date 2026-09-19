@@ -1214,6 +1214,9 @@ TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR=0.25   the weekly give-back basis; BAND=
 TRADING_ORPHAN_LATER_STALL_MINUTES=30
 TRADING_ORPHAN_LATER_TARGET_PCT=0.95    see the ordering note below
 TRADING_ORPHAN_LATER_STOP_PCT=-45   held 15 min; respects intrinsic
+TRADING_ORPHAN_ASK=true             rest a sell above the bid on a pinned 0DTE spread (§193)
+TRADING_ORPHAN_ASK_START_WIDTH=0.88 TRADING_ORPHAN_ASK_STEP=0.10 TRADING_ORPHAN_ASK_STEP_MINUTES=3
+TRADING_ORPHAN_ASK_VWAP_FROM=09:40  TRADING_ORPHAN_ASK_CANCEL_BY=15:40  floor = the TARGET level
 ```
 
 **It cannot sell at a loss.** `books_a_gain` compares the *mark* to entry and
@@ -1369,6 +1372,17 @@ a `shade` inside the short strike because past the short strike a debit spread
 has nothing more to earn (sections 190–191). It runs as a detached process in
 the container; kill it with a pattern anchored to the process, never with a bare
 `pkill -f` over ssh, which matches the ssh session itself.
+
+**ASK mode** (`TRADING_ORPHAN_ASK=true`, 0DTE only, section 193): when a debit
+spread sits at **full intrinsic** and nothing in the ladder wants to act, the
+engine rests a sell at **88% of width**, holds it while the underlying is at or
+above session **VWAP**, steps it **−0.10 every 3 min** while below (from 09:40),
+never below the **+70% TARGET level**, and withdraws it at **15:40** so the
+flatten runs. It suppresses only `TARGET`/`CEILING`/`LATER_TARGET`; every stop,
+the stalls and the give-back **cancel the ask first, confirm, then act** — a
+cancel that comes back filled is booked, an unconfirmed cancel sends nothing.
+Measured basis: pinned spreads bid a median 59% of width in the first half
+hour and 90%+ in one cycle in five at midday, never 93%.
 
 **A sell-all is not a stand-down.** `dte0_trade --rotate` fires every 15 minutes
 and does not know the operator wants to be flat; on 2026-09-18 it opened two

@@ -12617,3 +12617,120 @@ every route. The operator asked. They return 404 from nginx now; the API
 still serves them on 127.0.0.1:8000, so the way to read the schema is an SSH
 tunnel (ssh -L 8000:127.0.0.1:8000 root@<droplet>, then localhost:8000/docs).
 Nothing in the site used them.
+
+
+202. THE DOMAIN IS dataaisys.com; HTTPS; MAIL FROM THE DOMAIN; A CONTACT FORM THAT WORKS  (2026-09-20)
+--------------------------------------------------------------------------------
+
+Operator: the domain is now DataAIsys.com (dataaisys.com), the A record is on
+the droplet and SendGrid's three CNAMEs authenticate the domain; the site shows
+"not secure"; update the footer and the consulting copy (cloud migrations,
+modern data platforms on Databricks and Snowflake, multi-cloud on Azure/GCP/AWS,
+agentic AI, BI, maintenance and support; the auto-trader as the featured
+production system, "we don't just advise, we build"); send mail when someone
+registers or inquires; a regular user must not be able to add products,
+services and the rest; trading alerts to venkatangirala@gmail.com FROM a
+trading@ address on the domain.
+
+HTTPS, AND WHY IT TOOK FOUR TRIES. issue_cert.sh and the nginx server block
+were hardcoded to data-ai-systems.com, so the first run on the droplet stopped
+at its own DNS check for the OLD name. Then three things that had nothing to do
+with certificates:
+
+    The droplet's git was on `main` at 68846e618 -- AUGUST. Sections 200 and
+    201 had been copied onto the box by hand (GENAI/ showed as local edits,
+    the nginx files as untracked), so `git pull` said "Already up to date"
+    and changed nothing. GitHub main never received that work; it all lives on
+    chain-priced-sweeps. The droplet is now checked out there (stash of the
+    hand copies kept: `git stash list`), and nothing else may be deployed by
+    copying files again.
+
+    The script had lost its executable bit: committed from Windows, git
+    recorded 100644. `git update-index --chmod=+x` fixed the index so a pull
+    keeps it.
+
+    www.dataaisys.com had no DNS record at all, only the apex did, and Let's
+    Encrypt fails a whole order when one name in it is unreachable. The script
+    now requires the apex and includes www only when it resolves here; the
+    operator added the A record, and one certbot invocation -- certonly
+    --cert-name --expand --keep-until-expiring -- covers issue, widen and
+    renew, so adding www did not need the apex-only order deleted by hand
+    (the auto-mode classifier refused that rm over ssh, correctly).
+
+    After the first issue nginx warned "conflicting server name dataaisys.com
+    on 0.0.0.0:80, ignored": the catch-all and the new redirect block both
+    named the domain on :80 and nginx kept whichever file loaded first. The
+    catch-all is `server_name _;` now; the redirect block owns the names.
+
+Verified from outside: both names 200 over https, http 301 to https, HSTS and
+the frame/content-type headers present, /trading/positions 401 without a
+bearer, /docs 404. Certificate: Let's Encrypt, apex + www, expires 2026-12-19.
+Cron on the droplet: 17 4 * * 1 issue_cert.sh, logging to
+/var/log/certbot-renew.log.
+
+MAIL. helpers/mailer.py: MAIL_FROM_NAME defaults to "Data AI Systems";
+send() takes sender / sender_name / reply_to; send_alert() sends from
+ALERT_MAIL_FROM (trading@dataaisys.com) and price_alert.py and
+profit_stall.py use it; CONTACT_EMAIL is where an inquiry is forwarded.
+.env.production.example carries the whole block as production runs it
+(SendGrid key, services@ sender, trading@ alert sender, ALERT_EMAIL,
+CONTACT_EMAIL, APP_BASE_URL=https://dataaisys.com). The droplet's env still
+said MAIL_FROM=venkatangirala@gmail.com, MAIL_FROM_NAME=DataIQ Systems,
+APP_BASE_URL=https://dataiqsystems.com -- two domains ago -- and every reset
+link it had ever built pointed at the wrong site.
+
+THE CONTACT FORM. "Book a Free Demo" on the landing page led to /registrations,
+whose form posted to /CRUD/registrations/ -- admin-only since section 133 -- so
+every visitor who tried got a 401 and no inquiry was ever recorded. Now:
+
+    routes/contact_router.py   POST /api/contact/inquiry, no bearer. One row
+                               in `registrations` (the admin's Demo
+                               Registrations page lists it), a mail to
+                               CONTACT_EMAIL with the visitor as Reply-To, an
+                               acknowledgement to the visitor that echoes
+                               nothing they typed except the demo date.
+                               Honeypot field `website`: filled means bot,
+                               answered 202 with no side effects. Field
+                               lengths capped, message at 2000.
+    nginx                      location = /api/contact/inquiry in the login
+                               zone -- five a minute per IP -- ahead of /api/.
+    alembic a9c4e17b52d3       registrations.status and .notes. The schema
+                               and the UI had both all along; the table did
+                               not, and the CRUD route dropped them on the
+                               way in. Guarded like every other revision.
+    tests/test_contact.py      public (no 401), honeypot silent, 422 on bad
+                               input, and the full path against Postgres
+                               (skips when unreachable): row stored, owner
+                               mail carries the message, visitor mail does not.
+
+    /CRUD/register/ (the legacy self-registration) now sends
+    send_account_created like /users has since section 133.
+
+THE SITE (data-ai-solutions, 2026-09-20 commit). Footer: dataaisys.com.
+Landing: six consulting cards in the operator's words -- Cloud Migrations,
+Modern Data Platforms, Multi-Cloud Integration, Agentic AI Solutions, BI
+Solutions, Maintenance & Support -- under "Core Consulting Expertise"; the
+auto-trader section is "Featured production system", titled "The FinAI
+Options Auto-Trader" ("Finai" in the operator's note, read as FinAI), opening
+with "We don't just advise -- we build"; "Why DataAI Solutions" is "Why Data
+AI Systems"; OpenAI in the technology strip is Gemini and Claude, which is
+what runs. Every demo CTA goes to the new public /contact page.
+
+ROLES IN THE UI. Navbar menus carry `roles`: Home, Consulting and Contact for
+everyone; Trading for admin and trader; Data, Operations, Config and AI Lab
+for admin only. Each CRM page (customers, devices, invoices, products, roles,
+service requests, transactions, users, registrations) is wrapped in
+RequireAuth roles=['admin'], and the services page renders its catalog
+(add / delete) only for admins. The API already refused all of it to anyone
+else; what changed is that a regular user no longer sees a menu of pages that
+403. npm run build: clean, 20 routes.
+
+DEPLOY NOTE. /opt/data-ai-solutions on the droplet is a COPY (owner uid
+197609 -- the Windows user), not a clone; there is no .git. Deploying the
+site means putting the tree there and `docker compose -f
+docker-compose.server.yml up -d --build`. The backend deploys by `git pull`
+on chain-priced-sweeps and rebuilding `app` (alembic upgrade head runs on
+container start, so the registrations columns arrive with it), plus an nginx
+reload for the new location block, plus the env changes above and a recreate
+of `app` so it reads them.
+

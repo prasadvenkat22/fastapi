@@ -11,6 +11,7 @@ import routes.db_pgrs_router as db_pgrs_router
 import routes.dbfile_pgrs_router as dbfile_pgrs_router
 import routes.image_router as image_router
 import routes.trading_router as trading_router
+import routes.contact_router as contact_router
 import GENAI.router as genai_router
 from helpers.auth_deps import require_admin, require_trading
 
@@ -77,6 +78,11 @@ app.include_router(trading_router.router, dependencies=[Depends(require_trading(
 # Protected as much for the bill as for the data -- every call spends
 # Anthropic and Voyage credit.
 app.include_router(genai_router.router, dependencies=[Depends(require_admin())])
+
+# PUBLIC, on purpose: the site's contact form. One POST that writes one row
+# and queues two mails; rate-limited at nginx (five a minute per IP) and
+# honeypotted in the handler. Everything else under /api still needs admin.
+app.include_router(contact_router.router)
 
 
 @app.get("/")

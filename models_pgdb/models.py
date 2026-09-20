@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Text
 from config.db_pgrs import Base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -172,6 +172,12 @@ class Registraion(Base):
     address = Column(String, default='Test Address')
     demodate = Column(DateTime, default=func.now())
     createdate = Column(DateTime, default=func.now())
+    # Added 2026-09-20 (alembic a9c4e17b52d3). The schema and the site's Demo
+    # Registrations page had both all along; the table did not, so the CRUD
+    # route silently dropped them. The public contact form keeps the
+    # visitor's message in `notes`.
+    status = Column(String, default='requested')
+    notes = Column(Text, nullable=True)
 
 
 class PasswordResetToken(Base):

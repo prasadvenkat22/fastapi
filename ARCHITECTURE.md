@@ -1087,32 +1087,52 @@ feed), 13F (quarterly, 45-day lag), Form 4 (insiders, not institutions).
 
 ---
 
-## The site: data-ai-systems.com, one nginx, the API on loopback
+## The site: dataaisys.com, one nginx, the API on loopback
 
-Section 201. The Next.js app (GitHub `prasadvenkat22/data-ai-solutions`, on the
-droplet at `/opt/data-ai-solutions`, container `data-ai-web`) runs on the same
-Docker network as this stack with **no published port**. The stack's nginx is
-the only thing listening on 80/443: it proxies `/auth`, `/trading`, `/api`,
+Sections 201 and 202. The Next.js app (GitHub `prasadvenkat22/data-ai-solutions`,
+on the droplet at `/opt/data-ai-solutions`, container `data-ai-web`) runs on the
+same Docker network as this stack with **no published port**. The stack's nginx
+is the only thing listening on 80/443: it proxies `/auth`, `/trading`, `/api`,
 `/CRUD`, `/images`, `/static` to `app:8000` and everything else to
 `data-ai-web:3000`, so the browser talks to **one origin** and no CORS is
 involved. The API's own port is published on `127.0.0.1` only — a
 Docker-published port bypasses UFW, and 8000 had been reachable from the
 internet — and UFW allows 22, 80 and 443.
 
-`app/nginx/conf.d/00-security.conf` sets per-IP request-rate zones (site 30/s,
-API 10/s, **login 5/min**), a 30-connection cap, `server_tokens off`;
-`data-ai-systems.conf` is the HTTP server with security headers and the ACME
-path; `scripts/issue_cert.sh` issues the Let's Encrypt certificate by webroot
-and writes the HTTPS block **only once the files exist**. It refuses to run
-while DNS points elsewhere (on 2026-09-19 the apex and www resolved to
-74.91.138.134, not this droplet). Renewal: the same script from cron.
+**The domain is dataaisys.com** (since 2026-09-20; data-ai-systems.com was
+dropped, dataiqsystems.com before it). `app/nginx/conf.d/00-security.conf` sets
+per-IP request-rate zones (site 30/s, API 10/s, **login 5/min**), a
+30-connection cap, `server_tokens off`; `dataaisys.conf` is the `:80`
+catch-all with security headers and the ACME path; `scripts/issue_cert.sh`
+runs one certbot command that issues, widens (`--expand`, which is how www was
+added after its A record appeared) and renews, then writes `dataaisys-ssl.conf`
+— the HTTPS server plus the `:80` redirect for the domain names — **only once
+the certificate files exist**, because nginx will not start on a missing
+`ssl_certificate`. Cron on the droplet runs it Mondays 04:17 UTC. The
+certificate covers the apex and www and is Let's Encrypt.
 
-The site: public landing page describing the auto-trader; everything under
-`/desk` (positions with the live ladder, closed trades, screener board,
-engine controls with a two-step flatten) needs a `trader` or `admin` login;
-`/ai` (ask the book, upload analysis, direct prompt) needs `admin`. Tokens
+The site: public landing page (consulting expertise, the FinAI Options
+Auto-Trader as the featured production system) and a public **contact form at
+`/contact`**; everything under `/desk` (positions with the live ladder, closed
+trades, screener board, engine controls with a two-step flatten) needs a
+`trader` or `admin` login; `/ai` (ask the book, upload analysis, direct prompt)
+and every CRM page (customers, products, services catalog, registrations, users,
+roles, invoices, transactions, service requests) need `admin` — the navbar
+hides those menus from anyone else, and the API refuses them anyway. Tokens
 come from `/auth/login`, refresh through `/auth/refresh`, and travel as a
 bearer on every call. Budgets, cron and env are not exposed in the UI.
+
+**`POST /api/contact/inquiry` is the one unauthenticated write.** It stores the
+inquiry as a row in `registrations` (the admin's Demo Registrations page lists
+it; `status` and `notes` columns were added for this, alembic `a9c4e17b52d3`),
+mails `CONTACT_EMAIL` with the visitor as Reply-To, and acknowledges the
+visitor without echoing their text. nginx puts it in the login zone (5/min per
+IP); a hidden `website` field is a honeypot answered 202 with no side effects.
+
+**Mail** (`helpers/mailer.py`) goes out through SendGrid's HTTP API from
+senders on the authenticated domain: `MAIL_FROM` (services@dataaisys.com) for
+account mail, `ALERT_MAIL_FROM` (trading@dataaisys.com) for the price and
+profit-stall alerts, which `send_alert()` routes and `ALERT_EMAIL` receives.
 
 ## GENAI: the agents run on Gemini and one of them reads the trading database
 

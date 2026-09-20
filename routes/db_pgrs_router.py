@@ -2,12 +2,13 @@ import logging
 import datetime
 import bcrypt as _bcrypt
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status, Depends
 from typing import List, Annotated
 from sqlalchemy.orm import Session
 
 from config.db_pgrs import engine, SessionLocal
 import models_pgdb.models as models
+from helpers import mailer
 from schemas_pgrs.schema import (
     ServiceUser, service, Role,
     TransactonBase, TransactionModel,
@@ -59,7 +60,8 @@ db_dependency = Annotated[Session, Depends(get_db)]
 # ---------------------------------------------------------------------------
 
 @router.post("/register/", response_model=UserResponse)
-async def register_user(usr: UserCreate, db: db_dependency):
+async def register_user(usr: UserCreate, db: db_dependency,
+                        background: BackgroundTasks):
     if db.query(models.User).filter(models.User.email == usr.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
     db_user = models.User(
@@ -70,6 +72,10 @@ async def register_user(usr: UserCreate, db: db_dependency):
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+    # Same courtesy /users (users_router) has paid since section 133: the
+    # person now has an account and should hear so from us, not find out.
+    background.add_task(mailer.send_account_created, db_user.email,
+                        "user", True)
     return db_user
 
 

@@ -9,15 +9,15 @@ DELIVERY. Two channels, either or both:
 
     ALERT_WEBHOOK_URL   an HTTPS webhook (Slack, Discord, Teams, anything that
                         accepts a JSON POST). THIS IS THE ONE THAT WORKS.
-    ALERT_EMAIL / --to  SMTP through helpers.mailer.
+    ALERT_EMAIL / --to  email through helpers.mailer, FROM ALERT_MAIL_FROM
+                        (trading@dataaisys.com in production) so alerts can
+                        be filtered apart from account mail.
 
-SMTP IS BLOCKED ON THIS DROPLET AND CANNOT BE FIXED IN CODE. Measured
-2026-09-08: ufw allows outgoing, but ports 587 and 465 both time out from the
-host as well as the container, while 443 connects fine. That is the provider
-blocking SMTP egress, which DigitalOcean does by default. The email path is
-kept because it costs nothing and works the moment egress is opened or the
-mailer is pointed at an HTTP mail API -- but a webhook is the channel to use
-today.
+EMAIL WORKS SINCE SENDGRID. SMTP egress is blocked on this droplet (measured
+2026-09-08: 587 and 465 time out from host and container alike, 443 connects),
+which is why helpers.mailer tries SendGrid's HTTP API first. With
+SENDGRID_API_KEY set and the sender on the authenticated domain, email
+delivers; the webhook remains as a second channel.
 
 Every firing is also appended to the state file regardless of channel, so an
 alert is never lost just because delivery failed.
@@ -252,11 +252,12 @@ def main() -> None:
     if post_webhook(subject, body):
         sent.append("webhook")
     if args.to:
-        if mailer.send(args.to, subject, body):
+        if mailer.send_alert(args.to, subject, body):
             sent.append("email")
         else:
-            print(f"email to {args.to} failed -- SMTP egress is blocked on "
-                  f"this host (ports 587/465 time out); use ALERT_WEBHOOK_URL")
+            print(f"email to {args.to} failed -- see the mailer's log line; "
+                  "SENDGRID_API_KEY unset, or ALERT_MAIL_FROM not on the "
+                  "authenticated domain, are the usual reasons")
     if sent:
         print("delivered via " + ", ".join(sent))
     else:

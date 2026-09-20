@@ -66,8 +66,22 @@ SMTP_TIMEOUT = float(os.getenv("SMTP_TIMEOUT", "10"))
 # Gmail rewrites the envelope sender to the authenticated account anyway, so
 # this only controls the display name unless you have configured a verified
 # alias. Defaults to the login so a misconfiguration is obvious in the header.
+#
+# With SendGrid the address must sit on the authenticated domain. dataaisys.com
+# is authenticated (the three SendGrid CNAMEs, 2026-09-20), so any mailbox on
+# it works as a sender: services@ for account mail, trading@ for alerts.
 MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER)
-MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "DataIQ Systems")
+MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "Data AI Systems")
+
+# Trading alerts come from their own address so they can be filtered, and so
+# a price alert never looks like a password-reset mail. Both fall back to the
+# account sender, so an env without them still delivers.
+ALERT_MAIL_FROM = os.getenv("ALERT_MAIL_FROM", "") or MAIL_FROM
+ALERT_MAIL_FROM_NAME = os.getenv("ALERT_MAIL_FROM_NAME", "Data AI Systems Trading")
+
+# Where a visitor's inquiry (the public contact form) is delivered. Empty means
+# the inquiry is stored but nobody is told, which the log says out loud.
+CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", "")
 
 # Where a reset link points. No trailing slash; the path is appended.
 APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
@@ -78,13 +92,22 @@ def is_configured() -> bool:
     return bool(SENDGRID_API_KEY) or bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
 
 
-def _send_sendgrid(to: str, subject: str, body: str) -> bool:
+def _send_sendgrid(to: str, subject: str, body: str, sender: str,
+                   sender_name: str, reply_to: str = "") -> bool:
     """POST one message to SendGrid. 202 Accepted is the success code.
 
     Never raises and never logs `body` -- a reset link is a credential for the
     thirty minutes it lives, and the same rule applies whichever transport
     carries it.
     """
+    payload = {
+        "personalizations": [{"to": [{"email": to}]}],
+        "from": {"email": sender, "name": sender_name},
+        "subject": subject,
+        "content": [{"type": "text/plain", "value": body}],
+    }
+    if reply_to:
+        payload["reply_to"] = {"email": reply_to}
     try:
         import httpx
 
@@ -92,12 +115,7 @@ def _send_sendgrid(to: str, subject: str, body: str) -> bool:
             SENDGRID_URL,
             headers={"Authorization": f"Bearer {SENDGRID_API_KEY}",
                      "Content-Type": "application/json"},
-            json={
-                "personalizations": [{"to": [{"email": to}]}],
-                "from": {"email": MAIL_FROM, "name": MAIL_FROM_NAME},
-                "subject": subject,
-                "content": [{"type": "text/plain", "value": body}],
-            },
+            json=payload,
             timeout=SENDGRID_TIMEOUT,
         )
     except Exception as exc:  # noqa: BLE001 — no mail failure may reach the caller
@@ -113,9 +131,9 @@ def _send_sendgrid(to: str, subject: str, body: str) -> bool:
         # is visible from a generic status code.
         logger.error(
             "Email to %s rejected by SendGrid (%d). 401 means SENDGRID_API_KEY "
-            "is wrong; 403 almost always means MAIL_FROM (%s) is not a "
+            "is wrong; 403 almost always means the sender (%s) is not a "
             "verified Single Sender and its domain is not authenticated. "
-            "SendGrid said: %s", to, r.status_code, MAIL_FROM, r.text[:300],
+            "SendGrid said: %s", to, r.status_code, sender, r.text[:300],
         )
         return False
     logger.error("Email to %s (%r) failed: SendGrid returned %d: %s",
@@ -123,12 +141,20 @@ def _send_sendgrid(to: str, subject: str, body: str) -> bool:
     return False
 
 
-def send(to: str, subject: str, body: str) -> bool:
+def send(to: str, subject: str, body: str, *, sender: str = "",
+         sender_name: str = "", reply_to: str = "") -> bool:
     """Send one plain-text message. True if it left this process.
 
     Returns rather than raises, because every caller is in a request path
     where the important work has already succeeded.
+
+    `sender` overrides MAIL_FROM for the one message; send_alert() uses it so
+    trading mail carries its own address. `reply_to` lets a forwarded inquiry
+    be answered by hitting reply, without the notification pretending to be
+    FROM the visitor (which SendGrid would refuse anyway).
     """
+    sender = sender or MAIL_FROM
+    sender_name = sender_name or MAIL_FROM_NAME
     if not is_configured():
         logger.warning(
             "Email NOT sent to %s (%r): no transport configured. Set "
@@ -138,12 +164,14 @@ def send(to: str, subject: str, body: str) -> bool:
         return False
 
     if SENDGRID_API_KEY:
-        return _send_sendgrid(to, subject, body)
+        return _send_sendgrid(to, subject, body, sender, sender_name, reply_to)
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = formataddr((MAIL_FROM_NAME, MAIL_FROM))
+    msg["From"] = formataddr((sender_name, sender))
     msg["To"] = to
+    if reply_to:
+        msg["Reply-To"] = reply_to
     msg.set_content(body)
 
     try:
@@ -186,6 +214,12 @@ def send(to: str, subject: str, body: str) -> bool:
 
     logger.info("Email sent to %s (%r) via SMTP.", to, subject)
     return True
+
+
+def send_alert(to: str, subject: str, body: str) -> bool:
+    """A trading alert: same transport, the trading sender."""
+    return send(to, subject, body, sender=ALERT_MAIL_FROM,
+                sender_name=ALERT_MAIL_FROM_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -238,4 +272,56 @@ def send_password_reset(to: str, token: str, minutes: int) -> bool:
         f"The link expires in {minutes} minutes and works once.\n\n"
         "If you did not ask for this, ignore this message — your password has "
         "not changed and nobody can use this link without it.\n",
+    )
+
+
+# ---------------------------------------------------------------------------
+# The public contact form. Two messages per inquiry: the owner is told, with
+# the visitor's address as Reply-To so answering is one click; the visitor
+# gets an acknowledgement so the form is known to have worked.
+# ---------------------------------------------------------------------------
+
+def send_inquiry_notification(*, name: str, email: str, company: str,
+                              phone: str, interest: str, message: str,
+                              demo_date: str, registration_id: int) -> bool:
+    """To the owner. Returns False, and says why in the log, when
+    CONTACT_EMAIL is unset -- the row is still in the database."""
+    if not CONTACT_EMAIL:
+        logger.warning("Inquiry #%s from %s stored but NOT forwarded: "
+                       "CONTACT_EMAIL is not set.", registration_id, email)
+        return False
+    lines = [
+        f"New inquiry #{registration_id} from the website.",
+        "",
+        f"Name:      {name}",
+        f"Email:     {email}",
+        f"Company:   {company or '-'}",
+        f"Phone:     {phone or '-'}",
+        f"Interest:  {interest or '-'}",
+        f"Demo date: {demo_date or 'not requested'}",
+        "",
+        "Message:",
+        message or "(none)",
+        "",
+        "Reply to this mail to answer them directly.",
+        f"It is also listed under Demo Registrations at {APP_BASE_URL or '<the application URL>'}/registrations.",
+    ]
+    subject = f"Inquiry from {name}" + (f" ({company})" if company else "")
+    return send(CONTACT_EMAIL, subject, "\n".join(lines) + "\n", reply_to=email)
+
+
+def send_inquiry_acknowledgement(to: str, name: str, demo_date: str) -> bool:
+    """To the visitor. Nothing they typed is echoed back except the demo
+    date, so the form cannot be used to send arbitrary text to a third party."""
+    when = (f"You asked about a demo around {demo_date}; we will confirm a time.\n\n"
+            if demo_date else "")
+    return send(
+        to, "We received your inquiry",
+        f"Hello {name},\n\n"
+        "Thank you for contacting Data AI Systems. Your inquiry has been "
+        "received and a person will reply, usually within one business day.\n\n"
+        f"{when}"
+        "If you did not submit this form, ignore this message.\n\n"
+        "Data AI Systems\n"
+        f"{APP_BASE_URL or 'https://dataaisys.com'}\n",
     )

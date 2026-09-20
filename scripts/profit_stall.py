@@ -260,7 +260,7 @@ def main() -> None:
 
     from helpers import mailer
 
-    if args.to and mailer.send(args.to, subject, body):
+    if args.to and mailer.send_alert(args.to, subject, body):
         print("emailed " + args.to)
     else:
         print(f"not emailed (recipient or transport missing); recorded in {STATE_PATH}")

@@ -20,3 +20,10 @@ test_ci.db
 # Data, not source: append-only, grows every session, and reproducible only
 # by waiting. See scripts/capture_chain.py.
 data/
+
+# Written on the server by scripts/issue_cert.sh (HTTPS block and the shared
+# location set) and the disabled copies of retired server configs. Per-host
+# output, never source.
+app/nginx/conf.d/*-ssl.conf
+app/nginx/conf.d/*-locations.inc
+app/nginx/conf.d/*.disabled*

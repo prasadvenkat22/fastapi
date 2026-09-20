@@ -12610,3 +12610,10 @@ headers present, the login zone returned 429 on the seventh rapid POST,
 
     The page titles were inside RequireAuth and so missing from the
     server-rendered HTML; hoisted above it.
+
+AND A THIRD, THE NEXT MORNING: /docs, /redoc and /openapi.json were proxied
+to the API and readable by anyone -- rate limited, unauthenticated, a map of
+every route. The operator asked. They return 404 from nginx now; the API
+still serves them on 127.0.0.1:8000, so the way to read the schema is an SSH
+tunnel (ssh -L 8000:127.0.0.1:8000 root@<droplet>, then localhost:8000/docs).
+Nothing in the site used them.

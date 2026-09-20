@@ -1093,7 +1093,7 @@ Section 201. The Next.js app (GitHub `prasadvenkat22/data-ai-solutions`, on the
 droplet at `/opt/data-ai-solutions`, container `data-ai-web`) runs on the same
 Docker network as this stack with **no published port**. The stack's nginx is
 the only thing listening on 80/443: it proxies `/auth`, `/trading`, `/api`,
-`/CRUD`, `/images`, `/static`, `/docs` to `app:8000` and everything else to
+`/CRUD`, `/images`, `/static` to `app:8000` and everything else to
 `data-ai-web:3000`, so the browser talks to **one origin** and no CORS is
 involved. The API's own port is published on `127.0.0.1` only — a
 Docker-published port bypasses UFW, and 8000 had been reachable from the
@@ -1148,6 +1148,7 @@ GET  /trading/screener/flow?symbols=CRWV,AVGO,SNDK
 POST /api/genai/agent/ask   {"query": "..."}   ask the trading book; Gemini writes a guarded SELECT (§200)
 
 All of these are reachable only through nginx on the site's origin since §201; the API port is loopback-only.
+`/docs`, `/redoc` and `/openapi.json` return 404 publicly; read them over an SSH tunnel to 127.0.0.1:8000.
 POST /trading/flatten?confirm=LIQUIDATE&preview=true
 POST /trading/flatten?confirm=LIQUIDATE&preview=false&plan_token=<from the preview>
 ```

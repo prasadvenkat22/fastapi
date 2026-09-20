@@ -209,3 +209,28 @@ class PasswordResetToken(Base):
     requested_ip = Column(String, nullable=True)
 
     user = relationship("User")
+
+
+class Subscriber(Base):
+    """Someone who asked for product updates. NOT an account (section 203).
+
+    No password, no role, nothing unlocked: a row here grants access to
+    nothing, which is the point -- the desk stays behind accounts an admin
+    creates for investors. Double opt-in: `confirmed_at` is set only when the
+    address clicks the link we mailed it, so a form filled in with someone
+    else's address subscribes nobody. `token_hash` is sha256 of the token in
+    that link (same reasoning as PasswordResetToken), and the same token
+    signs every unsubscribe link, so it is kept rather than rotated.
+    """
+    __tablename__ = "subscribers"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String, nullable=False, unique=True, index=True)
+    name = Column(String, nullable=True)
+    interest = Column(String, nullable=True)
+    source = Column(String, nullable=True)          # footer / contact / ...
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    unsubscribed_at = Column(DateTime(timezone=True), nullable=True)
+    requested_ip = Column(String, nullable=True)

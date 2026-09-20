@@ -12734,3 +12734,59 @@ container start, so the registrations columns arrive with it), plus an nginx
 reload for the new location block, plus the env changes above and a recreate
 of `app` so it reads them.
 
+
+203. PRODUCT UPDATES ARE A LIST, NOT AN ACCOUNT  (2026-09-20)
+--------------------------------------------------------------------------------
+
+Operator: the desk must stay invisible unless the user is an investor; what is
+wanted is a sign-up for people who want regular news or to know more about the
+product; "we have register that would anyways add users I think?"
+
+It would, and that is the wrong tool. /CRUD/register/ (and POST /users)
+create LOGIN ACCOUNTS -- admin-only, a password, a role -- and a fresh
+account's `user` role unlocks nothing anyway (desk: trader/admin; AI and
+CRM: admin). A newsletter reader does not need any of that, and giving them
+an account row is a liability for no gain. So a separate thing:
+
+    models.Subscriber / alembic b3f8d21c6e94   email (unique), name,
+                                               interest, source, token_hash,
+                                               token_expires_at, created_at,
+                                               confirmed_at, unsubscribed_at,
+                                               requested_ip. No password. No
+                                               role. Not a User.
+
+    POST /api/contact/subscribe    public. Stores the row UNCONFIRMED, mails
+                                   ONE confirmation link (7 days). Always
+                                   answers 202 {"status":"check_inbox"} --
+                                   new, already confirmed, or bot, the caller
+                                   cannot tell; an already-confirmed address
+                                   is NOT mailed again, so the form cannot be
+                                   used to pester someone on the list.
+    GET  /api/contact/confirm      the click. Sets confirmed_at, tells the
+                                   owner (CONTACT_EMAIL), 303 to
+                                   /contact?updates=confirmed (expired /
+                                   invalid have their own banners).
+    GET  /api/contact/unsubscribe  one click, never expires, 303 to
+                                   /contact?updates=unsubscribed. The same
+                                   token signs every unsubscribe link, which
+                                   is why it is kept rather than rotated.
+    GET  /api/contact/subscribers  admin. The list.
+
+    nginx: the whole /api/contact/ prefix is in the login zone now (^~, 5 a
+    minute per IP, burst 5) instead of the single inquiry path.
+
+Double opt-in is the whole design. Without it the form is a way to put
+anyone's address on a list, and every update we then send is spam to them.
+Nothing but the one confirmation mail ever goes to an unconfirmed address.
+Token hashed sha256 in the row, same reasoning as PasswordResetToken.
+
+Site: SubscribeForm (footer, compact; and the "Just want updates?" card on
+/contact, which also renders the confirm/unsubscribe banners), a public "Get
+updates" menu entry to /contact#updates, and an admin /subscribers page
+under Data. The copy says it plainly: a mailing list, not an account; desk
+access is for investors and is set up by us.
+
+Tests: subscribe honeypot silent, garbage confirm token -> invalid banner,
+/subscribers 401 without a bearer, and the full round trip against Postgres
+(unconfirmed row -> confirm -> owner told -> re-subscribe sends nothing ->
+unsubscribe). 7 pass without a database, 3 more with one.

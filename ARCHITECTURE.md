@@ -1129,6 +1129,15 @@ mails `CONTACT_EMAIL` with the visitor as Reply-To, and acknowledges the
 visitor without echoing their text. nginx puts it in the login zone (5/min per
 IP); a hidden `website` field is a honeypot answered 202 with no side effects.
 
+**Product updates are a list, not accounts** (section 203). `POST
+/api/contact/subscribe` stores a `subscribers` row unconfirmed and mails one
+confirmation link; `GET /api/contact/confirm` sets `confirmed_at` and tells
+`CONTACT_EMAIL`; `GET /api/contact/unsubscribe` is one click and never expires;
+`GET /api/contact/subscribers` is the admin list. Nothing but the confirmation
+mail ever goes to an unconfirmed address, and the form's answer is the same
+whatever happened. A subscriber has no password, no role and no access — desk
+access is still an account an admin creates for an investor.
+
 **Mail** (`helpers/mailer.py`) goes out through SendGrid's HTTP API from
 senders on the authenticated domain: `MAIL_FROM` (services@dataaisys.com) for
 account mail, `ALERT_MAIL_FROM` (trading@dataaisys.com) for the price and

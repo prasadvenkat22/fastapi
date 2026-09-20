@@ -76,3 +76,82 @@ def test_inquiry_stores_and_mails(client, db_available, monkeypatch):
     with SessionLocal() as db:
         db.query(models.Registraion).filter(models.Registraion.id == body["id"]).delete()
         db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Product updates (section 203)
+# ---------------------------------------------------------------------------
+
+def test_subscribe_is_public_and_honeypot_is_silent(client, monkeypatch):
+    import routes.contact_router as cr
+    sent = []
+    monkeypatch.setattr(cr.mailer, "send_subscribe_confirm",
+                        lambda *a: sent.append(a) or True)
+    res = client.post("/api/contact/subscribe", json={
+        "email": "bot@example.com", "website": "x"})
+    assert res.status_code == 202 and res.json() == {"status": "check_inbox"}
+    assert sent == []
+
+
+def test_confirm_with_garbage_token_redirects_to_invalid(client, db_available):
+    if not db_available:
+        pytest.skip("Postgres unreachable")
+    res = client.get("/api/contact/confirm?token=nope", follow_redirects=False)
+    assert res.status_code == 303
+    assert res.headers["location"] == "/contact?updates=invalid"
+
+
+def test_subscribers_list_needs_admin(client):
+    assert client.get("/api/contact/subscribers").status_code == 401
+
+
+def test_subscribe_confirm_unsubscribe_round_trip(client, db_available, monkeypatch):
+    """Store unconfirmed, mail one link, confirm sets the flag and tells the
+    owner, a second subscribe for a confirmed address sends nothing,
+    unsubscribe flips it back. Nothing goes to an unconfirmed address but
+    the one confirmation mail."""
+    if not db_available:
+        pytest.skip("Postgres unreachable")
+    import routes.contact_router as cr
+    import models_pgdb.models as models
+    from config.db_pgrs import SessionLocal
+
+    confirms, notices = [], []
+    monkeypatch.setattr(cr.mailer, "send_subscribe_confirm",
+                        lambda to, name, c, u: confirms.append((to, c, u)) or True)
+    monkeypatch.setattr(cr.mailer, "send_subscriber_confirmed",
+                        lambda **kw: notices.append(kw) or True)
+
+    email = "updates-test@example.com"
+    with SessionLocal() as db:
+        db.query(models.Subscriber).filter(models.Subscriber.email == email).delete()
+        db.commit()
+    try:
+        res = client.post("/api/contact/subscribe", json={
+            "email": email.upper(), "name": "Ada", "source": "test"})
+        assert res.status_code == 202
+        assert len(confirms) == 1 and confirms[0][0] == email
+        confirm_url, unsub_url = confirms[0][1], confirms[0][2]
+        token = confirm_url.split("token=")[1]
+
+        with SessionLocal() as db:
+            row = db.query(models.Subscriber).filter(models.Subscriber.email == email).one()
+            assert row.confirmed_at is None and row.token_hash != token
+
+        res = client.get(f"/api/contact/confirm?token={token}", follow_redirects=False)
+        assert res.headers["location"] == "/contact?updates=confirmed"
+        assert len(notices) == 1 and notices[0]["email"] == email
+
+        # Confirmed: the form must not be able to mail this address again.
+        client.post("/api/contact/subscribe", json={"email": email})
+        assert len(confirms) == 1
+
+        res = client.get(f"/api/contact/unsubscribe?token={token}", follow_redirects=False)
+        assert res.headers["location"] == "/contact?updates=unsubscribed"
+        with SessionLocal() as db:
+            row = db.query(models.Subscriber).filter(models.Subscriber.email == email).one()
+            assert row.confirmed_at is not None and row.unsubscribed_at is not None
+    finally:
+        with SessionLocal() as db:
+            db.query(models.Subscriber).filter(models.Subscriber.email == email).delete()
+            db.commit()

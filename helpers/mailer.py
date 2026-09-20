@@ -325,3 +325,41 @@ def send_inquiry_acknowledgement(to: str, name: str, demo_date: str) -> bool:
         "Data AI Systems\n"
         f"{APP_BASE_URL or 'https://dataaisys.com'}\n",
     )
+
+
+# ---------------------------------------------------------------------------
+# The product-updates list (section 203). Double opt-in: nothing is sent to an
+# address that has not clicked the confirmation link we mailed it.
+# ---------------------------------------------------------------------------
+
+def send_subscribe_confirm(to: str, name: str, confirm_url: str,
+                           unsubscribe_url: str) -> bool:
+    """The opt-in mail. Carries the token, so never logged."""
+    hello = f"Hello {name}," if name else "Hello,"
+    return send(
+        to, "Confirm your Data AI Systems updates",
+        f"{hello}\n\n"
+        "Someone -- we hope you -- asked for occasional updates from Data AI "
+        "Systems about the FinAI Options Auto-Trader and our data and AI "
+        "work. To confirm, open this link:\n\n"
+        f"{confirm_url}\n\n"
+        "The link works for 7 days. If you did not ask for this, ignore this "
+        "message and nothing will be sent.\n\n"
+        f"Unsubscribe at any time: {unsubscribe_url}\n",
+    )
+
+
+def send_subscriber_confirmed(*, email: str, name: str, interest: str,
+                              source: str, subscriber_id: int) -> bool:
+    """To the owner, once, when an address confirms."""
+    if not CONTACT_EMAIL:
+        logger.warning("Subscriber #%s (%s) confirmed but CONTACT_EMAIL is "
+                       "not set; nobody told.", subscriber_id, email)
+        return False
+    return send(
+        CONTACT_EMAIL, f"New updates subscriber: {email}",
+        f"Subscriber #{subscriber_id} confirmed.\n\n"
+        f"Email:    {email}\nName:     {name or '-'}\n"
+        f"Interest: {interest or '-'}\nFrom:     {source or '-'}\n\n"
+        f"The list is at {APP_BASE_URL or '<the application URL>'}/subscribers.\n",
+    )

@@ -31,15 +31,19 @@ notification, not the inquiry. The row is committed before either is queued.
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Request, status
-from pydantic import BaseModel, EmailStr, Field
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 import models_pgdb.models as models
 from helpers import mailer
+from helpers.auth_deps import require_admin
 from routes.db_pgrs_router import db_dependency
 
 logger = logging.getLogger(__name__)
@@ -125,3 +129,144 @@ async def submit_inquiry(body: InquiryRequest, request: Request,
     )
     background.add_task(mailer.send_inquiry_acknowledgement, email, first, demo_text)
     return InquiryResponse(status="received", id=row.id)
+
+
+# ---------------------------------------------------------------------------
+# Product updates (section 203). A LIST, not accounts: an address, a
+# confirmation click, an unsubscribe link. Grants access to nothing. The
+# desk stays behind accounts an admin creates for investors.
+#
+# Double opt-in is what keeps this honest. Without it the form is a way to
+# put anyone's address on a list, and every "update" we ever send is spam to
+# them. So: the form stores the row UNCONFIRMED and mails one link; only the
+# click sets confirmed_at; nothing but that one mail is ever sent to an
+# unconfirmed address. The same token signs the unsubscribe link in every
+# later message, which is why it is kept, not rotated, after confirmation.
+# ---------------------------------------------------------------------------
+
+CONFIRM_DAYS = 7
+
+
+class SubscribeRequest(BaseModel):
+    email: EmailStr
+    name: str = Field(default="", max_length=120)
+    interest: str = Field(default="", max_length=120)
+    source: str = Field(default="", max_length=40)
+    website: str = Field(default="", max_length=200)   # honeypot
+
+
+class SubscriberOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)   # built from ORM rows
+
+    id: int
+    email: str
+    name: Optional[str] = None
+    interest: Optional[str] = None
+    source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    confirmed_at: Optional[datetime] = None
+    unsubscribed_at: Optional[datetime] = None
+
+
+def _hash(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _links(raw: str) -> tuple[str, str]:
+    base = mailer.APP_BASE_URL or "https://dataaisys.com"
+    return (f"{base}/api/contact/confirm?token={raw}",
+            f"{base}/api/contact/unsubscribe?token={raw}")
+
+
+@router.post("/subscribe", status_code=status.HTTP_202_ACCEPTED)
+async def subscribe(body: SubscribeRequest, request: Request,
+                    db: db_dependency, background: BackgroundTasks):
+    """Always 202 with the same body. Whether the address was new, already
+    confirmed, or a bot's, the caller learns nothing about the list."""
+    if body.website.strip():
+        logger.info("Subscribe honeypot tripped from %s (%s).",
+                    _client_ip(request), body.email)
+        return {"status": "check_inbox"}
+
+    email = str(body.email).strip().lower()
+    now = datetime.now(timezone.utc)
+    row = db.query(models.Subscriber).filter(models.Subscriber.email == email).first()
+
+    if row is not None and row.confirmed_at and not row.unsubscribed_at:
+        # Already on the list. Say nothing different; send nothing -- a
+        # confirmed address must not be mailable by anyone with the form.
+        logger.info("Subscribe for already-confirmed %s ignored.", email)
+        return {"status": "check_inbox"}
+
+    raw = secrets.token_urlsafe(32)
+    if row is None:
+        row = models.Subscriber(email=email)
+        db.add(row)
+    row.name = body.name.strip() or row.name
+    row.interest = body.interest.strip() or row.interest
+    row.source = body.source.strip() or row.source
+    row.token_hash = _hash(raw)
+    row.token_expires_at = now + timedelta(days=CONFIRM_DAYS)
+    row.unsubscribed_at = None
+    row.requested_ip = _client_ip(request)
+    db.commit()
+    db.refresh(row)
+
+    confirm_url, unsub_url = _links(raw)
+    logger.info("Subscribe: #%s %s (%s) awaiting confirmation.", row.id, email,
+                row.source or "-")
+    background.add_task(mailer.send_subscribe_confirm, email, row.name or "",
+                        confirm_url, unsub_url)
+    return {"status": "check_inbox"}
+
+
+def _by_token(db, token: str):
+    if not token or len(token) > 200:
+        return None
+    return db.query(models.Subscriber).filter(
+        models.Subscriber.token_hash == _hash(token)).first()
+
+
+@router.get("/confirm", include_in_schema=False)
+async def confirm(token: str, db: db_dependency, background: BackgroundTasks):
+    """The click. Lands the visitor back on /contact with a banner."""
+    row = _by_token(db, token)
+    now = datetime.now(timezone.utc)
+    if row is None:
+        return RedirectResponse("/contact?updates=invalid", status_code=303)
+    if row.confirmed_at is None:
+        if row.token_expires_at and row.token_expires_at < now:
+            return RedirectResponse("/contact?updates=expired", status_code=303)
+        row.confirmed_at = now
+        row.unsubscribed_at = None
+        db.commit()
+        logger.info("Subscriber #%s %s confirmed.", row.id, row.email)
+        background.add_task(mailer.send_subscriber_confirmed, email=row.email,
+                            name=row.name or "", interest=row.interest or "",
+                            source=row.source or "", subscriber_id=row.id)
+    elif row.unsubscribed_at is not None:
+        # Re-subscribing through an old confirm link: honour it.
+        row.unsubscribed_at = None
+        db.commit()
+    return RedirectResponse("/contact?updates=confirmed", status_code=303)
+
+
+@router.get("/unsubscribe", include_in_schema=False)
+async def unsubscribe(token: str, db: db_dependency):
+    """One click, no confirmation page, no login. The token does not expire
+    for this purpose: an unsubscribe link in an old mail must keep working."""
+    row = _by_token(db, token)
+    if row is None:
+        return RedirectResponse("/contact?updates=invalid", status_code=303)
+    if row.unsubscribed_at is None:
+        row.unsubscribed_at = datetime.now(timezone.utc)
+        db.commit()
+        logger.info("Subscriber #%s %s unsubscribed.", row.id, row.email)
+    return RedirectResponse("/contact?updates=unsubscribed", status_code=303)
+
+
+@router.get("/subscribers", response_model=List[SubscriberOut],
+            dependencies=[Depends(require_admin())])
+async def list_subscribers(db: db_dependency):
+    """Admin only -- the one route under /api/contact that is."""
+    return db.query(models.Subscriber).order_by(models.Subscriber.id.desc()).all()

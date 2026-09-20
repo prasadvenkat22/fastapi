@@ -40,17 +40,12 @@ else
 fi
 
 mkdir -p $ROOT/certbot/www $ROOT/certbot/conf
-if [ -f "$ROOT/certbot/conf/live/$DOMAIN/fullchain.pem" ]; then
-  # renew keeps the names of the existing order. To add www after the fact:
-  #   rm -rf $ROOT/certbot/conf/{live,archive}/$DOMAIN $ROOT/certbot/conf/renewal/$DOMAIN.conf
-  # and run this script again.
-  docker run --rm -v $ROOT/certbot/www:/var/www/certbot -v $ROOT/certbot/conf:/etc/letsencrypt \
-    certbot/certbot renew --webroot -w /var/www/certbot --quiet
-else
-  docker run --rm -v $ROOT/certbot/www:/var/www/certbot -v $ROOT/certbot/conf:/etc/letsencrypt \
-    certbot/certbot certonly --webroot -w /var/www/certbot \
-    $DOMAIN_ARGS --email "$EMAIL" --agree-tos --no-eff-email --non-interactive
-fi
+# One certbot invocation for all three cases. --cert-name pins the lineage so
+# the nginx paths below never change; --expand lets the same lineage grow
+# from apex-only to apex+www once the www record exists (no deleting the old
+# order by hand); --keep-until-expiring makes an unchanged name set a no-op
+# until the last 30 days, which is what the weekly cron relies on.
+docker run --rm -v $ROOT/certbot/www:/var/www/certbot -v $ROOT/certbot/conf:/etc/letsencrypt   certbot/certbot certonly --webroot -w /var/www/certbot   --cert-name $DOMAIN $DOMAIN_ARGS --expand --keep-until-expiring   --email "$EMAIL" --agree-tos --no-eff-email --non-interactive
 
 # The HTTPS block, written only now that the files it points at exist.
 cat > $CONF/dataaisys-ssl.conf <<EOF

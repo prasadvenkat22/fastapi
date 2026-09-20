@@ -229,14 +229,14 @@ def _by_token(db, token: str):
 
 @router.get("/confirm", include_in_schema=False)
 async def confirm(token: str, db: db_dependency, background: BackgroundTasks):
-    """The click. Lands the visitor back on /contact with a banner."""
+    """The click. Lands the visitor on /updates with a banner."""
     row = _by_token(db, token)
     now = datetime.now(timezone.utc)
     if row is None:
-        return RedirectResponse("/contact?updates=invalid", status_code=303)
+        return RedirectResponse("/updates?updates=invalid", status_code=303)
     if row.confirmed_at is None:
         if row.token_expires_at and row.token_expires_at < now:
-            return RedirectResponse("/contact?updates=expired", status_code=303)
+            return RedirectResponse("/updates?updates=expired", status_code=303)
         row.confirmed_at = now
         row.unsubscribed_at = None
         db.commit()
@@ -248,7 +248,7 @@ async def confirm(token: str, db: db_dependency, background: BackgroundTasks):
         # Re-subscribing through an old confirm link: honour it.
         row.unsubscribed_at = None
         db.commit()
-    return RedirectResponse("/contact?updates=confirmed", status_code=303)
+    return RedirectResponse("/updates?updates=confirmed", status_code=303)
 
 
 @router.get("/unsubscribe", include_in_schema=False)
@@ -257,12 +257,12 @@ async def unsubscribe(token: str, db: db_dependency):
     for this purpose: an unsubscribe link in an old mail must keep working."""
     row = _by_token(db, token)
     if row is None:
-        return RedirectResponse("/contact?updates=invalid", status_code=303)
+        return RedirectResponse("/updates?updates=invalid", status_code=303)
     if row.unsubscribed_at is None:
         row.unsubscribed_at = datetime.now(timezone.utc)
         db.commit()
         logger.info("Subscriber #%s %s unsubscribed.", row.id, row.email)
-    return RedirectResponse("/contact?updates=unsubscribed", status_code=303)
+    return RedirectResponse("/updates?updates=unsubscribed", status_code=303)
 
 
 @router.get("/subscribers", response_model=List[SubscriberOut],

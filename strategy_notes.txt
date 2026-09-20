@@ -12780,9 +12780,12 @@ anyone's address on a list, and every update we then send is spam to them.
 Nothing but the one confirmation mail ever goes to an unconfirmed address.
 Token hashed sha256 in the row, same reasoning as PasswordResetToken.
 
-Site: SubscribeForm (footer, compact; and the "Just want updates?" card on
-/contact, which also renders the confirm/unsubscribe banners), a public "Get
-updates" menu entry to /contact#updates, and an admin /subscribers page
+Site: a dedicated /updates page -- the sign-up and nothing else, with the
+confirm/unsubscribe banners -- because the first cut put the card beside the
+demo form on /contact and the operator read the demo-time field as part of
+the sign-up. "Get updates" in the menu and footer goes there; the API's
+confirm and unsubscribe links 303 there; /contact keeps a one-line pointer.
+SubscribeForm also sits compact in the footer. Admin list at /subscribers
 under Data. The copy says it plainly: a mailing list, not an account; desk
 access is for investors and is set up by us.
 

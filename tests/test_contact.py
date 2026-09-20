@@ -98,7 +98,7 @@ def test_confirm_with_garbage_token_redirects_to_invalid(client, db_available):
         pytest.skip("Postgres unreachable")
     res = client.get("/api/contact/confirm?token=nope", follow_redirects=False)
     assert res.status_code == 303
-    assert res.headers["location"] == "/contact?updates=invalid"
+    assert res.headers["location"] == "/updates?updates=invalid"
 
 
 def test_subscribers_list_needs_admin(client):
@@ -139,7 +139,7 @@ def test_subscribe_confirm_unsubscribe_round_trip(client, db_available, monkeypa
             assert row.confirmed_at is None and row.token_hash != token
 
         res = client.get(f"/api/contact/confirm?token={token}", follow_redirects=False)
-        assert res.headers["location"] == "/contact?updates=confirmed"
+        assert res.headers["location"] == "/updates?updates=confirmed"
         assert len(notices) == 1 and notices[0]["email"] == email
 
         # Confirmed: the form must not be able to mail this address again.
@@ -147,7 +147,7 @@ def test_subscribe_confirm_unsubscribe_round_trip(client, db_available, monkeypa
         assert len(confirms) == 1
 
         res = client.get(f"/api/contact/unsubscribe?token={token}", follow_redirects=False)
-        assert res.headers["location"] == "/contact?updates=unsubscribed"
+        assert res.headers["location"] == "/updates?updates=unsubscribed"
         with SessionLocal() as db:
             row = db.query(models.Subscriber).filter(models.Subscriber.email == email).one()
             assert row.confirmed_at is not None and row.unsubscribed_at is not None

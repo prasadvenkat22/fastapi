@@ -35,7 +35,11 @@ logger = logging.getLogger(__name__)
 
 # Every route inherits the admin requirement from the router, so a new one
 # added later cannot be accidentally public.
-router = APIRouter(prefix="/users", tags=["Users"],
+#
+# /api/users rather than /users (moved 2026-09-21): on the site, nginx sends
+# /api/* to this service and everything unlisted to the Next.js app, where
+# /users is the admin's Users PAGE. That page is what calls these routes.
+router = APIRouter(prefix="/api/users", tags=["Users"],
                    dependencies=[Depends(require_admin())])
 
 db_dependency = Annotated[Session, Depends(get_db)]
@@ -225,10 +229,11 @@ async def reset_password(user_id: int, db: db_dependency, caller: CurrentUser,
                          background: BackgroundTasks):
     """Issue a new random password for someone who has forgotten theirs.
 
-    This is the recovery path, and it is admin-driven because there is no
-    other one available: nothing in this codebase sends email, so a reset LINK
-    cannot be delivered. An admin runs this and passes the result to its owner
-    over a channel they already trust.
+    The recovery path for when the self-service one (/auth/forgot-password,
+    a mailed link) cannot work: mail is not configured, the link never
+    arrives, or the owner has lost the mailbox too. An admin runs this (the
+    Reset password button on the site's Users page) and passes the result to
+    its owner over a channel they already trust.
 
     The password is generated here rather than accepted from the caller, so an
     admin cannot set a password they have chosen and then use it themselves.
@@ -247,5 +252,5 @@ async def reset_password(user_id: int, db: db_dependency, caller: CurrentUser,
     return TempPasswordResult(
         id=user.id, email=user.email, temporary_password=temp,
         note=("Give this to its owner over a channel you trust, and have them "
-              "change it with POST /auth/change-password. It is shown once."),
+              "change it on their Account page after signing in. It is shown once."),
     )

@@ -140,8 +140,8 @@ async def change_password(body: ChangePasswordRequest, db: db_dependency,
     """Change your own password, proving you know the current one.
 
     The self-service half of recovery. It covers everything except a password
-    genuinely forgotten, which needs POST /users/{id}/reset-password from an
-    admin because nothing here can send an email.
+    genuinely forgotten, which is /auth/forgot-password (a mailed link) or,
+    failing that, POST /api/users/{id}/reset-password from an admin.
 
     Requiring the current password is what stops a borrowed session from
     becoming a permanent takeover: an attacker with a stolen access token has

@@ -20,7 +20,7 @@ app rather than assumed:
                      GET /trading/status          all 401
     admin token      those same routes            200
     trader token     GET /trading/status  200
-                     GET /users, GET /CRUD/customers/  403
+                     GET /api/users, GET /CRUD/customers/  403
 
 STILL OPEN, deliberately: /, /docs, /openapi.json, /static, and /auth/login
 and /auth/refresh — you cannot get a token without them. deploy.sh health
@@ -221,19 +221,26 @@ Config: JWT_ALGORITHM (RS256), ACCESS_TOKEN_EXPIRES_IN (15 minutes),
 
 All of these require an admin token. Get one from POST /auth/login.
 
-    GET    /users                       list, with role and whether a
+    GET    /api/users                   list, with role and whether a
                                         password is set
-    GET    /users/{id}
-    POST   /users                       create WITH a role
-    PATCH  /users/{id}                  change role, disable, rename
-    DELETE /users/{id}
-    POST   /users/{id}/reset-password   issue a temporary password, shown
+    GET    /api/users/{id}
+    POST   /api/users                   create WITH a role
+    PATCH  /api/users/{id}              change role, disable, rename
+    DELETE /api/users/{id}
+    POST   /api/users/{id}/reset-password
+                                        issue a temporary password, shown
                                         once, when someone cannot use the
-                                        self-service reset in section 6
+                                        self-service reset in section 6.
+                                        The Users page on the site has a
+                                        button for it.
+
+(These were /users until 2026-09-21. Moved under /api because nginx on the
+site proxies /api/* to this service and hands everything unlisted to the
+Next.js app, where /users is the admin's Users page.)
 
 Create an admin:
 
-    curl -X POST http://<host>/users       -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'       -d '{"email":"someone@example.com","role":"admin"}'
+    curl -X POST http://<host>/api/users   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'       -d '{"email":"someone@example.com","role":"admin"}'
 
 `password` is optional and usually omitted. Leave it out and the account
 exists but cannot log in until its owner sets one — same reasoning as
@@ -254,7 +261,7 @@ THE OLD ENDPOINTS ARE STILL THERE and are now admin-only:
 
     POST /CRUD/register/    POST /CRUD/users/    DELETE /CRUD/users/{id}
 
-Prefer /users. UserCreate has no role field, so anything created through the
+Prefer /api/users. UserCreate has no role field, so anything created through the
 /CRUD/ pair still lands with role_id = NULL — authenticated, but holding no
 permissions on any router. They are kept only so an existing caller does not
 break; removing them is worth doing.
@@ -321,7 +328,7 @@ WHAT GETS SENT
                         reset. Sent even when expected — it is not for the
                         person who did it, it is for the case where it
                         was not them.
-  account created       when an admin creates a user at POST /users.
+  account created       when an admin creates a user at POST /api/users.
   reset link            in response to /auth/forgot-password.
 
 THE FORGOTTEN-PASSWORD FLOW
@@ -425,7 +432,7 @@ watching — see section 7 item 1.
     "no longer exists"         the account was deleted after the token was
                                issued. Tokens stay validly signed until they
                                expire, so the user is re-read every request.
-    "This account is disabled" set disabled=false via PATCH /users/{id}.
+    "This account is disabled" set disabled=false via PATCH /api/users/{id}.
 
 403 "Requires one of: admin"
     Authentication worked; the role is wrong. Check GET /auth/me — a role of

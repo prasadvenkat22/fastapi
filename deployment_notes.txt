@@ -161,8 +161,8 @@ the way back when NOBODY can log in — for an ordinary forgotten password,
 POST /auth/forgot-password emails a reset link instead (section 6 of
 auth_notes.txt, and it needs SMTP configured to send anything).
 
-Admins can also do all of this over HTTP without SSH -- POST /users with an
-admin token creates a user WITH a role, and POST /users/{id}/reset-password
+Admins can also do all of this over HTTP without SSH -- POST /api/users with an
+admin token creates a user WITH a role, and POST /api/users/{id}/reset-password
 issues a temporary one. See section 5 of auth_notes.txt. The scripts remain
 the bootstrap and recovery path, because they work when nobody can log in.
 

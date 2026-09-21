@@ -86,6 +86,13 @@ CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", "")
 # Where a reset link points. No trailing slash; the path is appended.
 APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
 
+# The pages on APP_BASE_URL that account mail sends people to. Defaults are
+# the Next.js site's. The API still serves its own bare reset page at
+# GET /auth/reset-password for a deployment with no frontend in front of it;
+# point PASSWORD_RESET_PAGE there in that case.
+PASSWORD_RESET_PAGE = os.getenv("PASSWORD_RESET_PAGE", "/reset-password")
+FORGOT_PASSWORD_PAGE = os.getenv("FORGOT_PASSWORD_PAGE", "/forgot-password")
+
 
 def is_configured() -> bool:
     """Either transport counts."""
@@ -246,8 +253,8 @@ def send_account_created(to: str, role: str, has_password: bool) -> bool:
         "A password has already been set for you — use the one you were given, "
         "and change it after signing in."
         if has_password else
-        "No password has been set yet. Use 'forgot password' at "
-        f"{APP_BASE_URL or '<the application URL>'}/auth/forgot-password to "
+        "No password has been set yet. Use 'Forgot password' at "
+        f"{APP_BASE_URL or '<the application URL>'}{FORGOT_PASSWORD_PAGE} to "
         "choose one, or ask an administrator."
     )
     return send(
@@ -260,7 +267,7 @@ def send_account_created(to: str, role: str, has_password: bool) -> bool:
 def send_password_reset(to: str, token: str, minutes: int) -> bool:
     """The one message that carries a credential. Never logged."""
     if APP_BASE_URL:
-        action = f"Open this link to choose a new password:\n\n{APP_BASE_URL}/auth/reset-password?token={token}\n"
+        action = f"Open this link to choose a new password:\n\n{APP_BASE_URL}{PASSWORD_RESET_PAGE}?token={token}\n"
     else:
         # Without a base URL a link cannot be built, so give the raw token and
         # say what to do with it rather than sending a broken link.

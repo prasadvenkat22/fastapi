@@ -13076,3 +13076,66 @@ NOT CHANGED. The exit ladder stays: -10% / 2 min / intrinsic-guarded.
 Unmeasured and still open: the VWAP ENTRY veto past 10:30 (record mode today
 logged "would refuse" on every 13:00 and 13:15 entry that then lost), which
 flow_gate_replay.py can score once trading_history has those rows.
+
+
+209. VWAP AT WEEKLY ENTRIES: THE SESSION READ HAS NO FOUR-DAY SIGNAL  (2026-09-21)
+--------------------------------------------------------------------------------
+
+Operator, 15:30 ET, after the 0DTE gate went all-day: "for weeklies too,
+weekly vwap measure entry may help?"
+
+WHAT THE WEEKLY BOOK ALREADY DOES. It enters through the same rotation script
+(dte0_trade --book weekly, cron 09:50 Mon-Wed and a 13:50 pass that is past
+the cutoff), so the session tape gate already runs on every weekly entry --
+and 09:50 was inside the veto window before today's change. This morning it
+REFUSED AAPL, AVGO and TSLA calls and passed NVDA, GOOGL, AMZN and DELL; AMD
+590/635 C, DELL 580/528 P and NVDA 220/238 C went out for 09-25.
+
+DOES THAT READ MEAN ANYTHING FOUR SESSIONS OUT? The weekly analogue of the
+540 symbol-day table in vwap_gate.py: thirteen board names, 468 symbol-days
+(2026-07-27 to 09-15, what Tradier still has 5-minute bars for), tape read on
+the 09:30-09:45 bars exactly as the gate reads it at 09:50, move from the
+09:45 close to the close four sessions later, with the same-day move beside
+it for comparison:
+
+    tape        n   4d mean  4d median  4d up |  same-day    up
+    call_ok   147   +1.84%    +1.08%     59%  |   +0.44%    56%
+    put_ok    134   +1.69%    +0.72%     56%  |   -0.44%    40%
+    neither   187   +2.38%    +1.35%     61%  |   -0.02%    49%
+
+Same day, the gate is what section 194 measured: a call-ok tape goes up 56%
+of the time, a put-ok tape down 60%. Four sessions later the two are
+indistinguishable -- put_ok names ROSE 1.69% on average -- and the days the
+gate refuses on both sides did best. Every bucket is positive because the
+period was a one-way tape on these names; the point is not the level but
+that the morning read carries nothing across it. A session VWAP is a
+session signal, which is what weekly_signals.py said about it from the start
+(section 109 corrected the anchored form, not this one).
+
+CONSEQUENCE. The gate is not the instrument for a five-session hold, and on
+this sample it refused weekly CALL entries on the mornings that did slightly
+better. It is left on for now: three refusals a morning is a small cost, the
+sample is one regime, and the weekly book has too few settled trades to
+measure the gate against its own P&L. Revisit when it has twenty.
+
+THE ANCHORED WEEKLY VWAP (section 109) is the right shape for this horizon
+and exists as a recorded signal (weekly_signals: vwap_week, vwap_side) --
+recorded in weekly_shadow, NOT used as a gate by the weekly book. The only
+outcome data with a side label is the Friday credit shadow, 15 settled rows:
+
+    strategy      side    n   avg expiry return
+    WEEKLY_CALL   ABOVE   6   +99%      (short call spreads, credit kept)
+    WEEKLY_CALL   BELOW   7   -62%      (names under their week's VWAP
+                                         rallied through the short call)
+    WEEKLY_PUT    any    13   +97%
+
+n=7 and a different structure from the debit book, so it is a hint, not a
+result: a name BELOW where the week's volume traded tended to come back up.
+For a call DEBIT that would be the favourable side, which is the opposite of
+what a momentum read would say, and exactly why it needs measuring rather
+than assuming.
+
+WHAT TO DO. Nothing to the gate. Have the weekly book LOG the anchored VWAP
+side (weekly_signals.read(sym)["vwap_side"]) beside each weekly pick the way
+FLOW is logged, so the debit book's own entries can be scored on it once
+there are enough. Cheap, and the only way to get the number.

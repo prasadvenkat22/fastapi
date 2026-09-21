@@ -13139,3 +13139,46 @@ WHAT TO DO. Nothing to the gate. Have the weekly book LOG the anchored VWAP
 side (weekly_signals.read(sym)["vwap_side"]) beside each weekly pick the way
 FLOW is logged, so the debit book's own entries can be scored on it once
 there are enough. Cheap, and the only way to get the number.
+
+
+210. THE WEEK'S VWAP GATES THE WEEKLY BOOK  (2026-09-21)
+--------------------------------------------------------------------------------
+
+Operator, 15:45 ET, after 209: "add vwap gated entries for call spreads and
+puts for weeklies as well -- institutions may get in and out on particular
+stocks."
+
+WHAT WAS BUILT. trading_engine/weekly_vwap_gate.py: the cumulative VWAP from
+Monday's 09:30 to now, stitched from Tradier's 5-minute bars session by
+session -- the precise anchored form section 109 said was available once the
+daily-bar approximation in weekly_signals earned its place. On a Monday
+morning it IS the session VWAP; by Wednesday 09:50 it carries two full
+sessions and moves slowly, which is the point of an anchor. Two conditions,
+direction-keyed: spot ABOVE the level beyond a quarter-ATR band for a call
+debit (BELOW for a put), and the level rising over the last six bars (falling
+for a put). AT, inside the band, passes neither. No read refuses, as in
+vwap_gate. Wired into dte0_trade.py for --book weekly only, after the session
+gate and before the options-flow read; every candidate logs a WEEKVWAP line
+with ok / REFUSED / would refuse; refusals count as "against the week's VWAP"
+in the run summary. Eight tests on synthetic bars (anchor spans sessions and
+differs from the session VWAP; band; both directions; no read; the week is
+stitched Monday-through-today). 82 pass.
+
+MODE. TRADING_WEEKLY_VWAP_GATE = veto | record | off. Shipped as VETO at the
+operator's decision, the same way vwap_gate shipped (section 194), with the
+same caveat written larger: this is a MOMENTUM rule and the only outcome data
+with an anchored-side label -- fifteen Friday credit-shadow rows in 209 --
+hints at MEAN REVERSION (names below the week's VWAP came back up). Seven
+rows, different structure; it settles nothing, and it is exactly why every
+reading is logged. `record` is one env line.
+
+DEPLOY. Code only, bind-mounted, and the cron spawns a fresh python each
+pass, so a git pull on the droplet is the whole deploy; no recreate. The
+default in code is veto, so no env change either. First live pass: Tuesday
+2026-09-22 09:50, when the anchor holds Monday's full session plus four bars.
+
+NOT DONE, DELIBERATELY: the session gate is left on the weekly book too. 209
+showed it carries nothing over four sessions, but three refusals a morning
+is a small cost and the book has too few settled trades to measure either
+gate against its own P&L. When it has twenty, score both from the FLOW and
+WEEKVWAP lines the way flow_gate_replay.py scores the 0DTE gate.

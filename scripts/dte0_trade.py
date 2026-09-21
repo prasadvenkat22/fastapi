@@ -73,6 +73,7 @@ from trading_engine.macro_calendar import (  # noqa: E402
 from trading_engine.data_feed import fetch_option_chain, fetch_spot  # noqa: E402
 from trading_engine.screener import rank  # noqa: E402
 from trading_engine import vwap_gate  # noqa: E402
+from trading_engine import weekly_vwap_gate  # noqa: E402
 from trading_engine import options_flow  # noqa: E402
 from trading_engine.symbol_news import (classify_day,  # noqa: E402
                                         verdict_at)
@@ -928,6 +929,25 @@ def main() -> None:
                 r["_flow"] = vwap_gate.describe(flow)
                 if not ok and gate_mode == "veto":
                     rejects["against the tape (VWAP flow)"] += 1
+                    continue
+            if BOOK == "weekly" and weekly_vwap_gate.MODE in ("veto", "record"):
+                # THE WEEK'S VWAP, for the book that holds a week -- section
+                # 210. The session gate above is a same-day read and section
+                # 209 measured it carrying nothing over four sessions; this
+                # one is anchored to Monday's open. Direction-keyed like the
+                # rest: a call debit wants spot above the week's level with
+                # the level rising, a put the mirror.
+                bullish = r.get("direction") != "bearish"
+                wflow = weekly_vwap_gate.read(r["sym"], float(r.get("atr") or 0))
+                wok, wwhy = weekly_vwap_gate.gate("bullish" if bullish else "bearish", wflow)
+                if (r["sym"], side, "week") not in flow_logged:
+                    flow_logged.add((r["sym"], side, "week"))
+                    logger.info("%s %s %s -> %s: %s", r["sym"], side.upper(),
+                                weekly_vwap_gate.describe(wflow),
+                                "ok" if wok else ("REFUSED" if weekly_vwap_gate.MODE == "veto"
+                                                   else "would refuse"), wwhy)
+                if not wok and weekly_vwap_gate.MODE == "veto":
+                    rejects["against the week's VWAP"] += 1
                     continue
             if options_flow.MODE in ("veto", "record"):
                 # THE CHAIN'S OWN VOLUME AGAINST OPEN INTEREST -- section 197.

@@ -1337,7 +1337,9 @@ TRADING_ORPHAN_ASK_START_WIDTH=0.88 TRADING_ORPHAN_ASK_STEP=0.10 TRADING_ORPHAN_
 TRADING_ORPHAN_ASK_VWAP_FROM=09:40  TRADING_ORPHAN_ASK_CANCEL_BY=15:40  floor = the TARGET level
 TRADING_DTE0_VWAP_GATE=veto         the tape veto on single-name entries (§194); record = log only
 TRADING_VWAP_MIN_BARS=3  TRADING_VWAP_SLOPE_BARS=6  TRADING_VWAP_BARS_ABOVE_MIN=0.60
-TRADING_VWAP_GATE_UNTIL=10:30       veto until here, record after (§194)
+TRADING_VWAP_GATE_UNTIL=            blank since 2026-09-21 = veto all day; was 10:30, veto until here and record after (§194)
+TRADING_WEEKLY_VWAP_GATE=veto       the WEEK-anchored VWAP gate on weekly-book entries (§210); record = log only, off = skip
+TRADING_WEEKLY_VWAP_TOL_ATR=0.25  TRADING_WEEKLY_VWAP_SLOPE_BARS=6  TRADING_WEEKLY_VWAP_MIN_BARS=3
 TRADING_SEC_USER_AGENT=<name email>  required by EDGAR; the edgar-* feeds are skipped without it (§196)
 TRADING_DTE0_OPTIONS_FLOW=record    OPTIONS line per candidate; veto refuses against the read (§197)
 TRADING_OPTFLOW_CP_RATIO=2.0  TRADING_OPTFLOW_TURNOVER=0.5  TRADING_OPTFLOW_MIN_VOLUME=500
@@ -1562,9 +1564,14 @@ puts), the **Polygon news veto** per symbol (BEARISH ≥ 0.50 confidence refuses
 calls, BULLISH refuses puts), the **VWAP flow veto** (`vwap_gate.py`, section
 194: a call debit needs spot above the running session VWAP, VWAP higher than
 30 minutes ago, ≥ 60% of 5-minute bars closing above it, and volume arriving on
-closes near bar highs; puts need the mirror; an unreadable tape refuses; **vetoes only on runs up to 10:30**, records
-after, because the tape's direction measured as continuing into the flatten from the open and
-reversing from 11:00), then
+closes near bar highs; puts need the mirror; an unreadable tape refuses; it vetoed only on runs up to 10:30
+and recorded after, because the tape's direction measured as continuing into the flatten from the open and
+reversing from 11:00 — **since 2026-09-21 it vetoes all day** at the operator's decision, §207–208 era, with the
+afternoon refusals still logged so that choice can be scored), and for the **weekly book only** the
+**week-anchored VWAP gate** (`weekly_vwap_gate.py`, §210: cumulative VWAP from Monday's open over Tradier's
+5-minute bars; a call debit needs spot ABOVE it by more than a quarter-ATR band and the level rising over the
+last 30 minutes, a put the mirror; unreadable refuses; `TRADING_WEEKLY_VWAP_GATE` veto|record|off, veto by
+the operator's choice before any outcome data, every reading logged as a WEEKVWAP line), then
 **EV, Pwin and edge** ranking under the structure limits. Every veto only
 removes; nothing in news or the tape proposes a trade. `TRADING_DTE0_VWAP_GATE`
 is `veto` | `record` | `off`; `scripts/flow_gate_replay.py` replays the gate

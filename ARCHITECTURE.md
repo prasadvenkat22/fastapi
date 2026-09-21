@@ -1218,6 +1218,15 @@ takes `data_feed.fetch_option_chain()` (Tradier, greeks on, `mid_iv` as the IV)
 and falls back to `yfinance` only when the broker returns nothing; `meta.quotes`
 names the source, and `rank()` adds a warning for any symbol that yields no
 candidate, naming the filter that emptied it.
+
+**Every board row carries the week's VWAP** (§212, 2026-09-21). One
+`weekly_vwap_gate.read()` per underlying, the same anchored read the weekly
+gate makes at entry, so the column and the verdict cannot disagree:
+`week_vwap`, `week_vwap_side` (ABOVE/AT/BELOW inside a quarter-ATR band),
+`week_vwap_slope_pct`, `week_vwap_sessions`, `week_vwap_trend` (**LONG** above
+and rising, **SHORT** below and falling, **MIXED** otherwise) and
+`week_vwap_conflict` when a row's direction leans against the week. Shown, not
+ranked on. The site's screener board renders it as a "Week VWAP" column.
 The board prices the ODDS, not the direction: a name whose options are cheap
 against its realised moves tops both the call and the put list (TSLA, 2026-09-21).
 Direction comes from the macro veto, the day's news verdict and the tape gate,

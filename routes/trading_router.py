@@ -41,6 +41,31 @@ def get_db():
 db_dependency = Annotated[Session, Depends(get_db)]
 
 
+def _week_vwap_fields(flow: "dict | None", direction: "str | None") -> dict:
+    """The board's Week VWAP column for one row, from a weekly_vwap_gate read.
+
+    `week_vwap_trend` is LONG / SHORT / MIXED / None; `week_vwap_conflict`
+    names a row whose direction leans against it (a bullish row on a SHORT
+    week, a bearish one on a LONG week). MIXED conflicts with nothing: it says
+    the week has no lean, which is information, not a veto.
+    """
+    from trading_engine.weekly_vwap_gate import trend_label
+    trend = trend_label(flow)
+    conflict = None
+    if trend == "SHORT" and direction == "bullish":
+        conflict = "bullish structure on a week whose volume is paying down"
+    elif trend == "LONG" and direction == "bearish":
+        conflict = "bearish structure on a week whose volume is paying up"
+    return {
+        "week_vwap": (flow["vwap_week"] if flow else None),
+        "week_vwap_side": (flow["side"] if flow else None),
+        "week_vwap_slope_pct": (flow["slope_pct"] if flow else None),
+        "week_vwap_sessions": (flow["sessions"] if flow else None),
+        "week_vwap_trend": trend,
+        "week_vwap_conflict": conflict,
+    }
+
+
 def _json_safe(obj: Any) -> Any:
     """NaN and +/-inf become null, recursively.
 
@@ -502,10 +527,25 @@ async def screen_verticals(
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"screen failed: {exc}")
 
+    # THE WEEK'S VWAP, ONE READ PER UNDERLYING -- section 212. The same
+    # anchored read the weekly gate makes at entry (weekly_vwap_gate), so the
+    # board's column and the gate's verdict cannot disagree. Shown, not used:
+    # the ranking is still EV and probability.
+    week = {}
+    for m in out["meta"]:
+        try:
+            from trading_engine import weekly_vwap_gate
+            week[m["symbol"]] = weekly_vwap_gate.read(m["symbol"], m.get("atr"))
+        except Exception:
+            week[m["symbol"]] = None
+    for m in out["meta"]:
+        m.update(_week_vwap_fields(week.get(m["symbol"]), None))
+
     rows = []
     for r in out["rows"]:
         flow = r.get("flow") or {}
         rows.append({
+            **_week_vwap_fields(week.get(r["sym"]), r.get("direction")),
             "symbol": r["sym"], "lower_strike": r["lo"], "upper_strike": r["hi"],
             "structure": r.get("structure"), "direction": r.get("direction"),
             "credit": (round(r["credit"], 4) if r.get("credit") else None),

@@ -13239,3 +13239,37 @@ not; nine sessions, two carrying most of the dollars; the tape read on
 VWAP. And the regime: a rule that sells losers into a falling tape is
 measured on a fortnight where the tape mostly kept falling once it turned.
 Score TAPE_EXIT rows against the stop's in trading_history after twenty.
+
+
+212. THE BOARD SAYS WHICH WAY THE WEEK LEANS  (2026-09-21)
+--------------------------------------------------------------------------------
+
+Operator, 16:30 ET: "when we do the dashboard buy/sell recommendations
+please add the weekly vwap trends there as a column so we know which to long
+or short."
+
+Done on both sides. /trading/screener/verticals now makes ONE
+weekly_vwap_gate.read() per underlying -- the same Monday-anchored read the
+weekly gate makes at 09:50, so the column and the gate's verdict cannot
+disagree -- and every row carries week_vwap, week_vwap_side (ABOVE/AT/BELOW
+inside the quarter-ATR band), week_vwap_slope_pct over the last six bars,
+week_vwap_sessions, week_vwap_trend and week_vwap_conflict. The trend is one
+word: LONG when spot is above the week's level and the level is rising (a
+call debit passes the gate), SHORT when below and falling (a put passes),
+MIXED for anything else -- inside the band, or side and slope disagreeing.
+The conflict names a row leaning against the week: a bullish structure on a
+SHORT week, a bearish one on a LONG week. MIXED conflicts with nothing; it
+says the week has no lean, which is information rather than a veto. The
+underlyings block carries the same fields per name.
+
+The board (/desk/board) renders it as a "Week VWAP" column between EV adj
+and News: the word in green/red/grey, then side, level, slope arrow and how
+many sessions the anchor holds, with the conflict in amber beneath. SHOWN,
+NOT RANKED ON, like news and flow -- the ranking is still EV and probability.
+On a Monday the anchor is one session and the column says so ("1d"); it
+means more by Wednesday.
+
+Tests: trend_label on all four outcomes, the conflict flag on aligned,
+against, MIXED and directionless rows, and all-nulls on no read. 91 pass.
+Site build clean. Deploy: API pull + recreate (the route code is loaded at
+start); site pull + rebuild.

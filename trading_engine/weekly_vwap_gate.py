@@ -190,6 +190,23 @@ def gate(direction: str, flow: "dict | None") -> "tuple[bool, str]":
                   else "the week's volume is paying down")
 
 
+def trend_label(flow: "dict | None") -> "str | None":
+    """One word for a board column: which way the week's volume leans.
+
+    LONG   spot above the week's VWAP and the level rising  (calls pass the gate)
+    SHORT  spot below it and the level falling               (puts pass the gate)
+    MIXED  anything else -- inside the band, or side and slope disagree
+    None   no read
+    """
+    if not flow:
+        return None
+    if flow["side"] == "ABOVE" and flow["slope_pct"] > 0:
+        return "LONG"
+    if flow["side"] == "BELOW" and flow["slope_pct"] < 0:
+        return "SHORT"
+    return "MIXED"
+
+
 def describe(flow: "dict | None") -> str:
     if not flow:
         return "WEEKVWAP unreadable"

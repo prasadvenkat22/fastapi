@@ -1192,6 +1192,14 @@ POST /trading/flatten?confirm=LIQUIDATE&preview=false&plan_token=<from the previ
 expiry, which is the same day for MU, NVDA, TSLA, AMZN, AAPL, META, MSFT, GOOGL,
 AMD, AVGO and INTC and the Friday for SNDK, CRWV, MRVL, PANW, DELL, STX and WDC.
 `scripts/board.py <date> [--weekly]` prints the same ranking from the shell.
+
+**Before the open the board must not 500** (§205, 2026-09-21). yfinance can
+append today's row to the daily history with every price NaN; `evaluate()`
+drops bars with no Close/High/Low before any maths, and both screener
+endpoints pass their payload through `_json_safe`, which turns any NaN or
+±inf into `null` rather than letting FastAPI's `allow_nan=False` encoder fail
+the whole response. A null reads as "not measured"; a bodyless 500 reads as
+nothing.
 The board prices the ODDS, not the direction: a name whose options are cheap
 against its realised moves tops both the call and the put list (TSLA, 2026-09-21).
 Direction comes from the macro veto, the day's news verdict and the tape gate,

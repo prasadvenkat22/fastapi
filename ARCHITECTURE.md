@@ -681,11 +681,20 @@ and a *wait*, and the wait is what makes a level usable:
 | | level | wait | env |
 |---|---|---|---|
 | **SOFT** | −10% of premium | 30 min | `SLOW_STOP_PCT` / `SLOW_STOP_MINUTES` |
-| **HARD** | −30% of premium | 5 min | `STOP_PCT` / `STOP_CONFIRM_MINUTES` |
+| **HARD** | −10% of premium since 2026-09-21 (was −30%) | 2 min (was 5) | `STOP_PCT` / `STOP_CONFIRM_MINUTES` |
+| **TAPE** (§211) | any loss, underlying on the wrong side of a session VWAP moving against it | 15 min | `TAPE_EXIT` / `TAPE_EXIT_MINUTES` / `TAPE_EXIT_SLOPE_BARS` / `TAPE_EXIT_LOSERS_ONLY` |
 
 The waits differ on purpose: a slow bleed might recover and needs confirming;
-a 30% drop has already told you something and waiting costs money. **Both
+a 30% drop has already told you something and waiting costs money. **All
 clocks are continuous** — a tick back above the level resets them to zero.
+The HARD level was re-swept on 130 structure-days on 2026-09-21 (§207): −10%/2 min
+beat the deployed −30%/5 min by 26,879 over nine sessions and cut the worst day
+by 10,700, reversing §82's 39-day result. The TAPE exit (§211) sells a *losing*
+0DTE debit once the underlying has spent 15 minutes under a falling session VWAP
+(call) or over a rising one (put): +9,891 on top of the stop alone, worst day
+4,000 better; it sits below the stops in the `elif` chain and names the exit
+`TAPE_EXIT`. §208 measured the opposite use, VWAP as a reason to *wait* before
+the stop sells, at −9,260: the tape earns its place selling sooner, not later.
 
 **Why a level alone cannot work.** Same level, the only difference being
 persistence: `−10% with no wait = −$12,559` against `−10% held an hour =

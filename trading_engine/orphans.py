@@ -1048,6 +1048,45 @@ ORPHAN_SLOW_STOP_MINUTES = float(
 ORPHAN_STOP_CONFIRM_MINUTES = float(
     os.getenv("TRADING_ORPHAN_STOP_CONFIRM_MINUTES", "2") or 0)
 
+# THE TAPE EXIT: SELL A LOSING 0DTE DEBIT SOONER WHEN THE UNDERLYING IS ON THE
+# WRONG SIDE OF A VWAP THAT IS MOVING AGAINST IT.  Section 211, 2026-09-21.
+#
+# Section 208 asked the opposite question -- should the stop WAIT for the tape
+# to agree -- and the answer was no, by 9,260 over nine sessions. This is the
+# operator's question the same afternoon: MU's session VWAP fell all morning
+# with the price under it while the morning's call debits bled to the stop;
+# should that have been the exit? Replayed on the same 130 structure-days, on
+# top of the -10%/2min stop, with the tape read on Tradier's 5-minute bars:
+#
+#     rule                     fires  helps hurts    total    vs stop   worst day
+#     stop only (deployed)        54     37    17   +1,609          -    -29,818
+#     tape 15 min, losers only    61     41    20  +11,500     +9,891    -25,825
+#     tape 15 min, any            79     47    32   +8,087     +6,477    -26,857
+#     tape  5 min, losers only    73     43    30   +4,899     +3,289    -28,141
+#     tape 30 min, losers only    58     38    20   +5,759     +4,150    -26,334
+#
+# Both frames, for the first exit rule measured today: 09-09, 09-10 and 09-16
+# each 4,000-5,000 better, the two big winning days within a few hundred.
+# Fifteen minutes because five fires on noise and thirty arrives too late;
+# LOSERS ONLY because selling a winner on the tape gives most of it back,
+# which is the lesson the stall already paid for (STALL_MUST_BOOK_A_GAIN).
+#
+# "Wrong side, moving against" is BOTH: for a call debit the underlying under
+# the session VWAP AND the VWAP lower than it was SLOPE_BARS bars ago; for a
+# put debit over it AND rising. Either alone is a level or a drift; together
+# they say the price the day's volume is paying is walking away from the
+# structure. Credit structures are not touched. A read that fails resets the
+# clock rather than counting toward it: a rule that sells needs a reading.
+#
+# It sits BELOW the fast stop in the ladder and above the slow stop, and it
+# names the exit TAPE_EXIT so the history can be scored against the rest.
+# Off by default; the deployment turns it on.
+ORPHAN_TAPE_EXIT = os.getenv("TRADING_ORPHAN_TAPE_EXIT", "false").lower() == "true"
+ORPHAN_TAPE_EXIT_MINUTES = float(os.getenv("TRADING_ORPHAN_TAPE_EXIT_MINUTES", "15") or 15)
+ORPHAN_TAPE_EXIT_SLOPE_BARS = int(os.getenv("TRADING_ORPHAN_TAPE_EXIT_SLOPE_BARS", "6") or 6)
+ORPHAN_TAPE_EXIT_LOSERS_ONLY = (
+    os.getenv("TRADING_ORPHAN_TAPE_EXIT_LOSERS_ONLY", "true").lower() == "true")
+
 # THE BAND WHERE NOTHING FIRES, IN DOLLARS OF INTRINSIC GIVEN BACK.
 #
 # Two guards can be correct individually and silent together:
@@ -1996,6 +2035,88 @@ def _session_vwap(root: str) -> "float | None":
     return out
 
 
+def _tape_from_bars(data: list, spot: "float | None" = None,
+                    slope_bars: "int | None" = None) -> "tuple | None":
+    """(spot, vwap_now, vwap_ref) from Tradier 5-minute bars, or None.
+
+    vwap_now is the running session VWAP at the last bar; vwap_ref the same
+    series `slope_bars` bars earlier (the first bar when the session is
+    younger than that). Pure, so the tape exit's arithmetic can be tested.
+    """
+    n = ORPHAN_TAPE_EXIT_SLOPE_BARS if slope_bars is None else slope_bars
+    num = den = 0.0
+    running = []
+    last_close = None
+    for bar in data or []:
+        vol, vw = bar.get("volume"), bar.get("vwap")
+        if not vol or vw is None:
+            continue
+        num += float(vw) * float(vol)
+        den += float(vol)
+        running.append(num / den)
+        try:
+            last_close = float(bar.get("close"))
+        except (TypeError, ValueError):
+            pass
+    if not running:
+        return None
+    px = spot if spot is not None else last_close
+    if px is None:
+        return None
+    ref = running[-1 - n] if len(running) > n else running[0]
+    return float(px), running[-1], ref
+
+
+def _tape_against(right: str, spot: float, vwap_now: float, vwap_ref: float) -> bool:
+    """Is the session tape walking away from a DEBIT structure of this right?
+
+    A call debit is bullish: wrong side is UNDER the VWAP, moving against is
+    the VWAP FALLING. A put debit is the mirror. Both conditions, not either.
+    """
+    if right == "C":
+        return spot < vwap_now and vwap_now < vwap_ref
+    if right == "P":
+        return spot > vwap_now and vwap_now > vwap_ref
+    return False
+
+
+_TAPE_CACHE: dict = {}
+
+
+def _session_tape(root: str) -> "tuple | None":
+    """(spot, vwap_now, vwap_ref) for the underlying right now, cached 60 s.
+    None on any failure; the caller must treat None as 'no reading', not as
+    'the tape agrees'."""
+    import httpx
+    from zoneinfo import ZoneInfo
+    hit = _TAPE_CACHE.get(root)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    out = None
+    try:
+        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        r = httpx.get(f"{tradier_orders._base()}/markets/timesales",
+                      params={"symbol": root, "interval": "5min",
+                              "start": f"{today} 09:30", "end": f"{today} 16:00",
+                              "session_filter": "open"},
+                      headers=tradier_orders._headers(), timeout=10.0)
+        r.raise_for_status()
+        data = ((r.json() or {}).get("series") or {}).get("data") or []
+        if isinstance(data, dict):
+            data = [data]
+        spot = None
+        try:
+            from .data_feed import fetch_spot
+            spot = fetch_spot(root)
+        except Exception:
+            spot = None
+        out = _tape_from_bars(data, spot)
+    except Exception:
+        out = None
+    _TAPE_CACHE[root] = (time.time(), out)
+    return out
+
+
 def _ask_cancel(ask: dict, st: dict) -> str:
     """Cancel a resting ask and say what became of it: 'canceled', 'filled', 'unknown'.
 
@@ -2559,6 +2680,35 @@ def review(engine_symbols: "set | None" = None) -> list:
             else:
                 rec.pop("slow_since", None)
 
+            # THE TAPE EXIT's clock. See ORPHAN_TAPE_EXIT. One continuous
+            # stretch of the underlying on the wrong side of a VWAP moving
+            # against the structure; any minute that is not that -- including
+            # a minute with no reading -- starts it over.
+            tape_held = False
+            tape_read = None
+            if (ORPHAN_TAPE_EXIT and zero_dte and past_hold and not st["credit"]
+                    and (value < abs(st["entry"]) or not ORPHAN_TAPE_EXIT_LOSERS_ONLY)):
+                tape_read = _session_tape(st["root"])
+                if tape_read is not None and _tape_against(st["right"], *tape_read):
+                    rec.setdefault("tape_since", now.isoformat())
+                    _tpheld = (now - datetime.fromisoformat(
+                        rec["tape_since"])).total_seconds() / 60.0
+                    tape_held = _tpheld >= ORPHAN_TAPE_EXIT_MINUTES
+                    if not tape_held:
+                        logger.info(
+                            "ORPHAN %s %g/%g: %s %.2f %s a %s VWAP %.2f (was %.2f) for "
+                            "%.0f of the %.0f minutes the tape exit needs — watching.",
+                            st["root"], st["long_strike"], st["short_strike"],
+                            st["root"], tape_read[0],
+                            "under" if st["right"] == "C" else "over",
+                            "falling" if st["right"] == "C" else "rising",
+                            tape_read[1], tape_read[2], _tpheld, ORPHAN_TAPE_EXIT_MINUTES,
+                        )
+                else:
+                    rec.pop("tape_since", None)
+            else:
+                rec.pop("tape_since", None)
+
             # A LATER EXPIRY'S ONLY RULE. Checked before everything else and
             # scoped to positions that are NOT expiring today, so it cannot
             # interfere with the 0DTE ladder.
@@ -2700,6 +2850,12 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # urgent than a gap, and if the fast stop also applies it
                 # should be the one that names the exit.
                 reason = "SLOW_STOP"
+            elif tape_held:
+                # The underlying has spent ORPHAN_TAPE_EXIT_MINUTES on the wrong
+                # side of a VWAP moving against a losing debit. Section 211:
+                # +9,891 over the stop alone on 130 structure-days. Below the
+                # stops so a genuine breakdown is still named by them.
+                reason = "TAPE_EXIT"
             elif later_stop_held:
                 # Only reachable when zero_dte is false, so it can never race
                 # the expiry-day ladder above.

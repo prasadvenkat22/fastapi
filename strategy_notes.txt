@@ -13182,3 +13182,60 @@ showed it carries nothing over four sessions, but three refusals a morning
 is a small cost and the book has too few settled trades to measure either
 gate against its own P&L. When it has twenty, score both from the FLOW and
 WEEKVWAP lines the way flow_gate_replay.py scores the 0DTE gate.
+
+
+211. THE TAPE EXIT: SELL A LOSING 0DTE DEBIT WHEN THE VWAP WALKS AWAY  (2026-09-21)
+--------------------------------------------------------------------------------
+
+Operator, 16:05 ET, reading 208 against the day: "MU and SNDK VWAP today was
+on decline, maybe not a good reason to hold MU, so VWAP does signal
+something" -- then "yes use it to sell sooner".
+
+THE SIGN. 208 tested VWAP as a reason to WAIT (require the tape to agree
+before the stop sells) and it cost 9,260. This is the other direction: a
+reason to sell SOONER. Today's morning MU call debits bled under a session
+VWAP that fell from 1052 to 1044 with the price beneath it; the afternoon
+put was the mirror case and the same read said hold it.
+
+MEASURED, same 130 structure-days (09-08 to 09-18, debit, today excluded),
+same harness as 208, on top of the deployed -10%/2min stop. Rule: exit when
+the underlying has been on the wrong side of the session VWAP with the VWAP
+moving against the structure for N consecutive minutes -- a call under a
+falling VWAP, a put over a rising one; "losers only" adds mark < entry.
+
+    rule                     fires  helps hurts    rule $   vs stop  worst pos  worst day
+    stop only (deployed)        54     37    17    +1609        +0    -14470    -29818
+    tape 5m                     94     53    41    +1581       -29    -14470    -27959
+    tape 15m                    79     47    32    +8087     +6477    -14470    -26857
+    tape 30m                    69     42    27     +954      -656    -14470    -30373
+    tape 5m  losers only        73     43    30    +4899     +3289    -14470    -28141
+    tape 15m losers only        61     41    20   +11500     +9891    -14470    -25825
+    tape 30m losers only        58     38    20    +5759     +4150    -14470    -26334
+
+    per session      09-08  09-09  09-10  09-11  09-14  09-15  09-16  09-17  09-18
+    stop only        +5313  -9552 -29818   +728  -3266   -289  -5187   -901 +44582
+    tape 15m losers  +6653  -5292 -25825   +728  -3266   -289  -3859  -1826 +44477
+
+BOTH FRAMES, for the first exit rule measured today that does. 09-09, 09-10
+and 09-16 each 1,300 to 4,300 better; the two big winners within a hundred;
+17 fires on the tape against 44 on the stop, so it supplements rather than
+replaces. Five minutes fires on noise (94 fires, 41 hurts); thirty arrives
+after the stop has done the work. Selling WINNERS on the tape ("any") gives
+back a third of the gain -- the stall's lesson (STALL_MUST_BOOK_A_GAIN)
+holds here too.
+
+BUILT. orphans.py: ORPHAN_TAPE_EXIT (+ _MINUTES 15, _SLOPE_BARS 6,
+_LOSERS_ONLY true); _tape_from_bars / _tape_against (pure, tested) and
+_session_tape (Tradier 5-min bars, 60 s cache, None on failure); a
+tape_since clock in review() beside the slow stop's, reset by any minute
+that is not "wrong side AND moving against" INCLUDING a failed read; reason
+TAPE_EXIT in the elif chain below SLOW_STOP and above LATER_STOP, so a
+genuine breakdown is still named by the stops. Debit only, 0DTE only, after
+the 09:45 hold. Off in code, on in .env.production. Six tests; 88 pass.
+
+CAVEATS, unchanged from 207-208: exits replayed at the logged mark, entries
+not; nine sessions, two carrying most of the dollars; the tape read on
+5-minute bar closes while the live rule reads a live spot against the bar
+VWAP. And the regime: a rule that sells losers into a falling tape is
+measured on a fortnight where the tape mostly kept falling once it turned.
+Score TAPE_EXIT rows against the stop's in trading_history after twenty.

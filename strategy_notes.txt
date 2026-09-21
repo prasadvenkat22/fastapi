@@ -12999,3 +12999,29 @@ CAVEATS, as always with this harness: exits are replayed, entries are not;
 fills are the logged mark; nine sessions, two of which (09-10, 09-18) carry
 most of the dollars; the sample is the book as it was traded, which section
 154 showed was steering entries the wrong way on several of these days.
+
+APPLIED 14:06 ET (207). TRADING_ORPHAN_STOP_PCT=-10, CONFIRM 2, in
+.env.production (the first paste targeted .env, which has no trading keys --
+the production values live in .env.production; noted so it is not repeated).
+Recreated `app`, no build: /opt/fastapi is bind-mounted at /app, so a git
+pull plus --force-recreate loads new Python and new env in one step; a build
+is only needed when requirements change. The same recreate therefore also
+put section 206's broker-chain screener live.
+
+FIRST HOUR UNDER THE NEW STOP:
+    14:07  MU  P 1045/1040 x15  -11% on the mark, intrinsic 4.49 > 3.16 entry
+                                -> HELD by the intrinsic guard, correctly
+    14:16  MU  rallied, intrinsic 0 -> STOP_LOSS, 10 of 15 filled at 1.78
+                                (-1,377), partial flagged; 14:17 the other 5
+                                at 1.84 (-654). MAX_ORDER_CONTRACTS split it.
+    14:18  QQQ P 741/739 x2   first breach of -10%
+    14:20                     2 min confirmed, intrinsic 0.79 < 1.01 entry
+                                -> STOP_LOSS at 0.83 (-36)
+    INTC C 121/124 x10 was closed by hand at ~14:00 at about -25%, before
+    the change landed.
+
+The operator read the MU hold at -11% as the stop not working. It was the
+guard, and it released the moment the thesis failed; the rule is the pair,
+not the percentage. Whether the guard itself earns its keep at -10% is the
+next question -- sweep_orphan_stop.py has the respect/IGNORED dimension and
+today's series did not run it. Open.

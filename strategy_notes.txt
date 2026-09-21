@@ -12793,3 +12793,48 @@ Tests: subscribe honeypot silent, garbage confirm token -> invalid banner,
 /subscribers 401 without a bearer, and the full round trip against Postgres
 (unconfirmed row -> confirm -> owner told -> re-subscribe sends nothing ->
 unsubscribe). 7 pass without a database, 3 more with one.
+
+
+204. PASSWORD RECOVERY IN THE UI  (2026-09-21)
+--------------------------------------------------------------------------------
+
+Operator: "for user signed in is there a session management and sign out
+button" -- then, seeing the sign-out button exists, "what about user password
+reset functionality in UI".
+
+WHAT WAS THERE. Sessions are stateless JWTs (15-minute access, 60-minute
+refresh); Sign out clears localStorage and tells the server nothing, which is
+the design -- no revocation list, short lifetimes instead. Every password path
+existed only on the API: /auth/forgot-password mailed a link that opened the
+API's own bare HTML page at GET /auth/reset-password; /auth/change-password
+had no caller; POST /users/{id}/reset-password had no button. The login page
+literally said "use forgot password on the API if you are locked out".
+
+THE UI (data-ai-solutions 65863bb): /login gets "Forgot password?";
+/forgot-password posts the email and says "check your inbox" whether or not
+the address has an account (the API's 204 either way is what makes the page
+unable to confirm registrations, and the page must not undo that);
+/reset-password?token=... is the page the link opens, styled like the site,
+and it DOES show the API's error because the visitor holds a token and needs
+to know expired vs used vs wrong; /account (any signed-in user, reached from
+the email in the navbar) changes your own password with the current one
+required; /users gets a per-user Reset password button with a confirm step
+and the temporary password shown once with a copy button. Register form's
+minimum went 6 -> 12 to match helpers/pwd.py. lib/auth.ts gains
+forgotPassword / resetPassword / changePassword.
+
+TWO MOVES ON THIS SIDE (f419ea4e5). The reset link now lands on
+APP_BASE_URL + PASSWORD_RESET_PAGE (default /reset-password); the API's
+fallback page stays for a frontend-less deploy and the env var can point back
+at it. And the admin users router moved /users -> /api/users: nginx sends
+/api/* to the API and everything unlisted to Next, where /users is the Users
+PAGE, so the button's POST to /users/{id}/reset-password could never have
+reached the API. auth_notes section 5 and deployment_notes updated.
+
+Tests: tests/test_password_pages.py -- link lands on the site page, page is
+configurable, account-created mail points at /forgot-password, /api/users
+mounted and /users gone, fallback page still 200, both admin routes 401
+without a bearer. 7 pass without a database. Next build: 23 routes, clean.
+
+DEPLOY: pull + rebuild app in /opt/fastapi (no nginx change: /api/ and /auth/
+are already proxied); pull + rebuild in /opt/data-ai-solutions.

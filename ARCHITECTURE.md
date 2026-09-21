@@ -1121,6 +1121,12 @@ roles, invoices, transactions, service requests) need `admin` — the navbar
 hides those menus from anyone else, and the API refuses them anyway. Tokens
 come from `/auth/login`, refresh through `/auth/refresh`, and travel as a
 bearer on every call. Budgets, cron and env are not exposed in the UI.
+Passwords (section 204): `/forgot-password` mails a link that opens the site's
+`/reset-password` page (`PASSWORD_RESET_PAGE`; the API's bare fallback at
+`GET /auth/reset-password` remains), `/account` changes your own with the
+current one required, and the admin Users page has a Reset password button
+on `POST /api/users/{id}/reset-password` — the admin users router lives under
+`/api/users` because nginx hands unlisted paths, `/users` included, to Next.
 
 **`POST /api/contact/inquiry` is the one unauthenticated write.** It stores the
 inquiry as a row in `registrations` (the admin's Demo Registrations page lists

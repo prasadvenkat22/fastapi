@@ -280,9 +280,20 @@ def usable(row):
 def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
     tk = yf.Ticker(sym)
     h = tk.history(period=HISTORY, interval="1d")
+    # BEFORE THE OPEN yfinance can append today's row with every price NaN.
+    # Measured 2026-09-21 at 09:2x ET: spot read as NaN, so ATR, every EV,
+    # every probability and `itm` were NaN too, and the HTTP layer died on
+    # "Out of range float values are not JSON compliant" -- for all twelve
+    # names, because the same row appeared in each history. Drop it: a bar
+    # with no close is not a session.
+    h = h.dropna(subset=["Close", "High", "Low"])
     if len(h) < 120:
         return [], None
     spot, a14, rv = float(h["Close"].iloc[-1]), atr14(h), rv20(h)
+    if not (spot > 0 and a14 > 0):
+        # Collected into rank()'s warnings rather than silently producing a
+        # page of NaN.
+        raise ValueError(f"{sym}: no usable price history (spot={spot}, atr={a14})")
     # NEAREST BY DEFAULT, WHICH IS NOT ALWAYS A WEEK. Measured 2026-09-09:
     # NVDA, MU and AVGO listed 09-09 as options[0] -- the SAME DAY -- while
     # MRVL, DELL and PANW listed 09-11. A screen asking for "weekly call

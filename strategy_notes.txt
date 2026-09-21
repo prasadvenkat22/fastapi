@@ -12838,3 +12838,39 @@ without a bearer. 7 pass without a database. Next build: 23 routes, clean.
 
 DEPLOY: pull + rebuild app in /opt/fastapi (no nginx change: /api/ and /auth/
 are already proxied); pull + rebuild in /opt/data-ai-solutions.
+
+
+205. THE BOARD'S 500 BEFORE THE OPEN  (2026-09-21)
+--------------------------------------------------------------------------------
+
+Operator, 09:2x ET: "Auto-Trader -> screener -> The board throws API error
+500". Both /trading/screener/verticals calls (call and put side, twelve
+names, expiry 09-25) returned 500 with no body.
+
+CAUSE. The app log had the traceback: json.encoder, "Out of range float values
+are not JSON compliant". Before the open yfinance appended today's row to the
+daily history with every price NaN. evaluate() read spot from the last close,
+so spot was NaN; atr14 followed; monte_carlo_terminal returned None (its
+spot > 0 guard is False for NaN) so mc_max was NaN; every EV, every band,
+`itm` and `room` were NaN; and the same row sat in all twelve histories, so
+no name survived to carry the page. FastAPI's JSONResponse encodes with
+allow_nan=False and the whole response died at the last step. Not caused by
+the morning's deploy: the code path is unchanged since section 20x, and the
+previous board runs were all made with the market open.
+
+TWO FIXES, EACH ON ITS OWN. weekly_pick.evaluate() drops bars with no
+Close/High/Low before any maths, and raises (into rank()'s warnings) if spot
+or ATR is still not positive. And trading_router passes both screener
+payloads through _json_safe, which turns NaN and +/-inf into null
+recursively -- a null says "not measured", a 500 says nothing. The fallback
+matters on its own: atm_iv is NaN when a chain quotes no vols, and that sat
+in `underlyings` waiting for the same failure.
+
+Tests: tests/test_screener_nan.py -- _json_safe on a nested payload and the
+allow_nan=False encode; evaluate() against a fake ticker whose history ends
+in the empty pre-open row (rows come back, everything finite); rank() output
+encodes; an all-NaN history is skipped rather than returned. 5 pass, no
+network, no database.
+
+DEPLOY: pull + rebuild `app`. The container hosts the cron-driven cycle, so
+after 16:00 ET unless a one-minute gap is acceptable.

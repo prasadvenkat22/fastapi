@@ -1,6 +1,7 @@
+import math
 import os
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -38,6 +39,25 @@ def get_db():
 
 
 db_dependency = Annotated[Session, Depends(get_db)]
+
+
+def _json_safe(obj: Any) -> Any:
+    """NaN and +/-inf become null, recursively.
+
+    Python's json module refuses them ("Out of range float values are not
+    JSON compliant") and FastAPI turns that into a 500 with no body, which is
+    what the screener board showed on 2026-09-21 before the open. The maths
+    behind these endpoints legitimately produces NaN when an input is missing
+    -- an ATM IV with no quoted vols, a Monte Carlo band with no ATR -- and a
+    null says "not measured" where a 500 says nothing at all.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 
 @router.post("/run-daily-cycle", response_model=TradingCycleResponse)
@@ -506,7 +526,7 @@ async def screen_verticals(
             "flow_up_pct": (round(flow["up_pct"], 2) if flow else None),
             "flow_conflict": r.get("flow_conflict"),
         })
-    return {
+    return _json_safe({
         "side": out["side"], "structure": out["structure"],
         "direction": _direction(side, structure),
         "sort": out["sort"],
@@ -518,7 +538,7 @@ async def screen_verticals(
         "rows": rows,
         "note": ("news and flow are shown, not used. Ranking is EV and "
                  "probability only."),
-    }
+    })
 
 
 @router.get("/screener/flow")
@@ -540,11 +560,11 @@ async def screen_flow(
         rows = flow_table(_symbols(symbols), day=day, interval=interval)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"flow failed: {exc}")
-    return {"day": day or "today", "interval": interval,
-            "returned": len(rows), "rows": rows,
-            "note": ("label requires price-vs-VWAP and up-volume share to "
-                     "agree; MIXED means they do not. Measures urgency, not "
-                     "institutional participation.")}
+    return _json_safe({"day": day or "today", "interval": interval,
+                       "returned": len(rows), "rows": rows,
+                       "note": ("label requires price-vs-VWAP and up-volume share to "
+                                "agree; MIXED means they do not. Measures urgency, not "
+                                "institutional participation.")})
 
 
 # ---------------------------------------------------------------------------

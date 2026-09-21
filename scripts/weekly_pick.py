@@ -277,6 +277,46 @@ def usable(row):
     return b, a, mid, float(row.get("impliedVolatility") or 0)
 
 
+def chain_quotes(tk, sym: str, exp: str, calls: bool):
+    """Per-strike quotes for one side: (rows, source).
+
+    THE BROKER FIRST, YAHOO AS THE FALLBACK (2026-09-21). Yahoo's option
+    chains now carry bid and ask on only a fraction of strikes -- measured at
+    09:4x ET: AAPL 09-25 calls 0 of 68 priced, MU 0 of 234, SNDK 54 of 248,
+    SPY 26 of 161 -- with impliedVolatility a 0.00001 placeholder on the
+    rest. usable() correctly refuses a quote with no price, so the board
+    returned zero candidates for all twelve names and said nothing about
+    why. Tradier's chain for the same expiry had AAPL 70 of 79 and MU 302 of
+    315 priced, with open interest and a mid IV per strike. The engine
+    already fetches it (trading_engine.data_feed.fetch_option_chain), so the
+    screener now prices off the same book the trades fill on.
+
+    Rows are dicts with Yahoo's column names, so usable() and the loop in
+    evaluate() do not care which source answered. `source` is recorded in
+    the meta so a reader can tell which book a row was priced on.
+    """
+    side = "call" if calls else "put"
+    rows: list = []
+    try:
+        from trading_engine.data_feed import fetch_option_chain
+
+        ch = fetch_option_chain(exp, sym)
+    except Exception:
+        ch = {}
+    for (t, _k), q in (ch or {}).items():
+        if t != side:
+            continue
+        rows.append(dict(strike=q.strike, bid=q.bid, ask=q.ask,
+                         openInterest=q.open_interest,
+                         impliedVolatility=(q.iv or 0.0)))
+    if any(r["bid"] > 0 and r["ask"] > 0 for r in rows):
+        return rows, "tradier"
+    # No key, an error, or an empty book: Yahoo, which is what this used.
+    chain = tk.option_chain(exp)
+    df = chain.calls if calls else chain.puts
+    return [r for _, r in df.iterrows()], "yahoo"
+
+
 def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
     tk = yf.Ticker(sym)
     h = tk.history(period=HISTORY, interval="1d")
@@ -348,12 +388,11 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
 
     fl = flow_read(sym)
     mc = monte_carlo_terminal(spot, a14, fwd_days)
-    chain = tk.option_chain(exp)
     calls = side == "call"
-    df = chain.calls if calls else chain.puts
+    quotes, source = chain_quotes(tk, sym, exp, calls)
 
     q = {}
-    for _, r in df.iterrows():
+    for r in quotes:
         u = usable(r)
         if u:
             q[float(r["strike"])] = u
@@ -513,7 +552,7 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
                 ev_pct=(float(dm.mean()) / cost * 100.0),
                 **g))
     return out, dict(spot=spot, atr=a14, rv=rv, iv=atm_iv, exp=exp, days=fwd_days,
-                     strikes=len(ks))
+                     strikes=len(ks), quotes=source, quoted=len(quotes))
 
 
 
@@ -567,6 +606,18 @@ def rank(symbols, side: str, by: str = "evpct", top: int = 10,
             if m:
                 m = dict(m, symbol=sym, candidates=len(r))
                 meta.append(m)
+                if not r:
+                    # Say WHY a name is absent. The board showed "Nothing
+                    # cleared the band" for twelve names on 2026-09-21 with
+                    # no warning, because the quote filter had rejected every
+                    # strike and an empty list looks the same as a strict band.
+                    warnings.append(
+                        f"{sym}: no {structure} {side} spread priced -- "
+                        f"{m['strikes']} of {m['quoted']} {m['quotes']} strikes "
+                        f"had a two-sided quote, OI >= {MIN_OI} and a market "
+                        f"within {MAX_SPREAD_PCT:.0%} of mid")
+            else:
+                warnings.append(f"{sym}: no price history or no listed expiries")
             rows += r
         except Exception as exc:
             warnings.append(f"{sym}: {exc}")
@@ -645,7 +696,8 @@ def main():
                 print(f"{s:6s} spot {meta['spot']:8.2f}  ATR {meta['atr']:7.2f}  "
                       f"RV {meta['rv']*100:4.0f}%  IV {meta['iv']*100:4.0f}%  "
                       f"IV/RV {ivrv:4.2f}  exp {meta['exp']} ({meta['days']}d)  "
-                      f"{meta['strikes']} usable strikes  {len(r)} candidates")
+                      f"{meta['strikes']}/{meta['quoted']} usable strikes "
+                      f"({meta['quotes']})  {len(r)} candidates")
             rows += r
         except Exception as e:
             print(f"{s:6s} error {e}")

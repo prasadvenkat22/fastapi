@@ -12874,3 +12874,65 @@ network, no database.
 
 DEPLOY: pull + rebuild `app`. The container hosts the cron-driven cycle, so
 after 16:00 ET unless a one-minute gap is acceptable.
+
+
+206. THE BOARD PRICES OFF THE BROKER'S BOOK  (2026-09-21)
+--------------------------------------------------------------------------------
+
+Operator, after 205 shipped: "what is edge; nothing is returned by default".
+
+MEASURED, 09:4x ET, inside the container. rank() over the board's twelve
+names for 09-25: considered=0 on all four (debit/credit x call/put), zero
+warnings, twelve meta rows each with candidates=0. History fine (752 rows,
+today's bar real). The chain was the problem: Yahoo's 09-25 calls had bid
+0.00 / ask 0.00 on EVERY strike for AAPL (0 of 68) and MU (0 of 234), IV a
+0.00001 placeholder, lastPrice populated -- so the data exists, Yahoo just no
+longer serves the quote. SNDK 54 of 248, SPY 26 of 161, AAPL Oct 10 of 79.
+usable() refuses a quote with no price, correctly, so nothing survived, and
+an empty list looked exactly like a strict R:R band.
+
+Tradier, same expiry, same minute: AAPL 70 of 79 priced, MU 302 of 315, with
+open interest and mid_iv per strike. The engine has fetched that chain since
+data_feed.fetch_option_chain existed; the screener simply never used it.
+
+CHANGE. weekly_pick.chain_quotes(): broker first, Yahoo when the broker
+returns nothing (no key, error, empty book). Rows keep Yahoo's column names
+so usable() and the loop do not care who answered. meta gains quotes=
+'tradier'|'yahoo' and quoted=<strikes seen>; the CLI prints "39/79 usable
+strikes (tradier)". rank() now warns per symbol that contributes nothing:
+"AAPL: no debit call spread priced -- 0 of 68 yahoo strikes had a two-sided
+quote, OI >= 50 and a market within 25% of mid". The board shows warnings
+when the list is empty, so the next silent zero will say why.
+
+LIVE CHECK before deploying (module loaded from /tmp inside the running
+container, deployed code untouched), board defaults, 09-25:
+
+    debit  call  band 1-3 returned 10 of 4720   rr median 1.58
+    debit  put   band 1-3 returned 10 of 3995   rr median 6.73
+    credit call  band 1-3 returned  9 of 3260   rr median 0.32
+    credit put   band 1-3 returned 10 of 3781   rr median 0.12
+
+    top: NVDA 222.5/240 call debit rr 2.99 Pwin 45% need 25% edge +19.4 EV +110
+         AVGO 325/365  put debit  rr 2.88 Pwin 47% need 26% edge +21.0 EV +175
+
+Note the credit medians: a credit spread's R:R is credit/(width-credit) and
+sits at 0.1-0.3 for the ordinary OTM structure, so the board's default band
+of 1-3 keeps only credit spreads whose short strike is at or inside the
+money -- rr 1.00 means credit = half the width. Nine and ten rows cleared,
+all of that kind; that is the band doing what it says, not a bug, but for a
+credit screen the band wants to be something like 0.2-0.6.
+
+EDGE, for the record, since it was asked: Pwin minus need. Pwin is the share
+of the drift-removed historical outcomes in which the structure finishes
+with any profit; need = cost / width is the win rate the price demands to
+break even (pay 2.50 for a 10-wide and you need to win 25% of the time).
+Edge +19.4 points means the history says 45% and the price only asks 25%.
+It is the one sort of the four that asks whether you are being PAID for the
+odds; prob alone finds deep-ITM structures with nothing left to earn, evpct
+alone finds lottery tickets.
+
+Tests: tests/test_screener_quotes.py -- broker quotes used when Yahoo is
+blank; Yahoo used when the broker has nothing; a name with no candidates
+produces the named warning; a name with candidates produces none. 74 pass.
+
+DEPLOY: pull + rebuild app (the screener lives in the API image).

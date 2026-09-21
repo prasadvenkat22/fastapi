@@ -1200,6 +1200,15 @@ endpoints pass their payload through `_json_safe`, which turns any NaN or
 ±inf into `null` rather than letting FastAPI's `allow_nan=False` encoder fail
 the whole response. A null reads as "not measured"; a bodyless 500 reads as
 nothing.
+
+**The screener prices off the broker's book, Yahoo is the fallback** (§206,
+2026-09-21). Yahoo's chains now carry bid/ask on only a fraction of strikes
+(AAPL 09-25 calls: 0 of 68), so `usable()` rejected everything and the board
+returned zero rows for twelve names with no warning. `weekly_pick.chain_quotes()`
+takes `data_feed.fetch_option_chain()` (Tradier, greeks on, `mid_iv` as the IV)
+and falls back to `yfinance` only when the broker returns nothing; `meta.quotes`
+names the source, and `rank()` adds a warning for any symbol that yields no
+candidate, naming the filter that emptied it.
 The board prices the ODDS, not the direction: a name whose options are cheap
 against its realised moves tops both the call and the put list (TSLA, 2026-09-21).
 Direction comes from the macro veto, the day's news verdict and the tape gate,

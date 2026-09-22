@@ -1,0 +1,17 @@
+Both numbers are computed before entry, from two inputs the screener has in hand at that moment: the live option quotes and three years of the underlying's daily closes. Nothing else.
+
+How the probability is built
+
+1. Take every day in the last three years and measure the move from that day to the same number of sessions ahead as the candidate's expiry. For a Friday expiry screened on Monday that is four sessions, so about 750 historical four-session moves.
+2. Remove the average drift, so the distribution says how far the name moves, not which way it has trended. This is deliberate: a name that rose 40% last year would otherwise make every call spread look good.
+3. Apply each of those moves to today's price. That gives about 750 possible prices at expiry.
+4. Price the spread at the fill you would actually get: buy the long leg at the ask, sell the short leg at the bid. That is the cost.
+5. For each of the 750 prices, compute what the spread is worth at expiry minus that cost.
+
+Pwin is the share of those 750 outcomes where the spread makes any profit at all. Not the maximum, any. A 45% Pwin means that in 45% of the name's own historical four-session moves, applied to today's price, this spread finishes above what you paid.
+
+Need is the win rate the price demands. It is cost divided by width. Pay 4.37 for a spread that can be worth at most 17.50 and you need to win 25% of the time just to break even, because each wi each loss.
+                                                                                                                                          Edge is Pwin minus need. NVDA 222.5/240 this morning: P plus 20 points. History says this structure wins 45% ofthe time, the price only charges you for 25%.                                                                                             
+EV is the dollar version, and it is more exact than edge, because a vertical has a third outcome: finishing between the strikes with partivalue. EV is the average of all 750 payoffs times 100,  edge ignores. Edge is the one-glance number; EV is thenumber the ranking trusts.                                                                                                                
+Two cross-checks sit beside Pwin on every row. The chain's own probability, from the short strike's delta. And a Monte Carlo from today's ATR, which does not assume the last three years describisagree by a lot, the row is telling you the history isstale.                                                                                                                                      
+What Pwin is not. It is not a directional forecast. It only says how often a move of this size has happened. Direction is left to the macro veto, the news tilt and the tape gates, which sit outsi

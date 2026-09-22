@@ -1227,6 +1227,14 @@ gate makes at entry, so the column and the verdict cannot disagree:
 and rising, **SHORT** below and falling, **MIXED** otherwise) and
 `week_vwap_conflict` when a row's direction leans against the week. Shown, not
 ranked on. The site's screener board renders it as a "Week VWAP" column.
+
+**And the volatility regime** (§213): `iv` (ATM implied of the screened expiry),
+`rv` (20-day realised), `iv_rv` and `vol_regime` — **RICH** ≥ 1.2 favours selling
+spreads, **CHEAP** ≤ 0.8 favours buying them, FAIR between — on every row and
+every underlying; the board shows it as an "IV/RV" column. The two paper books
+already run the credit branch by this ratio: `dte0_shadow` chooses credit or debit
+from it at 09:45 and records both directions, `weekly_shadow` stores it beside every
+Friday credit row. `scripts/shadow_iv_rv_report.py` scores both by bucket.
 The board prices the ODDS, not the direction: a name whose options are cheap
 against its realised moves tops both the call and the put list (TSLA, 2026-09-21).
 Direction comes from the macro veto, the day's news verdict and the tape gate,

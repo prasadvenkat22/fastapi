@@ -46,3 +46,18 @@ def test_no_read_is_all_nulls():
 
     f = _week_vwap_fields(None, "bullish")
     assert all(v is None for v in f.values())
+
+
+def test_vol_fields_regimes():
+    from routes.trading_router import _vol_fields
+
+    f = _vol_fields({"iv": 0.60, "rv": 0.40})
+    assert f["iv_rv"] == 1.5 and f["vol_regime"] == "RICH"
+    f = _vol_fields({"iv": 0.30, "rv": 0.50})
+    assert f["iv_rv"] == 0.6 and f["vol_regime"] == "CHEAP"
+    f = _vol_fields({"iv": 0.45, "rv": 0.50})
+    assert f["iv_rv"] == 0.9 and f["vol_regime"] == "FAIR"
+    # missing or NaN inputs read as no regime rather than a crash or a 500
+    assert _vol_fields({})["vol_regime"] is None
+    assert _vol_fields({"iv": float("nan"), "rv": 0.4})["iv_rv"] is None
+    assert _vol_fields({"iv": 0.4, "rv": 0.0})["iv_rv"] is None

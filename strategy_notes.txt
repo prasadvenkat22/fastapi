@@ -13273,3 +13273,62 @@ Tests: trend_label on all four outcomes, the conflict flag on aligned,
 against, MIXED and directionless rows, and all-nulls on no read. 91 pass.
 Site build clean. Deploy: API pull + recreate (the route code is loaded at
 start); site pull + rebuild.
+
+
+213. THE CREDIT BRANCH WAS ALREADY IN SHADOW; NOW IT HAS A REPORT AND A COLUMN  (2026-09-22)
+--------------------------------------------------------------------------------
+
+Operator, after 212's discussion of "high IV sell spreads, low IV buy":
+"run the credit branch in shadow with the IV/RV column -- is this column in
+the dashboard too?"
+
+IT WAS ALREADY RUNNING, on both horizons, and neither had a report that
+asked the question. dte0_shadow (since 09-14, cron 09:45 open / mark / 16:05
+settle) CHOOSES the structure from iv_rv_ratio at the open -- credit when
+>= 1.05, debit when <= 0.95, no row between -- and records both directions
+every session on the Mon/Wed/Fri names. weekly_shadow (since 08-28) stores
+sig_rv_iv_ratio beside every Friday 0.12-delta credit row on fifteen names.
+What was missing: a report grouping outcomes by the ratio, and the ratio on
+the board so the operator sees the regime beside each recommendation.
+
+scripts/shadow_iv_rv_report.py, first run 2026-09-22, buckets as the board
+(CHEAP <= 0.8, FAIR, RICH >= 1.2; return = the book's own expiry return):
+
+    WEEKLY credit shadow, 83 settled
+    group        IV/RV      n     avg %  median %   win   worst %
+    sell calls   CHEAP      9     -26.4    +100.0   89%   -1034.9
+    sell calls   FAIR      19     +55.0    +100.0   89%    -627.3
+    sell calls   RICH       1     +98.5     +98.5  100%     +98.5
+    sell calls   no read   12     -81.9    +100.0   83%   -1011.1
+    sell puts    CHEAP     10     +94.4    +100.0  100%     +71.4
+    sell puts    FAIR      17     +53.6    +100.0   94%    -668.4
+    sell puts    RICH       3     +96.4    +100.0  100%     +89.3
+    sell puts    no read   12     +96.7    +100.0  100%     +72.7
+
+    0DTE shadow, 74 settled, six sessions 09-14 to 09-21
+    credit call  RICH      19     +66.0    +100.0   74%     -57.3
+    credit put   RICH      19     +45.4    +100.0   79%    -170.4
+    debit call   CHEAP     13    +113.6     +40.8   62%    -100.0
+    debit call   FAIR       5     -50.4    -100.0   40%    -100.0
+    debit put    CHEAP     13     -76.9    -100.0   15%    -100.0
+    debit put    FAIR       5     -93.9    -100.0    0%    -100.0
+
+READ IT WITH THE MEDIANS. Selling weekly calls is a coin that lands heads
+nine times in ten and the tenth time costs ten credits: every blow-up
+(PANW 09-11, SNDK 08-28, META 08-28, STX 09-04) sits in the CHEAP or
+unread bucket -- sold when the options were priced below the name's own
+movement. The RICH bucket is one call and three puts; it says nothing yet.
+On 0DTE the ratio-chosen structure did what it was meant to on the CALL
+side both ways (credit when rich +66, debit when cheap +114 on average) and
+the PUT debits lost 15 of 18 -- the same one-way tape that made every short
+put look good. Six sessions.
+
+THE BOARD (/desk/board) now carries iv, rv, iv_rv and vol_regime on every
+row and underlying, rendered as an IV/RV column ("1.42 rich · sell",
+"0.71 cheap · buy", "fair"), beside the Week VWAP column from 212. Shown,
+not ranked on: the rotation still buys debits only (dte0_trade's stated
+reason: no measured record selling premium). This report is how that
+record accrues. Revisit a live credit branch when the weekly RICH bucket
+has thirty rows; today it has four.
+
+Tests: _vol_fields regimes and null-safety. 92 pass. Site build clean.

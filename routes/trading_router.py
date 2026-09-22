@@ -66,6 +66,32 @@ def _week_vwap_fields(flow: "dict | None", direction: "str | None") -> dict:
     }
 
 
+def _vol_fields(meta: dict) -> dict:
+    """The volatility regime for one underlying, from the screener's meta.
+
+    `iv` is the ATM implied vol of the screened expiry, `rv` the 20-day
+    realised (both annualised, from weekly_pick.evaluate). `iv_rv` above 1
+    means the options are priced richer than the name has been moving --
+    the regime that favours SELLING spreads; below 1 favours buying them
+    (section 198 read 0.48-0.83 across the names and chose debits; section
+    213 scored the credit shadow by this ratio). Shown, not ranked on.
+    """
+    iv, rv = meta.get("iv"), meta.get("rv")
+    ratio = (iv / rv) if (iv and rv and rv > 0 and math.isfinite(iv) and math.isfinite(rv)) else None
+    if ratio is None:
+        regime = None
+    elif ratio >= 1.2:
+        regime = "RICH"
+    elif ratio <= 0.8:
+        regime = "CHEAP"
+    else:
+        regime = "FAIR"
+    return {"iv": (round(iv, 4) if iv is not None else None),
+            "rv": (round(rv, 4) if rv is not None else None),
+            "iv_rv": (round(ratio, 3) if ratio is not None else None),
+            "vol_regime": regime}
+
+
 def _json_safe(obj: Any) -> Any:
     """NaN and +/-inf become null, recursively.
 
@@ -540,12 +566,15 @@ async def screen_verticals(
             week[m["symbol"]] = None
     for m in out["meta"]:
         m.update(_week_vwap_fields(week.get(m["symbol"]), None))
+        m.update(_vol_fields(m))
+    vol_by_sym = {m["symbol"]: _vol_fields(m) for m in out["meta"]}
 
     rows = []
     for r in out["rows"]:
         flow = r.get("flow") or {}
         rows.append({
             **_week_vwap_fields(week.get(r["sym"]), r.get("direction")),
+            **vol_by_sym.get(r["sym"], _vol_fields({})),
             "symbol": r["sym"], "lower_strike": r["lo"], "upper_strike": r["hi"],
             "structure": r.get("structure"), "direction": r.get("direction"),
             "credit": (round(r["credit"], 4) if r.get("credit") else None),

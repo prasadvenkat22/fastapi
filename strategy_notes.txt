@@ -13382,3 +13382,41 @@ morning bucket's losses are a sizing and rolling question (sections 207,
 CAVEATS. 164 structures, ten sessions, mostly manual and mostly MU; the
 rotation-only sample is seven. Revisit the cutoff when the shadow's paper
 record can be split by entry hour with the same buckets.
+
+
+215. NET DELTA ON THE BOARD, AND WHAT "NET DELTA > 0.50" WOULD SELECT  (2026-09-22)
+--------------------------------------------------------------------------------
+
+Operator: "for spreads we need net delta > 0.50" -- then, shown the numbers,
+"add net delta to dashboard so it sits there for comparison."
+
+THE CROSS-SECTION, Friday weekly debits on the twelve board names, 08:0x ET,
+candidates inside the rotation's 30-75% entry band:
+
+    calls, by NET delta        n  entry/w   Pwin   need    edge   Pmax    EV$  width/spot
+    > 0.50                   606     50%   47.8%  51.3%   -3.5p  14.0%    -63    9.4%
+    0.35-0.50                533     46%   45.6%  45.4%   +0.3p  22.6%    -48    8.4%
+    0.20-0.35                476     42%   43.1%  41.9%   +1.2p  27.7%    +26    5.5%
+    <= 0.20                  323     43%   41.2%  42.8%   -1.6p  33.0%    -68    3.1%
+
+    calls, by LONG-leg delta   n  entry/w   Pwin   need    edge   Pmax    EV$  net delta
+    >= 0.70                  785     54%   49.1%  53.7%   -4.6p  18.9%   -106    0.58
+    0.50-0.70                947     41%   43.3%  41.9%   +1.4p  25.3%     -4    0.32
+    < 0.50                   206     35%   36.8%  35.2%   +1.6p  27.1%    +65    0.16
+
+    top by EV today (all SNDK): net delta 0.37-0.44, long leg 0.51-0.59,
+    short leg 0.10-0.19, edge +0.11 to +0.12, EV +759 to +833.
+
+Puts read the same way. Net delta is the market's probability of finishing
+BETWEEN the strikes; above 0.50 it only happens on spreads ~9% of spot wide
+with the long leg deep in and the short leg far out -- half the width paid,
+the maximum reached 14% of the time, break-even above Pwin. A hard filter at
+0.50 would have excluded every one of today's top-EV rows. Read as the LONG
+leg's delta instead, "at or above 0.50" is what the entry band already
+produces (today's picks sit at 0.51-0.59); 0.70 and above is negative edge.
+
+NOT A RULE. One day's prices, not outcomes. The operator chose to see the
+number rather than gate on it: delta_long / delta_short / delta_net are on
+every screener row and the board shows "Net Δ" beside Pwin as net with
+long/short small, amber above 0.50, tooltip carrying the chain's own P(max).
+Sits there for comparison, as asked.

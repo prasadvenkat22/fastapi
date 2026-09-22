@@ -583,6 +583,11 @@ async def screen_verticals(
             "risk": round(r["cost"] * 100, 2),
             "reward": round((r["w"] - r["cost"]) * 100, 2),
             "rr": round(r["rr"], 4),
+            # The chain's deltas, per leg and net (section 215). Shown for
+            # comparison with Pwin; not an input to the ranking.
+            "delta_long": (round(abs(r["d_long"]), 4) if r.get("d_long") is not None else None),
+            "delta_short": (round(abs(r["d_short"]), 4) if r.get("d_short") is not None else None),
+            "delta_net": (round(abs(r["d_net"]), 4) if r.get("d_net") is not None else None),
             "p_imp": round(r["p_imp"], 4), "p_hist": round(r["p_max"], 4),
             "p_mc": round(r["mc_max"], 4), "p_win": round(r["pwin"], 4),
             "need": round(r["need"], 4),

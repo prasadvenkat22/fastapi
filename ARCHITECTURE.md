@@ -1231,7 +1231,15 @@ ranked on. The site's screener board renders it as a "Week VWAP" column.
 **And the volatility regime** (§213): `iv` (ATM implied of the screened expiry),
 `rv` (20-day realised), `iv_rv` and `vol_regime` — **RICH** ≥ 1.2 favours selling
 spreads, **CHEAP** ≤ 0.8 favours buying them, FAIR between — on every row and
-every underlying; the board shows it as an "IV/RV" column. The two paper books
+every underlying; the board shows it as an "IV/RV" column.
+
+**And the chain's deltas** (§215): `delta_long`, `delta_short`, `delta_net` on
+every row — the leg you own, the leg you sold, and the market's odds of finishing
+between the strikes — beside Pwin for comparison, not an input to the ranking. A
+same-day cross-section on 2026-09-22 showed net delta over 0.50 selecting the
+widest, most expensive spreads with the lowest P(max) and negative average edge;
+the board flags such rows in amber so the comparison is visible before any rule
+is written. The two paper books
 already run the credit branch by this ratio: `dte0_shadow` chooses credit or debit
 from it at 09:45 and records both directions, `weekly_shadow` stores it beside every
 Friday credit row. `scripts/shadow_iv_rv_report.py` scores both by bucket.

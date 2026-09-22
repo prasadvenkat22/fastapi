@@ -14,4 +14,16 @@ Need is the win rate the price demands. It is cost divided by width. Pay 4.37 fo
                                                                                                                                           Edge is Pwin minus need. NVDA 222.5/240 this morning: P plus 20 points. History says this structure wins 45% ofthe time, the price only charges you for 25%.                                                                                             
 EV is the dollar version, and it is more exact than edge, because a vertical has a third outcome: finishing between the strikes with partivalue. EV is the average of all 750 payoffs times 100,  edge ignores. Edge is the one-glance number; EV is thenumber the ranking trusts.                                                                                                                
 Two cross-checks sit beside Pwin on every row. The chain's own probability, from the short strike's delta. And a Monte Carlo from today's ATR, which does not assume the last three years describisagree by a lot, the row is telling you the history isstale.                                                                                                                                      
-What Pwin is not. It is not a directional forecast. It only says how often a move of this size has happened. Direction is left to the macro veto, the news tilt and the tape gates, which sit outsi
+What Pwin is not. It is not a directional forecast. It only says how often a move of this size has happened. Direction is left to the macro veto, the news tilt and the tape gates.
+
+How it differs from the two columns beside it
+
+┌───────────┬──────────────────────┬────────────────────────────────────────────────────┐
+│  Column   │       Horizon        │                       Source                       │
+├───────────┼──────────────────────┼────────────────────────────────────────────────────┤
+│ Flow      │ today's session only │ 5-minute bars since 09:30                          │
+├───────────┼──────────────────────┼────────────────────────────────────────────────────┤
+│ Week VWAP │ Monday's open to now │ the same bars, stitched across the week            │
+├───────────┼──────────────────────┼────────────────────────────────────────────────────┤
+│ IV/RV     │ volatility regime    │ option prices against 20 days of realised movement │
+└───────────┴──────────────────────┴────────────────────────────────────────────────────┘

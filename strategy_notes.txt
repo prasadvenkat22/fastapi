@@ -13332,3 +13332,53 @@ record accrues. Revisit a live credit branch when the weekly RICH bucket
 has thirty rows; today it has four.
 
 Tests: _vol_fields regimes and null-safety. 92 pass. Site build clean.
+
+
+214. AFTERNOON 0DTE ENTRIES: THE WIN RATE HALVES AFTER 11:30  (2026-09-22)
+--------------------------------------------------------------------------------
+
+Operator, after 213's TSLA/INTC post-mortem ("with two and a half hours left,
+gamma is high"): "can we fix the issue, as gamma and theta change drastically
+in the afternoon, especially after 11 or 12."
+
+MEASURED FIRST. Every same-day debit structure the ladder logged, 09-08 to
+09-21, bucketed by the minute it first appeared; realised = the book's own
+exit at the last logged mark; hold = intrinsic at the real close:
+
+    entry ET       n  realised     avg   win  per $ risk | hold->exp  win | avg min
+    09:30-10:30   64   -14580    -228   64%     -7.1%   |   -20975   52% |   124
+    10:30-11:30   20    +2906    +145   55%     +4.0%   |    +1630   45% |   138
+    11:30-12:30   15    -1884    -126   27%     -5.0%   |    +1624   33% |   243
+    12:30-13:30   25    -1453     -58   36%     -4.2%   |    -8760   36% |    90
+    13:30+        40     -984     -25   40%     -1.2%   |    +1508   38% |    67
+
+    Rotation-only (its own filled orders since 09-14, joined to the ladder):
+    before 11:30   1 fill    -64         after 11:30   6 fills   0 wins   -1203
+    (19 distinct orders sent, 12 never filled -- a finding of its own)
+
+TWO THINGS ARE TRUE AT ONCE. The win rate does what the operator said: 55-64%
+before 11:30, 27-40% after, and the rotation's own afternoon record is 0 for
+6. That is the gamma/theta argument in the data. BUT the dollars are not
+where the intuition points: the worst bucket by far is the first hour
+(-14,580 realised, -7.1% per dollar risked), which is where the large manual
+MU structures were opened and rolled on 09-10 and 09-21. The afternoon loses
+per dollar in every bucket, at small size. So an afternoon cutoff removes a
+negative-expectancy bucket; it does not protect the tail, which lives at
+09:30-10:30 in this book's history.
+
+WHAT CHANGES. Nothing in code: TRADING_DTE0_ROTATE_CUTOFF already exists
+(13:30). Set to 11:30 in .env.production. Passes at 11:45 and later log
+"past the 11:30 rotation cutoff" and place nothing; the 09:00-11:30 passes
+are unchanged. The weekly book's 09:50 pass is unaffected. The dte0_shadow
+keeps opening at 09:45 so the afternoon record does not stop accruing --
+it opens once a day and never traded the afternoon anyway.
+
+NOT CHANGED, AND WHY. A time-aware structure limit (deeper ITM, less
+extrinsic after noon) is the other shape of this fix and is unmeasured;
+with the afternoon closed to new entries it has nothing to act on. The
+morning bucket's losses are a sizing and rolling question (sections 207,
+213), not an entry-time one.
+
+CAVEATS. 164 structures, ten sessions, mostly manual and mostly MU; the
+rotation-only sample is seven. Revisit the cutoff when the shadow's paper
+record can be split by entry hour with the same buckets.

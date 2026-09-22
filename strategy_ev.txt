@@ -27,3 +27,17 @@ How it differs from the two columns beside it
 ├───────────┼──────────────────────┼────────────────────────────────────────────────────┤
 │ IV/RV     │ volatility regime    │ option prices against 20 days of realised movement │
 └───────────┴──────────────────────┴────────────────────────────────────────────────────┘
+┌──────────────┬─────────────┬─────────────────────────────────────────────────────────────────────────────────────────────┐
+│    IV/RV     │    Label    │                                 What it means for a spread                                  │
+├──────────────┼─────────────┼─────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 0.80 or less │ cheap · buy │ Debit spreads are the favoured structure. You pay for less movement than the name produces. │
+├──────────────┼─────────────┼─────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 0.80 to 1.20 │ fair        │ No edge from the vol regime either way.                                                     │
+├──────────────┼─────────────┼─────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 1.20 or more │ rich · sell │ Credit spreads are favoured. You collect for more movement than the name produces.          │
+└──────────────┴─────────────┴─────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Two cautions that the data from this month supports:
+
+- Cheap is about the premium, not the direction. A cheap put spread on a stock that rises still loses. IV/RV says you are paying a fair or better price for the bet; Pwin and the tape columns are what speak to the bet itself.
+- Cheap is when not to sell. Every weekly short-call blow-up in the shadow book came in the cheap bucket. Selling premium that is already underpriced is how a 90% win rate loses money.

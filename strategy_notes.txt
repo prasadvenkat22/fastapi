@@ -13668,3 +13668,12 @@ Stated, because it will show up: a fresh fill marks at the sell side and read
 close many entries ~2-3 minutes in unless the price rises at once; and "never
 -18%" is not guaranteed -- a fast slide during the 2 minutes, or the 10-lot
 cap, can realise more than -5%.
+
+Addendum to 225 (15:20): confirmation removed (TRADING_ORPHAN_STOP_CONFIRM_MINUTES=0).
+MU 1065/1075 x11 @ 5.53 (bought ~15:10) was -20.4% on its first check (sell-side
+mark 4.40), the 2-minute wait ran through a 1.5-point MU drop and it sold at
+-34% / -26% (-1,846). With no wait it would have sold at the first check,
+~-20%. The stop now fires on the first pass at or below -5% of cost. Stated:
+an entry bought at the offer on these spreads is often past -5% on that first
+pass, so it will usually be sold ~1 minute after entry unless it is filled
+near the midpoint.

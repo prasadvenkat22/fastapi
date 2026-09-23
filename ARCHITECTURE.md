@@ -1398,6 +1398,13 @@ live. A manual limit on the same legs switches all of that off (in_flight);
 the log now says so every cycle: "an order this engine did not place is
 working on its legs".
 
+**Between the short strike and break-even** (sections 218-219): the stop and
+the tape exit both hold off while intrinsic is above the entry, so the
+**short-strike guard** (`TRADING_ORPHAN_STRIKE_GUARD*`) covers that slide: the
+underlying through the short strike and under an adverse VWAP for N continuous
+minutes closes the position (cancelling the ask first); a bounce back over the
+strike or a VWAP that stops moving against it resets the clock.
+
 Current settings:
 
 ```

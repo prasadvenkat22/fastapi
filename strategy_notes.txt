@@ -13481,3 +13481,22 @@ replay should be re-run with the guard before the next change to this rule.
 Asked, not built: resetting the tape clock when the underlying bounces or
 stalls under a still-falling VWAP (today it resets only on a close back
 above VWAP or a VWAP that stops falling). Needs a replay first.
+
+
+219. SHORT-STRIKE GUARD: THE 1075 -> 1071 SLIDE HAD NO OWNER  (2026-09-23)
+
+After 218, a same-day debit between its short strike and break-even is held
+by everything: the stop and the tape exit both wait for intrinsic to fall
+under the entry. On MU 1065/1075 @ 6.15 that is MU 1075 down to ~1071 with
+nothing acting, the slide the operator did not want to watch "slip back to
+1070". New rule, operator's parameters: MU (the underlying) through the SHORT
+strike AND under a VWAP moving against the structure, 3 continuous minutes ->
+close at market, cancelling the engine's ask first. Either condition failing
+for a minute resets it (the 10:4x low of 1075.62 would not have started it).
+Placed ahead of the stop's intrinsic branch in the chain, which is what left
+the gap. Live 11:09 (TRADING_ORPHAN_STRIKE_GUARD=true, _MINUTES=3, _BUFFER=0).
+
+The trade it makes: it sells at the mark, still at a time-value discount, so
+a fire near the strike is roughly flat to a small loss, taken to avoid the
+stop's later, larger one. NOT MEASURED. Replay with 218's guard and the
+bounce-reset question, against 211's tape-exit result, after the close.

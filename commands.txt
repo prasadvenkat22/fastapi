@@ -61,6 +61,10 @@ tset set TRADING_ORPHAN_HOLD_UNTIL=09:35              # no loss-taking before (E
 # never under FLOOR; stops and the flatten stay live and cancel it to act.
 tset set TRADING_ORPHAN_ASK=true TRADING_ORPHAN_ASK_START_WIDTH=0.90
 tset set TRADING_ORPHAN_ASK_FLOOR_WIDTH=0.80           # floor 80% of width (0 = entry x (1+target))
+# Short-strike guard: close when the underlying is through the SHORT strike
+# under an adverse VWAP for N continuous minutes (resets on a bounce).
+tset set TRADING_ORPHAN_STRIKE_GUARD=true TRADING_ORPHAN_STRIKE_GUARD_MINUTES=3
+tset set TRADING_ORPHAN_STRIKE_GUARD_BUFFER=0          # points past the strike before the clock starts
 # DO NOT also place a manual limit on the same legs: a working order the
 # engine did not place switches off its stop, ask and 15:45 flatten
 # (logged every cycle as "an order this engine did not place is working").

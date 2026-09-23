@@ -2746,7 +2746,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                     rec.setdefault("stop_since", now.isoformat())
                     held = (now - datetime.fromisoformat(
                         rec["stop_since"])).total_seconds() / 60.0
-                    stop_confirmed = held >= ORPHAN_STOP_CONFIRM_MINUTES
+                    # 10 s of slack: the cycle is "every minute" but lands 55-65 s
+                    # apart, and a 2-minute confirmation read 1.9 at 15:02 on
+                    # 09-23 and sold a cycle later at -21.5% instead of -19.1%.
+                    stop_confirmed = held >= ORPHAN_STOP_CONFIRM_MINUTES - 10.0 / 60.0
                     if not stop_confirmed:
                         logger.info(
                             "ORPHAN %s %g/%g is %+.1f%%, past the %+.0f%% stop, "

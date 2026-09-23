@@ -79,6 +79,9 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_ORPHAN_STOP_CONFIRM_MINUTES", "Stop confirmation", G_0DTE, "float", "2",
             "Minutes the stop level must hold before it fires. 0 = immediate.",
             "min", 0, 30),
+    Setting("TRADING_ORPHAN_STOP_RESPECTS_INTRINSIC", "Stop waits while it pays at expiry", G_0DTE, "bool", "true",
+            "Hold the stop off while the spread would still pay more than its cost at expiry. "
+            "false = a plain stop on the price: at the stop level, it sells."),
     Setting("TRADING_ORPHAN_CREDIT_STOP_PCT", "Credit stop", G_0DTE, "float", "-600",
             "Stop for credit structures, as % of the credit collected.",
             "%", -2000, 0),

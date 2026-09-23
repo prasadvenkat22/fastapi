@@ -1450,7 +1450,17 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
         logger.exception("Position cross-check unavailable — reporting from orders alone.")
 
     book = {}
-    for o in orders:
+    # A close today that is LARGER than today's opens closed a position opened
+    # in an EARLIER session (/orders is session-only). 2026-09-23: MU 1070/1080
+    # x20 bought the day before, closed x20 at 10:28, re-bought x4 @ 6.05 at
+    # 11:12 -- netted within the session that was -16, so the pair fell back to
+    # the day-old cache and was managed as x20 @ 4.91. The excess is recorded
+    # here, the session count floors at zero, and the cache below is reduced
+    # by it.
+    closed_prior: dict = {}
+    # In time order: "a close larger than the opens so far" only means an
+    # earlier session if the opens it is compared against came first.
+    for o in sorted(orders, key=lambda o: str(o.get("created") or "")):
         syms = tuple(sorted(l["symbol"] for l in o["legs"]))
         if any(s in engine_symbols for s in syms):
             continue
@@ -1467,6 +1477,9 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             rec["credit"] = o["credit"]
         elif o["closing"]:
             rec["qty"] -= o["qty"]
+            if rec["qty"] < 0:
+                closed_prior[syms] = closed_prior.get(syms, 0) - rec["qty"]
+                rec["qty"] = 0
 
     # OVERNIGHT HOLDS. Tradier's /orders returns the CURRENT SESSION only, so
     # a position opened yesterday has no opening fill to rebuild from today and
@@ -1488,6 +1501,11 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             continue
         if any(s in engine_symbols for s in syms):
             continue
+        if closed_prior.get(syms):
+            left = int(rec.get("qty") or 0) - closed_prior[syms]
+            if left <= 0:
+                continue        # the earlier-session position was closed today
+            rec = dict(rec, qty=left)
         net = rec.get("net", 0.0)
         # A CACHED PAIR MAY HAVE BEEN ROLLED TODAY. The cache holds what the
         # pair cost when it was first reconstructed; a roll since then is in
@@ -2362,6 +2380,17 @@ def review(engine_symbols: "set | None" = None) -> list:
         # dropped when a structure closes -- handled at the close site -- not
         # because one pass failed to rebuild it.
         for st in structures:
+            # A DIFFERENT position on the same legs (re-bought after a close,
+            # or resized by hand) must not inherit the old one's peak: the
+            # stall and give-back read it. Reset and say so.
+            prev = state["structures"].get(st["key"])
+            if prev and (int(prev.get("qty") or 0) != int(st["qty"])
+                         or abs(float(prev.get("net") or 0) - float(st["entry"])) > 0.01):
+                if peaks.pop(st["key"], None) is not None:
+                    logger.info("ORPHAN %s: now x%s @ %.2f (was x%s @ %.2f) — a different "
+                                "position on these legs; its peak starts over.",
+                                st["key"], st["qty"], abs(float(st["entry"])),
+                                prev.get("qty"), abs(float(prev.get("net") or 0)))
             state["structures"][st["key"]] = {
                 "qty": st["qty"], "net": st["entry"],
                 "credit": st["credit"], "opened": st["opened"],

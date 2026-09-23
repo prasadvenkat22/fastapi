@@ -2756,8 +2756,22 @@ def review(engine_symbols: "set | None" = None) -> list:
                 if sread is not None:
                     spot_s = sread[0]
                     k = float(st["short_strike"])
-                    beyond = ((spot_s < k - ORPHAN_STRIKE_GUARD_BUFFER) if st["right"] == "C"
+                    # ARMED ONLY ONCE IT HAS BEEN PINNED. The guard is about a
+                    # spread SLIPPING OFF full value; one bought with the
+                    # underlying already short of its short strike never had
+                    # it, and at 11:13 the unarmed rule was three minutes from
+                    # selling MU 1070/1080 bought at 1078 (short 1080) for
+                    # being "through" a strike it had never crossed. Until
+                    # armed, the stop's break-even line covers the slide.
+                    if (spot_s > k) if st["right"] == "C" else (spot_s < k):
+                        if not rec.get("strike_armed"):
+                            logger.info("ORPHAN %s %g/%g: %s %.2f beyond the %g short strike "
+                                        "— strike guard armed.", st["root"], st["long_strike"],
+                                        st["short_strike"], st["root"], spot_s, st["short_strike"])
+                        rec["strike_armed"] = True
+                    breach = ((spot_s < k - ORPHAN_STRIKE_GUARD_BUFFER) if st["right"] == "C"
                               else (spot_s > k + ORPHAN_STRIKE_GUARD_BUFFER))
+                    beyond = breach and bool(rec.get("strike_armed"))
                 if beyond and _tape_against(st["right"], *sread):
                     rec.setdefault("strike_since", now.isoformat())
                     _skheld = (now - datetime.fromisoformat(

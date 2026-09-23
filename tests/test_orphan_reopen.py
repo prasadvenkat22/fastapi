@@ -56,3 +56,11 @@ def test_short_leg_that_pays_nothing_is_refused(monkeypatch):
     assert bad and "long call" in bad
     ok = d._passes(dict(base, w=10.0, lo=380, hi=390, cost=6.0, long_ask=9.0, short_bid=3.0))
     assert ok is None or "long call" not in ok
+
+
+def test_strike_guard_source_arms_only_after_pinned():
+    """Guard must not run on a spread that never crossed its short strike."""
+    import inspect
+    src = inspect.getsource(o.review)
+    assert 'rec["strike_armed"] = True' in src
+    assert 'breach and bool(rec.get("strike_armed"))' in src

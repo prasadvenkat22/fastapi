@@ -366,6 +366,16 @@ MACRO_SYMBOL = os.getenv("TRADING_DTE0_MACRO_SYMBOL", "QQQ")
 # a workaround for a biased instrument, not a principle.
 MACRO_REFUSE_BEARISH_ON = {"BULLISH", "VERY_BULLISH"}
 MACRO_REFUSE_BULLISH_ON = {"BEARISH", "VERY_BEARISH"}
+# THE ENGINE'S YIELD SPIKE, READ DIRECTLY (2026-09-23, section 222). The macro
+# verdict above refreshes every 15 minutes; the engine's own risk-off check
+# (nodes.py, 10Y >= TRADING_TNX_SPIKE_BPS above the session open) runs every
+# minute. On 09-23 the flash PMI hit at 09:45 and the 10Y was +4.3bp by 10:06
+# -- the engine went risk-off, this script never knew. A spike now refuses
+# BULLISH (call debit) structures outright; bearish ones stay allowed, which is
+# the direction a rates shock pays. 0 disables.
+YIELD_SPIKE_REFUSES_CALLS = os.getenv(
+    "TRADING_DTE0_YIELD_SPIKE_VETO", "true").lower() == "true"
+TNX_SPIKE_BPS = float(os.getenv("TRADING_TNX_SPIKE_BPS", "4.0") or 0)
 
 # DELTA -- THE TAPE TURNING, WHICH IS THE CASE A LEVEL GATE CANNOT SEE.
 #
@@ -824,6 +834,21 @@ def main() -> None:
                     "down.%s", MACRO_SYMBOL,
                     f"  (factors: {factors})" if factors else "")
 
+    # The engine's minute-by-minute yield spike, independent of the verdict.
+    yield_spike = None
+    if YIELD_SPIKE_REFUSES_CALLS and TNX_SPIKE_BPS > 0:
+        try:
+            from trading_engine.data_feed import fetch_tnx
+            tnx = fetch_tnx()
+            if tnx.change_bps >= TNX_SPIKE_BPS:
+                yield_spike = (f"10Y {tnx.level:.3f}% is {tnx.change_bps:+.1f}bp from the "
+                               f"{tnx.session_open:.3f}% open")
+                logger.info("YIELD SPIKE: %s (>= %.1fbp) — CALL debits refused, PUT debits "
+                            "allowed.", yield_spike, TNX_SPIKE_BPS)
+        except Exception:
+            logger.warning("10Y read failed — the yield-spike veto stands down this run.",
+                           exc_info=True)
+
     # Best surviving candidate per symbol per side.
     best: dict = {}
     flow_logged: set = set()
@@ -864,6 +889,12 @@ def main() -> None:
             # see the base rates beside MACRO_VETO), and the DELTA as the
             # intraday-turn guard (symmetric -- a turn is a turn either way).
             bullish = r.get("direction") != "bearish"
+            if bullish and yield_spike:
+                logger.info("%s %s %.0f/%.0f refused: the structure is bullish and yields "
+                            "are spiking (%s).", r["sym"], side.upper(),
+                            float(r["lo"]), float(r["hi"]), yield_spike)
+                rejects["bullish into a yield spike"] += 1
+                continue
             if MACRO_VETO and mv:
                 if mv in (MACRO_REFUSE_BULLISH_ON if bullish
                           else MACRO_REFUSE_BEARISH_ON):

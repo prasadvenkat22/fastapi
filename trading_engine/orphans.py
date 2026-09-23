@@ -439,6 +439,17 @@ ORPHAN_STRIKE_GUARD_BUFFER = float(os.getenv("TRADING_ORPHAN_STRIKE_GUARD_BUFFER
 # close. A bounce resets it -- the operator asked for protection "not in
 # haste". Below the short strike the armed strike guard normally acts first;
 # this is the backstop for positions that never got that far. NOT MEASURED.
+# THE PROFIT LOCK (2026-09-23, section 224). Operator: "cost + 10% of width,
+# no added discount; if that fails the stop loss kicks in." Once a same-day
+# debit's MARK (what selling realises) reaches entry + LOCK x width, the lock
+# arms; if the mark then falls back to that level, close. On MU 1065/1075 @
+# 6.33 that is 7.33 -- about +1.00 a spread kept. Judged on the mark on
+# purpose: the lock is a price the position has actually been sellable at,
+# with no expiry-value arithmetic. Below it the ordinary stop owns losses. It
+# ignores the drag guard (the operator chose the realised price over expiry
+# value). 0 disables. NOT MEASURED.
+ORPHAN_PROFIT_LOCK_WIDTH = float(os.getenv("TRADING_ORPHAN_PROFIT_LOCK_WIDTH", "0") or 0)
+
 ORPHAN_UNDER_STOP = os.getenv("TRADING_ORPHAN_UNDER_STOP", "false").lower() == "true"
 ORPHAN_UNDER_STOP_MINUTES = float(os.getenv("TRADING_ORPHAN_UNDER_STOP_MINUTES", "2") or 2)
 ORPHAN_UNDER_STOP_CUSHION = float(os.getenv("TRADING_ORPHAN_UNDER_STOP_CUSHION", "0") or 0)
@@ -2854,6 +2865,23 @@ def review(engine_symbols: "set | None" = None) -> list:
             else:
                 rec.pop("strike_since", None)
 
+            # THE PROFIT LOCK. See ORPHAN_PROFIT_LOCK_WIDTH.
+            lock_hit = False
+            if ORPHAN_PROFIT_LOCK_WIDTH > 0 and zero_dte and not st["credit"] and entry_abs:
+                _lw = abs(float(st["short_strike"]) - float(st["long_strike"]))
+                lock_px = round(entry_abs + ORPHAN_PROFIT_LOCK_WIDTH * _lw, 2)
+                if not rec.get("lock_armed") and value >= lock_px:
+                    rec["lock_armed"] = True
+                    logger.info("ORPHAN %s %g/%g: mark %.2f reached the %.2f lock (entry %.2f + "
+                                "%.0f%% of width) — profit lock armed.", st["root"],
+                                st["long_strike"], st["short_strike"], value, lock_px,
+                                entry_abs, ORPHAN_PROFIT_LOCK_WIDTH * 100)
+                if rec.get("lock_armed") and value <= lock_px and past_hold:
+                    lock_hit = True
+                    logger.info("ORPHAN %s %g/%g: mark %.2f back at the %.2f profit lock — closing "
+                                "to keep it.", st["root"], st["long_strike"], st["short_strike"],
+                                value, lock_px)
+
             # THE UNDERLYING STOP's clock. See ORPHAN_UNDER_STOP.
             under_held = False
             if ORPHAN_UNDER_STOP and zero_dte and past_hold and not st["credit"] and entry_abs:
@@ -3043,6 +3071,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # whether a POSITION is working; this one has already decided
                 # the account is not.
                 reason = "ACCOUNT_FLOOR"
+            elif lock_hit:
+                # Ahead of the intrinsic hold-off and the drag guard: the
+                # operator chose the realised price over expiry value here.
+                reason = "PROFIT_LOCK"
             elif strike_held:
                 # Ahead of the stop's intrinsic hold-off on purpose: that
                 # branch is what let the 1075 -> 1071 slide go unanswered.

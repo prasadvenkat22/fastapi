@@ -116,6 +116,9 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_ORPHAN_STRIKE_GUARD_BUFFER", "Short-strike guard buffer", G_0DTE, "float", "0",
             "Points past the short strike before the clock starts (0 = at the strike).",
             "pts", 0, 50),
+    Setting("TRADING_ORPHAN_PROFIT_LOCK_WIDTH", "Profit lock (x width over cost)", G_0DTE, "float", "0",
+            "Once the spread's market price reaches cost + this share of width, sell if it falls "
+            "back to that level (0.10 on a 10-wide @ 6.33 = 7.33). 0 disables.", "x width", 0, 1),
     Setting("TRADING_ORPHAN_UNDER_STOP", "Underlying stop (break-even line)", G_0DTE, "bool", "false",
             "Close a same-day debit when the UNDERLYING is past break-even (long strike +/- entry) "
             "plus the cushion, under an adverse VWAP, for the minutes below. Resets on a bounce."),

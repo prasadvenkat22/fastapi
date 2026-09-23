@@ -92,3 +92,10 @@ def test_under_stop_arm_first_and_prearm_stop_are_wired():
     assert 'rec["under_armed"] = True' in src
     assert "armed and uread is not None" in src
     assert "stop_pct = ORPHAN_PREARM_STOP_PCT" in src
+
+
+def test_profit_lock_is_wired_ahead_of_the_hold_off():
+    import inspect
+    src = inspect.getsource(o.review)
+    assert 'rec["lock_armed"] = True' in src
+    assert src.index('reason = "PROFIT_LOCK"') < src.index("zero_dte and ret_pct <= stop_pct and intrinsic_ok")

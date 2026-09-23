@@ -2386,7 +2386,15 @@ def review(engine_symbols: "set | None" = None) -> list:
             prev = state["structures"].get(st["key"])
             if prev and (int(prev.get("qty") or 0) != int(st["qty"])
                          or abs(float(prev.get("net") or 0) - float(st["entry"])) > 0.01):
-                if peaks.pop(st["key"], None) is not None:
+                old_rec = peaks.pop(st["key"], None)
+                if old_rec is not None:
+                    # KEEP THE ENGINE'S OWN ORDER. rec["ask"] is how the engine
+                    # knows a working order on these legs is its own resting
+                    # ask; dropping it with the peak made that order look like
+                    # a stranger's and switched the position to observation
+                    # only (2026-09-23 11:17, MU 1070/1080's 9.00 ask).
+                    if isinstance(old_rec.get("ask"), dict):
+                        peaks[st["key"]] = {"ask": old_rec["ask"]}
                     logger.info("ORPHAN %s: now x%s @ %.2f (was x%s @ %.2f) — a different "
                                 "position on these legs; its peak starts over.",
                                 st["key"], st["qty"], abs(float(st["entry"])),

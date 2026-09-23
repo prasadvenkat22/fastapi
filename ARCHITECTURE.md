@@ -1195,7 +1195,10 @@ behind `require_role("admin", "trader", "user")`, and a sign-up cannot log in
 before its email is verified, so a token means registered and approved. It
 sends news questions to `news_agent` and everything else to Gemini with a
 fixed system prompt and no tools: never the trading-database agent, positions
-or SQL. 2000-character input, nginx `chat` zone (20 a minute per IP). The
+or SQL. 2000-character input, nginx `chat` zone (20 a minute per IP). A
+Gemini 429/5xx or timeout is retried once after 1.5 s; a second failure is
+logged with its status and answered 503 "busy, try again", never a bare 502
+(the first live chat hit exactly that blip on 2026-09-23). The
 trading chat is the AI lab (`/api/genai/agent/ask`, admin and trader; uploads and direct prompt admin only). The widget shows
 anonymous visitors a sign-up prompt, and only a desk admin gets file uploads.
 

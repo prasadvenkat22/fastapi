@@ -410,6 +410,23 @@ STALL_MIN_GAIN_PCT = float(
 TAPE_EXIT_RESPECTS_INTRINSIC = os.getenv(
     "TRADING_ORPHAN_TAPE_EXIT_RESPECTS_INTRINSIC", "true").lower() == "true"
 
+# THE SHORT-STRIKE GUARD (2026-09-23, section 219). A same-day debit spread
+# is worth its full width while the underlying is beyond the SHORT strike and
+# loses expiry value every point after that. The stop waits for intrinsic to
+# fall under the ENTRY (MU 1065/1075 @ 6.15: MU under ~1071) and the tape exit
+# now waits the same way, so nothing acted in the 1075 -> 1071 slide.
+#
+# This closes when the underlying is on the wrong side of the short strike
+# (minus BUFFER points) AND under a VWAP moving against the structure, for
+# MINUTES continuous minutes. Either condition failing for a minute -- a bounce
+# back over the strike, a VWAP that flattens -- resets the clock, so a wiggle
+# through the strike does not sell. Sells at market (cancelling the engine's
+# own ask first), i.e. still at a time-value discount: a small loss taken to
+# avoid a larger one. Operator decision, live; NOT MEASURED -- replay pending.
+ORPHAN_STRIKE_GUARD = os.getenv("TRADING_ORPHAN_STRIKE_GUARD", "false").lower() == "true"
+ORPHAN_STRIKE_GUARD_MINUTES = float(os.getenv("TRADING_ORPHAN_STRIKE_GUARD_MINUTES", "3") or 3)
+ORPHAN_STRIKE_GUARD_BUFFER = float(os.getenv("TRADING_ORPHAN_STRIKE_GUARD_BUFFER", "0") or 0)
+
 ORPHAN_OTM_STOP = os.getenv(
     "TRADING_ORPHAN_OTM_STOP", "true").lower() == "true"
 ORPHAN_OTM_STOP_MINUTES = float(
@@ -2694,6 +2711,38 @@ def review(engine_symbols: "set | None" = None) -> list:
             else:
                 rec.pop("slow_since", None)
 
+            # THE SHORT-STRIKE GUARD's clock. See ORPHAN_STRIKE_GUARD.
+            strike_held = False
+            if ORPHAN_STRIKE_GUARD and zero_dte and past_hold and not st["credit"]:
+                sread = _session_tape(st["root"])
+                beyond = False
+                if sread is not None:
+                    spot_s = sread[0]
+                    k = float(st["short_strike"])
+                    beyond = ((spot_s < k - ORPHAN_STRIKE_GUARD_BUFFER) if st["right"] == "C"
+                              else (spot_s > k + ORPHAN_STRIKE_GUARD_BUFFER))
+                if beyond and _tape_against(st["right"], *sread):
+                    rec.setdefault("strike_since", now.isoformat())
+                    _skheld = (now - datetime.fromisoformat(
+                        rec["strike_since"])).total_seconds() / 60.0
+                    strike_held = _skheld >= ORPHAN_STRIKE_GUARD_MINUTES
+                    if not strike_held:
+                        logger.info(
+                            "ORPHAN %s %g/%g: %s %.2f through the %g short strike under a "
+                            "%s VWAP %.2f for %.0f of %.0f minutes — strike guard watching.",
+                            st["root"], st["long_strike"], st["short_strike"], st["root"],
+                            sread[0], st["short_strike"],
+                            "falling" if st["right"] == "C" else "rising", sread[1],
+                            _skheld, ORPHAN_STRIKE_GUARD_MINUTES)
+                elif rec.pop("strike_since", None):
+                    logger.info("ORPHAN %s %g/%g: strike guard clock reset (%s).",
+                                st["root"], st["long_strike"], st["short_strike"],
+                                "no tape reading" if sread is None else
+                                "%s %.2f back on the right side of %g, or VWAP %.2f not against it"
+                                % (st["root"], sread[0], st["short_strike"], sread[1]))
+            else:
+                rec.pop("strike_since", None)
+
             # THE TAPE EXIT's clock. See ORPHAN_TAPE_EXIT. One continuous
             # stretch of the underlying on the wrong side of a VWAP moving
             # against the structure; any minute that is not that -- including
@@ -2842,6 +2891,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # whether a POSITION is working; this one has already decided
                 # the account is not.
                 reason = "ACCOUNT_FLOOR"
+            elif strike_held:
+                # Ahead of the stop's intrinsic hold-off on purpose: that
+                # branch is what let the 1075 -> 1071 slide go unanswered.
+                reason = "STRIKE_GUARD"
             elif otm_held:
                 # NO CONFIRMATION, deliberately. The mark stops wait to tell a
                 # wick from a trend; this is not reading the mark at all, and

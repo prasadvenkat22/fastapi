@@ -2772,7 +2772,8 @@ def review(engine_symbols: "set | None" = None) -> list:
                     rec.setdefault("later_stop_since", now.isoformat())
                     _lheld = (now - datetime.fromisoformat(
                         rec["later_stop_since"])).total_seconds() / 60.0
-                    later_stop_held = _lheld >= LP["stop_minutes"]
+                    # Same 10 s of cycle slack as the same-day stop's confirmation.
+                    later_stop_held = _lheld >= LP["stop_minutes"] - 10.0 / 60.0
                     if not later_stop_held:
                         logger.info(
                             "ORPHAN %s %g/%g has been %+.1f%% for %.0f of the %.1f "

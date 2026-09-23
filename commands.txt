@@ -65,6 +65,9 @@ tset set TRADING_ORPHAN_ASK_FLOOR_WIDTH=0.80           # floor 80% of width (0 =
 # under an adverse VWAP for N continuous minutes (resets on a bounce).
 tset set TRADING_ORPHAN_STRIKE_GUARD=true TRADING_ORPHAN_STRIKE_GUARD_MINUTES=3
 tset set TRADING_ORPHAN_STRIKE_GUARD_BUFFER=0          # points past the strike before the clock starts
+# Profit lock: once the spread's MARK reaches cost + X of width, sell if it
+# falls back there (0.10 on a 10-wide @ 6.33 = 7.33). Losses: the -10% stop.
+tset set TRADING_ORPHAN_PROFIT_LOCK_WIDTH=0.10
 # Underlying stop: close when the UNDERLYING is past break-even (+cushion)
 # under an adverse VWAP for N minutes -- judged on MU, not the spread's mark.
 tset set TRADING_ORPHAN_UNDER_STOP=true TRADING_ORPHAN_UNDER_STOP_MINUTES=2

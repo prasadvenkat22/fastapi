@@ -13627,3 +13627,22 @@ Live overrides at the end of the 09-23 session changes (trading_overrides.env):
     TRADING_ORPHAN_PREARM_STOP_PCT=0
     TRADING_ORPHAN_LATER_STOP_PCT=0
     TRADING_ORPHAN_LATER_TARGET_PCT=0.9
+
+
+224. PROFIT LOCK AT COST + 10% OF WIDTH, ON THE REALISED PRICE  (2026-09-23 14:55)
+
+The underlying stop at break-even + 20% of width sold MU 1065/1075 x12 @ 6.33 at
+14:40-14:41 for -352: MU 1072.4 was under the 1073.33 line, the spread would
+have paid 7.42 at expiry, but the market bid ~6.0 because of the short leg's
+remaining time value. The operator wants no expiry-value arithmetic: "cost +
+10% of width with no added discount ... if that fails the stop loss kicks in."
+
+TRADING_ORPHAN_PROFIT_LOCK_WIDTH=0.10: once a same-day debit's MARK (what a sale
+realises) reaches entry + 10% of width (7.33 on that position), the lock arms;
+if the mark falls back to that level, close. Losses stay with the ordinary -10%
+mark stop (2-minute confirmation, held off while the underlying is above
+break-even). The underlying stop is switched OFF (TRADING_ORPHAN_UNDER_STOP=false;
+code kept). Consequence, stated: between break-even and the lock nothing sells
+a position that never reached cost + 10% of width until the -10% stop or the
+15:45 flatten -- today's MU marks peaked ~6.9 on a 6.33 entry, i.e. below the
+7.33 lock. Not measured; replay after the close with 218-223.

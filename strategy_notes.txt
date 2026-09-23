@@ -13438,3 +13438,28 @@ an override applies to positions already open -- tightening a stop can close
 one on the next minute. Every change lands in trading_overrides.log with who
 and when, so a later section can line a result up against the setting that
 produced it.
+
+
+217. A MANUAL LIMIT SWITCHED OFF MU'S MANAGEMENT; THE 90% ASK NOW TUNABLE  (2026-09-23)
+
+WHAT HAPPENED. MU 260923 C 1070/1080 x20, entry 4.91, sat at full intrinsic
+(10.00) from the open to ~10:17 while it marked 5.80-7.00. Every cycle logged
+"[observation only]" and nothing acted: a manual limit sell at 5.00 placed at
+08:50 (no tag) rested on its legs until it filled at 10:28. A working order the
+engine did not place makes the ladder stand down (in_flight, built after the
+09-04 double-sell hazard), so the stop, the ask and the 15:45 flatten were all
+off for 98 minutes. The same happened to SNDK 1850/1910 (manual 21.75 limit,
+08:52 -> filled 09:49), which is why the weekly-stop change at 09:39 never
+mattered. The log named none of this; it does now, every cycle.
+
+THE FEATURE WAS THERE. Ask mode (measured 2026-09-19 over 46 positions: pinned
+spreads bid a median 59% of width in the first half hour, 72-79% midday) was
+on at 0.88. It also had a hole: its floor defaulted to the target level,
+entry x 1.70, which is above the width for any entry over ~59% of width -- the
+MU 1065/1075 bought at 6.15 at 10:33 would have had NO ask and, with the
+ceiling at 0 and +70% unreachable, no profit exit at all.
+
+SET LIVE (overrides, 10:39): ASK=true, ASK_START_WIDTH 0.90 (operator), ASK_FLOOR_WIDTH
+0.80 (operator, from the midday-bid measurement). First fire 10:40: MU 1065/1075
+x16 resting at 9.00, floor 8.00. Not measured: whether 0.90 fills as often as
+0.88 did; the 09-19 sample saw 90%+ bids in one cycle in five from 12:00-14:00.

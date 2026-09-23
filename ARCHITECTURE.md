@@ -1390,6 +1390,14 @@ Precedence: override > `.env.production` > code default. Going live
 Writers: `PUT /trading/settings` (role `admin`), `scripts/settings.py`
 (`list/get/set/unset/reset/log`), both validating before a single atomic write.
 
+**Ask mode is the auto-managed 0DTE sell limit** (`TRADING_ORPHAN_ASK_*`,
+tunable since section 217): on a pinned spread it rests a sell at START x
+width, holds while the underlying is at or above session VWAP, steps down
+while it is below, never under FLOOR, and every loss rule and the flatten stay
+live. A manual limit on the same legs switches all of that off (in_flight);
+the log now says so every cycle: "an order this engine did not place is
+working on its legs".
+
 Current settings:
 
 ```

@@ -13531,3 +13531,11 @@ beyond the short strike since the position opened. Unarmed, it had been three
 minutes from selling MU 1070/1080 bought at 1078 (short 1080). It was switched
 off 11:13-11:38 for that reason and back on with the fix; first cycle armed
 MU 1065/1075 (MU 1076.27) and left 1070/1080 to the stop's break-even line.
+
+Addendum to 220 (11:50): the engine's MU 1065/1075 ask filled 10 of 16 at 8.00
+(the floor) at 11:21:42, +1,850 on a 6.15 entry, and was NOT booked to
+TradeHistory: a new-peak update REPLACED the orphan record instead of updating
+it, dropping rec["ask"] (and with it the strike-guard arming and rule clocks),
+so the engine never checked that order again. Pre-existing; exposed today by
+the 11:17 peak reset. Fixed (update in place). The missed row is to be booked
+by hand with orphans._book (ASK, x10, 6.15 -> 8.00).

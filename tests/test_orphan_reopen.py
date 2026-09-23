@@ -36,3 +36,23 @@ def test_prior_session_position_partly_closed_keeps_the_rest(monkeypatch):
     got = _run(monkeypatch, orders, {L: 15, S: -15}, cache)
     st = got[f"{L}|{S}"]
     assert st["qty"] == 15 and abs(abs(st["entry"]) - 4.91) < 1e-6
+
+
+def test_short_leg_that_pays_nothing_is_refused(monkeypatch):
+    """TSLA 372.5/417.5 on 2026-09-23: long 13.53, short 0.20 (1.5%)."""
+    import importlib, sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+    d = importlib.import_module("dte0_trade")
+    monkeypatch.setattr(d, "MIN_SHORT_PAYS_PCT", 10.0)
+    monkeypatch.setattr(d, "MIN_EW", 0.2)
+    monkeypatch.setattr(d, "MAX_EW", 0.8)
+    monkeypatch.setattr(d, "MAX_SHORT_ATR", 9.0)
+    monkeypatch.setattr(d, "MAX_EXTRINSIC", 100.0)
+    monkeypatch.setattr(d, "MAX_TARGET_ATR", 9.0)
+    monkeypatch.setattr(d, "TARGET_PCT", 30.0)
+    monkeypatch.setattr(d, "BOOK", "dte0")
+    base = dict(w=45.0, spot=384.38, lo=372.5, hi=417.5, direction="bullish", atr=13.3)
+    bad = d._passes(dict(base, cost=13.33, long_ask=13.53, short_bid=0.20))
+    assert bad and "long call" in bad
+    ok = d._passes(dict(base, w=10.0, lo=380, hi=390, cost=6.0, long_ask=9.0, short_bid=3.0))
+    assert ok is None or "long call" not in ok

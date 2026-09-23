@@ -13500,3 +13500,28 @@ The trade it makes: it sells at the mark, still at a time-value discount, so
 a fire near the strike is roughly flat to a small loss, taken to avoid the
 stop's later, larger one. NOT MEASURED. Replay with 218's guard and the
 bounce-reset question, against 211's tape-exit result, after the close.
+
+
+220. THE SHORT LEG MUST PAY SOMETHING  (2026-09-23)
+
+The 09:50 weekly rotation bought TSLA 260925 C 372.5/417.5 x1 @ 13.33: long
+filled 13.53, short 417.5 sold for 0.20 -- 1.5% of the long, 2.49 ATR out, bid
+0.09 by 11:20. Not a naked short (max loss is still the debit), but a long
+call in a spread's clothes: the short caps nothing price will reach, and every
+width-based exit is unreachable (0.90 of a 45 width is 40.50). The 0DTE book
+limits the short to 0.40 ATR; the weekly book dropped that limit on purpose
+(section 198's dry runs: a daily ATR over five sessions rejected everything)
+and nothing replaced it on PRICE.
+
+The test is now what the short PAYS, not how far away it is: a debit whose
+short-leg bid is under TRADING_PICK_MIN_SHORT_PAYS_PCT (10) percent of the
+long leg's ask is refused, both books. weekly_pick rows carry long_ask /
+short_bid for it. 10 is an operator-level judgment, not measured: today's MU
+1065/1075 pick was ~49%, the TSLA one 1.5%. The open TSLA position is not
+touched by this; it runs on the weekly ladder.
+
+Also today: a pair closed today from an earlier session and re-bought smaller
+was managed at the day-old cache's size and cost (MU 1070/1080 x20 @ 4.91 vs
+the real x4 @ 6.05) -- fixed; and a peak reset had dropped the engine's own
+ask record, making its 9.00 order look like a stranger's -- fixed forward, the
+live order needs one manual cancel.

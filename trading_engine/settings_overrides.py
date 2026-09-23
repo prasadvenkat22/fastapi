@@ -195,6 +195,9 @@ REGISTRY: tuple[Setting, ...] = (
             "Cheapest debit accepted, as a share of width.", "x width", 0, 1),
     Setting("TRADING_PICK_MAX_ENTRY_WIDTH", "0DTE max entry (×width)", G_ENTRY, "float", "0.75",
             "Dearest debit accepted, as a share of width.", "x width", 0, 1),
+    Setting("TRADING_PICK_MIN_SHORT_PAYS_PCT", "Short leg must pay (both books)", G_ENTRY, "float", "10",
+            "Reject a debit spread whose short-leg bid is under this % of the long leg's ask "
+            "(a worthless short makes it a long call). 0 disables.", "%", 0, 60),
     Setting("TRADING_WEEKLY_MIN_PWIN", "Weekly min Pwin", G_ENTRY, "float", "0.45",
             "Weekly picks need at least this win probability.", "", 0, 1),
 )

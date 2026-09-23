@@ -429,13 +429,16 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
                 if credit <= 0.05 or credit >= w:
                     continue
                 cost = w - credit          # MAX RISK, the common denominator
+                leg_long_ask = leg_short_bid = None
             elif calls:                    # long lo, short hi -- buy ask, sell bid
                 cost = q[lo][1] - q[hi][0]
+                leg_long_ask, leg_short_bid = q[lo][1], q[hi][0]
                 long_k, short_k, ivl, ivs_ = lo, hi, q[lo][3], q[hi][3]
                 payoff = lambda p: np.clip(p - lo, 0, w) - cost
                 room = (hi - spot) / a14   # OTM room above the short strike
             else:                          # PUT debit: long hi, short lo
                 cost = q[hi][1] - q[lo][0]
+                leg_long_ask, leg_short_bid = q[hi][1], q[lo][0]
                 long_k, short_k, ivl, ivs_ = hi, lo, q[hi][3], q[lo][3]
                 payoff = lambda p: np.clip(hi - p, 0, w) - cost
                 room = (spot - lo) / a14
@@ -522,6 +525,9 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
             p_imp = (1.0 - dh) if structure == "credit" else dh
             out.append(dict(
                 sym=sym, lo=lo, hi=hi, w=w, cost=cost, spot=spot, atr=a14, rv=rv,
+                # The two prices the debit is made of, so a caller can see
+                # what the short leg actually pays (dte0_trade's short-leg floor).
+                long_ask=leg_long_ask, short_bid=leg_short_bid,
                 iv=atm_iv, exp=exp, days=fwd_days,
                 news=(nv[0] if nv else None), news_w=news_w,
                 # The CONFIDENCE, not just the verdict. Callers that gate on

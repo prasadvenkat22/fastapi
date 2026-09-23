@@ -85,6 +85,7 @@ tset set TRADING_DTE0_MAX_BUDGET=1500 TRADING_WEEKLY_MAX_BUDGET=5000
 tset set TRADING_DTE0_ROTATE_CUTOFF=11:30 TRADING_DTE0_MAX_ROTATIONS=3
 tset set TRADING_DTE0_ROTATE_COOLDOWN_MIN=30
 tset set TRADING_WEEKLY_MIN_PWIN=0.45
+tset set TRADING_PICK_MIN_SHORT_PAYS_PCT=10            # short-leg bid >= 10% of long ask, both books (0 = off)
 
 (The numbers above are examples of the syntax, not recommendations. Check
 `tset list` first -- several of these are already set in .env.production.)

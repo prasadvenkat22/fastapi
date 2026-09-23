@@ -222,6 +222,17 @@ MAX_TARGET_ATR = float(os.getenv("TRADING_PICK_MAX_TARGET_ATR", "0.30"))
 # A short strike beyond that is not a short leg, it is a decoration that costs
 # upside. 0.40 sits in the middle of the three.
 MAX_SHORT_ATR = float(os.getenv("TRADING_PICK_MAX_SHORT_ATR", "0.40"))
+# THE SHORT LEG MUST PAY SOMETHING (2026-09-23, section 220). Both books.
+#
+# The weekly book dropped the short-strike ATR limit (a daily ATR is the wrong
+# yardstick over five sessions), and nothing replaced it on PRICE: at 09:50 it
+# bought TSLA 372.5/417.5 x1, long filled 13.53, short 417.5 sold for 0.20 --
+# 1.5% of the long, 2.49 ATR out. That is a long call in a spread's clothes:
+# the short caps nothing it will reach, and every width-based exit (90% of a
+# 45 width is 40.50) is unreachable. Distance was the wrong test anyway; what
+# matters is what the short leg PAYS. Its bid must be at least this percent of
+# the long leg's ask. Operator decision, unmeasured; 0 disables.
+MIN_SHORT_PAYS_PCT = float(os.getenv("TRADING_PICK_MIN_SHORT_PAYS_PCT", "10") or 0)
 TARGET_PCT = float(os.getenv("TRADING_ORPHAN_TARGET_RETURN_PCT", "30.0"))
 
 # THE MORNING'S NEWS READ, AS A VETO ON DIRECTION.
@@ -464,6 +475,13 @@ def _passes(r: dict) -> "str | None":
     move_atr = abs(tgt_spot - spot) / atr
     if move_atr > MAX_TARGET_ATR:
         return f"target needs {move_atr:.2f} ATR, above {MAX_TARGET_ATR:.2f}"
+    # What the short leg PAYS. See MIN_SHORT_PAYS_PCT.
+    la, sb = r.get("long_ask"), r.get("short_bid")
+    if MIN_SHORT_PAYS_PCT > 0 and la is not None and sb is not None and float(la) > 0:
+        pays = float(sb) / float(la) * 100.0
+        if pays < MIN_SHORT_PAYS_PCT:
+            return (f"short leg bid {float(sb):.2f} is {pays:.1f}% of the {float(la):.2f} long, "
+                    f"under {MIN_SHORT_PAYS_PCT:.0f}% — a long call, not a spread")
     # The short leg has to be somewhere price can plausibly reach, or selling
     # it earns nothing and only caps the upside.
     short_k = float(r["hi"]) if long_k == float(r["lo"]) else float(r["lo"])

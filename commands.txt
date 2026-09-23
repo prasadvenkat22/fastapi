@@ -55,6 +55,16 @@ tset set TRADING_ORPHAN_CEILING=0.90                  # or at 90% of width
 tset set TRADING_ORPHAN_FORCE_CLOSE=15:45             # flatten same-day positions (ET)
 tset set TRADING_ORPHAN_HOLD_UNTIL=09:35              # no loss-taking before (ET)
 
+# --- 0DTE resting sell limit ("ask mode"): auto-managed, follows the underlying ---
+# Rests a sell at START x width on a pinned spread; holds while the underlying
+# is at/above session VWAP, steps down STEP every STEP_MINUTES while below,
+# never under FLOOR; stops and the flatten stay live and cancel it to act.
+tset set TRADING_ORPHAN_ASK=true TRADING_ORPHAN_ASK_START_WIDTH=0.90
+tset set TRADING_ORPHAN_ASK_FLOOR_WIDTH=0.80           # floor 80% of width (0 = entry x (1+target))
+# DO NOT also place a manual limit on the same legs: a working order the
+# engine did not place switches off its stop, ask and 15:45 flatten
+# (logged every cycle as "an order this engine did not place is working").
+
 # --- Weekly (later-expiry) ladder ---
 tset set TRADING_ORPHAN_LATER_STOP_PCT=-45 TRADING_ORPHAN_LATER_STOP_MINUTES=15
 tset set TRADING_ORPHAN_LATER_STALL_ARM=25            # stall arms once gain reaches +25%

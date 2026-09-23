@@ -2951,6 +2951,18 @@ def review(engine_symbols: "set | None" = None) -> list:
                     "on its legs — standing down rather than selling it twice.",
                     st["root"], st["long_strike"], st["short_strike"], reason,
                 )
+            elif in_flight:
+                # SAY IT EVERY CYCLE, not only when a rule wants to act. On
+                # 2026-09-23 a manual limit placed at 08:50 on MU 1070/1080
+                # rested until 10:28 and the log said only "[observation
+                # only]" -- nothing named the order as the reason the stop,
+                # the ask and the flatten were all off.
+                logger.warning(
+                    "ORPHAN %s %g/%g: an order this engine did not place is working "
+                    "on its legs — stop, stall, ask and the 15:45 flatten are OFF for "
+                    "it until that order fills or is cancelled.",
+                    st["root"], st["long_strike"], st["short_strike"],
+                )
             manageable = (MANAGE_ORPHANS
                           and not in_flight
                           and (floor_breached or expires_today or later_target_hit

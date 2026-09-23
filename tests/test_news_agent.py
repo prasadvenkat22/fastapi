@@ -145,3 +145,18 @@ def test_stored_headlines_query_runs(db_available):
     assert isinstance(rows, list)
     for r in rows:
         assert set(r) >= {"title", "source", "published", "url", "sentiment"}
+
+
+def test_trader_gets_the_trading_chat_but_not_the_admin_genai_routes(client, monkeypatch):
+    import GENAI.router as gr
+
+    async def fake_supervisor(query, use_db):
+        return {"final_answer": "book answer", "db_answer": "rows", "db_sql": "SELECT 1"}
+    monkeypatch.setattr(gr, "run_supervisor", fake_supervisor)
+    app, dep = _as_role("trader")
+    try:
+        r = client.post("/api/genai/agent/ask", json={"query": "realised P&L this week"})
+        assert r.status_code == 200 and r.json()["final_answer"] == "book answer"
+        assert client.post("/api/genai/llm", json={"prompt": "hi"}).status_code == 403
+    finally:
+        app.dependency_overrides.pop(dep, None)

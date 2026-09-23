@@ -9,7 +9,7 @@ approved".
 THIS IS NOT THE TRADING CHAT. It never reaches the trading-database agent,
 positions, trades or any SQL: a news question is answered by the news agent
 from stored RSS/Polygon headlines, anything else by Gemini with no tools. The
-trading chat is the AI lab (/api/genai/agent/ask), admin-only, unchanged.
+trading chat is the AI lab (/api/genai/agent/ask), admin and trader only.
 """
 
 from typing import List, Literal, Optional

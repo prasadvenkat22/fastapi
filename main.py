@@ -79,11 +79,14 @@ app.include_router(trading_router.router, dependencies=[Depends(require_trading(
 # Protected as much for the bill as for the data -- every call spends
 # Anthropic and Voyage credit.
 app.include_router(genai_router.router, dependencies=[Depends(require_admin())])
+# The trading chat (/api/genai/agent/ask, the AI lab's "Ask the book"): the
+# trading-desk roles, admin and trader. A site sign-up ('user') gets 403.
+app.include_router(genai_router.trading_chat_router, dependencies=[Depends(require_trading())])
 
 # The site chat widget: any signed-in, verified account (a sign-up cannot log
 # in before its email is verified). Anonymous visitors get 401 -- no AI at
 # all. News from the feeds or a tool-less model answer; never the trading
-# tables, which stay behind the admin-only /api/genai above.
+# tables, which stay behind /api/genai above (trading chat: admin and trader).
 app.include_router(genai_chat_router.router,
                    dependencies=[Depends(require_role("admin", "trader", "user"))])
 

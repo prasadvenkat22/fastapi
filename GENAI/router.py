@@ -20,6 +20,10 @@ except Exception:
         PdfReader = None
 
 router = APIRouter(prefix="/api/genai", tags=["GENAI"])
+# The trading chat ("Ask the book") on its own router, so main.py can open it
+# to traders (2026-09-23) while uploads, RAG and the direct prompt above stay
+# admin-only. Same prefix; the paths do not overlap.
+trading_chat_router = APIRouter(prefix="/api/genai", tags=["GENAI (trading chat)"])
 
 
 class QueryResponse(BaseModel):
@@ -212,7 +216,7 @@ class AskRequest(BaseModel):
     query: str
 
 
-@router.post("/agent/ask", response_model=AgentUploadResponse)
+@trading_chat_router.post("/agent/ask", response_model=AgentUploadResponse)
 async def genai_agent_ask(request: AskRequest):
     """Ask the trading book a question. No upload: the supervisor routes to the
     trading-database agent, which has Gemini write one guarded read-only SELECT

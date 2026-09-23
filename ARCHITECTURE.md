@@ -1160,7 +1160,7 @@ profit-stall alerts, which `send_alert()` routes and `ALERT_EMAIL` receives.
 
 ## GENAI: the agents run on Gemini and one of them reads the trading database
 
-`/api/genai/*` (admin bearer token) is the RAG and multi-agent surface. Since
+`/api/genai/*` (admin bearer token; the trading chat `/agent/ask` is admin or trader since 2026-09-23) is the RAG and multi-agent surface. Since
 2026-09-19 (section 200) every model call in it goes to **gemini-3.1-flash-lite
 over the same REST endpoint and `GEMINI_API_KEY` the news grader uses**
 (`GENAI/gemini_llm.py`; `GeminiChat` is a LangChain chat model over that call,
@@ -1196,7 +1196,7 @@ before its email is verified, so a token means registered and approved. It
 sends news questions to `news_agent` and everything else to Gemini with a
 fixed system prompt and no tools: never the trading-database agent, positions
 or SQL. 2000-character input, nginx `chat` zone (20 a minute per IP). The
-trading chat stays the AI lab (`/api/genai/*`, admin only). The widget shows
+trading chat is the AI lab (`/api/genai/agent/ask`, admin and trader; uploads and direct prompt admin only). The widget shows
 anonymous visitors a sign-up prompt, and only a desk admin gets file uploads.
 
 ## HTTP: the screener is callable

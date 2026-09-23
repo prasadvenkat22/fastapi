@@ -396,6 +396,20 @@ STALL_MIN_GAIN_PCT = float(
 # (30-75% of width) permits such entries, so this can churn one. Watch for an
 # OTM_STOP firing within a minute of an entry -- that is this, and it is the
 # first thing to check if the rule looks wrong.
+# THE TAPE EXIT RESPECTS INTRINSIC, like the stop (2026-09-23, section 218).
+#
+# MU 1065/1075 x16 at 10:47: MU 1076 under a falling VWAP, intrinsic 10.00
+# against a 6.15 entry, marked 5.80 (-5.7%) on short-leg time premium. The
+# tape clock was 9 of 15 minutes from selling a structure worth 10.00 at
+# expiry for 5.80. The stop already declines exactly this (STOP_RESPECTS_
+# INTRINSIC); the tape exit did not, and was also blocked or not depending on
+# whether the mark happened to be under the stop level that minute.
+#
+# NOT MEASURED against section 211's +9,891; operator decision, live. Once
+# intrinsic falls through the entry the tape clock runs as before.
+TAPE_EXIT_RESPECTS_INTRINSIC = os.getenv(
+    "TRADING_ORPHAN_TAPE_EXIT_RESPECTS_INTRINSIC", "true").lower() == "true"
+
 ORPHAN_OTM_STOP = os.getenv(
     "TRADING_ORPHAN_OTM_STOP", "true").lower() == "true"
 ORPHAN_OTM_STOP_MINUTES = float(
@@ -2686,7 +2700,17 @@ def review(engine_symbols: "set | None" = None) -> list:
             # a minute with no reading -- starts it over.
             tape_held = False
             tape_read = None
-            if (ORPHAN_TAPE_EXIT and zero_dte and past_hold and not st["credit"]
+            if (ORPHAN_TAPE_EXIT and TAPE_EXIT_RESPECTS_INTRINSIC and intrinsic_ok
+                    and zero_dte and not st["credit"]):
+                # See TAPE_EXIT_RESPECTS_INTRINSIC: it pays at expiry, so the
+                # tape is not a reason to sell it at a time-value discount.
+                if rec.pop("tape_since", None):
+                    logger.info(
+                        "ORPHAN %s %g/%g: tape clock reset — intrinsic %.2f is above the "
+                        "%.2f entry, so the tape exit does not apply while it pays at expiry.",
+                        st["root"], st["long_strike"], st["short_strike"],
+                        parts_iv[0], abs(st["entry"]))
+            elif (ORPHAN_TAPE_EXIT and zero_dte and past_hold and not st["credit"]
                     and (value < abs(st["entry"]) or not ORPHAN_TAPE_EXIT_LOSERS_ONLY)):
                 tape_read = _session_tape(st["root"])
                 if tape_read is not None and _tape_against(st["right"], *tape_read):

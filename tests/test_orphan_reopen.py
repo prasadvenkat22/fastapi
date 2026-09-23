@@ -71,3 +71,16 @@ def test_new_peak_updates_the_record_instead_of_replacing_it():
     src = inspect.getsource(o.review)
     assert "rec = dict(rec, peak_iv=iv_now" in src
     assert 'rec = {"peak_iv": iv_now, "peak_at": now.isoformat(),\n                       "peak_entry": entry_abs}\n            elif' not in src
+
+
+def test_under_stop_line_is_break_even_plus_cushion():
+    # MU 1070/1080 x18 @ 5.64 -> 1075.64; MU 1065/1075 x19 @ 6.46 -> 1071.46
+    assert abs(o.under_stop_line("C", 1070.0, 5.64) - 1075.64) < 1e-9
+    assert abs(o.under_stop_line("C", 1065.0, 6.46, 1.0) - 1072.46) < 1e-9
+    assert abs(o.under_stop_line("P", 400.0, 3.0) - 397.0) < 1e-9
+
+
+def test_under_stop_is_ahead_of_the_intrinsic_hold_off():
+    import inspect
+    src = inspect.getsource(o.review)
+    assert src.index('reason = "UNDER_STOP"') < src.index("zero_dte and ret_pct <= stop_pct and intrinsic_ok")

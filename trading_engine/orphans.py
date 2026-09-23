@@ -427,6 +427,33 @@ ORPHAN_STRIKE_GUARD = os.getenv("TRADING_ORPHAN_STRIKE_GUARD", "false").lower() 
 ORPHAN_STRIKE_GUARD_MINUTES = float(os.getenv("TRADING_ORPHAN_STRIKE_GUARD_MINUTES", "3") or 3)
 ORPHAN_STRIKE_GUARD_BUFFER = float(os.getenv("TRADING_ORPHAN_STRIKE_GUARD_BUFFER", "0") or 0)
 
+# THE UNDERLYING STOP (2026-09-23, section 221). Judge a same-day debit by the
+# UNDERLYING's price, not the spread's mark.
+#
+# MU 1070/1080 x18 @ 5.64 (break-even MU 1075.64): the intrinsic hold-off kept
+# the mark stop off at -12% and -18% while MU was above break-even, released at
+# -20% when it crossed, and the 2-minute mark confirmation sold at -30%
+# (-2,906). Nothing watched MU at the line itself. This does: MU on the wrong
+# side of break-even (long strike +/- entry) plus CUSHION points, AND under a
+# VWAP moving against it (REQUIRE_TAPE), for MINUTES continuous minutes ->
+# close. A bounce resets it -- the operator asked for protection "not in
+# haste". Below the short strike the armed strike guard normally acts first;
+# this is the backstop for positions that never got that far. NOT MEASURED.
+ORPHAN_UNDER_STOP = os.getenv("TRADING_ORPHAN_UNDER_STOP", "false").lower() == "true"
+ORPHAN_UNDER_STOP_MINUTES = float(os.getenv("TRADING_ORPHAN_UNDER_STOP_MINUTES", "2") or 2)
+ORPHAN_UNDER_STOP_CUSHION = float(os.getenv("TRADING_ORPHAN_UNDER_STOP_CUSHION", "0") or 0)
+ORPHAN_UNDER_STOP_REQUIRE_TAPE = os.getenv(
+    "TRADING_ORPHAN_UNDER_STOP_REQUIRE_TAPE", "true").lower() == "true"
+
+
+def under_stop_line(right: str, long_strike: float, entry_abs: float,
+                    cushion: float = 0.0) -> float:
+    """The underlying price the UNDER stop defends: break-even +/- cushion."""
+    if right == "C":
+        return long_strike + entry_abs + cushion
+    return long_strike - entry_abs - cushion
+
+
 ORPHAN_OTM_STOP = os.getenv(
     "TRADING_ORPHAN_OTM_STOP", "true").lower() == "true"
 ORPHAN_OTM_STOP_MINUTES = float(
@@ -2800,6 +2827,36 @@ def review(engine_symbols: "set | None" = None) -> list:
             else:
                 rec.pop("strike_since", None)
 
+            # THE UNDERLYING STOP's clock. See ORPHAN_UNDER_STOP.
+            under_held = False
+            if ORPHAN_UNDER_STOP and zero_dte and past_hold and not st["credit"] and entry_abs:
+                uread = _session_tape(st["root"])
+                line = under_stop_line(st["right"], float(st["long_strike"]), entry_abs,
+                                       ORPHAN_UNDER_STOP_CUSHION)
+                below = (uread is not None and
+                         ((uread[0] < line) if st["right"] == "C" else (uread[0] > line)))
+                tape_ok = (not ORPHAN_UNDER_STOP_REQUIRE_TAPE) or (
+                    uread is not None and _tape_against(st["right"], *uread))
+                if below and tape_ok:
+                    rec.setdefault("under_since", now.isoformat())
+                    _uheld = (now - datetime.fromisoformat(
+                        rec["under_since"])).total_seconds() / 60.0
+                    under_held = _uheld >= ORPHAN_UNDER_STOP_MINUTES
+                    if not under_held:
+                        logger.info(
+                            "ORPHAN %s %g/%g: %s %.2f past the %.2f break-even line under an "
+                            "adverse VWAP %.2f for %.0f of %.0f minutes — underlying stop watching.",
+                            st["root"], st["long_strike"], st["short_strike"], st["root"],
+                            uread[0], line, uread[1], _uheld, ORPHAN_UNDER_STOP_MINUTES)
+                elif rec.pop("under_since", None):
+                    logger.info("ORPHAN %s %g/%g: underlying stop clock reset (%s).",
+                                st["root"], st["long_strike"], st["short_strike"],
+                                "no tape reading" if uread is None else
+                                "%s %.2f vs the %.2f line, VWAP %.2f" % (
+                                    st["root"], uread[0], line, uread[1]))
+            else:
+                rec.pop("under_since", None)
+
             # THE TAPE EXIT's clock. See ORPHAN_TAPE_EXIT. One continuous
             # stretch of the underlying on the wrong side of a VWAP moving
             # against the structure; any minute that is not that -- including
@@ -2952,6 +3009,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # Ahead of the stop's intrinsic hold-off on purpose: that
                 # branch is what let the 1075 -> 1071 slide go unanswered.
                 reason = "STRIKE_GUARD"
+            elif under_held:
+                # Also ahead of the intrinsic hold-off: this IS the judgement
+                # on the underlying that the hold-off was standing in for.
+                reason = "UNDER_STOP"
             elif otm_held:
                 # NO CONFIRMATION, deliberately. The mark stops wait to tell a
                 # wick from a trend; this is not reading the mark at all, and

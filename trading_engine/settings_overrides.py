@@ -179,6 +179,9 @@ REGISTRY: tuple[Setting, ...] = (
             "The scaled stop on the day before expiry.", "%", -100, 0),
     Setting("TRADING_ORPHAN_LATER_STOP_MINUTES_1D", "Stop confirmation, 1 day left", G_WEEKLY, "float", "5",
             "", "min", 0, 240),
+    Setting("TRADING_ORPHAN_LATER_SCALE_DAYS", "Scaling span (sessions)", G_WEEKLY, "int", "5",
+            "Sessions over which the weekly stop/stall slide from the full-week to the 1-day values. "
+            "2 = a step: full-week values with 2+ sessions left, 1-day values on the last day.", "", 2, 10),
     Setting("TRADING_ORPHAN_LATER_STALL_ARM", "Stall arms at", G_WEEKLY, "float", "10",
             "The weekly stall only watches once the gain reaches this.", "%", 0, 500),
     Setting("TRADING_ORPHAN_LATER_STALL_MINUTES", "Stall window", G_WEEKLY, "float", "15",

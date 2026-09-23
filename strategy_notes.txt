@@ -13525,3 +13525,9 @@ was managed at the day-old cache's size and cost (MU 1070/1080 x20 @ 4.91 vs
 the real x4 @ 6.05) -- fixed; and a peak reset had dropped the engine's own
 ask record, making its 9.00 order look like a stranger's -- fixed forward, the
 live order needs one manual cancel.
+
+Addendum to 219 (11:38): the guard is ARMED only once the underlying has been
+beyond the short strike since the position opened. Unarmed, it had been three
+minutes from selling MU 1070/1080 bought at 1078 (short 1080). It was switched
+off 11:13-11:38 for that reason and back on with the fix; first cycle armed
+MU 1065/1075 (MU 1076.27) and left 1070/1080 to the stop's break-even line.

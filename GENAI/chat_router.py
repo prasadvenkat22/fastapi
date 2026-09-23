@@ -12,8 +12,11 @@ from stored RSS/Polygon headlines, anything else by Gemini with no tools. The
 trading chat is the AI lab (/api/genai/agent/ask), admin and trader only.
 """
 
+import asyncio
+import logging
 from typing import List, Literal, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -21,7 +24,31 @@ from GENAI.gemini_llm import agenerate
 
 from .agents.news_agent import answer_news, detect_symbol, is_news_question
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/chat", tags=["Site chat (signed in)"])
+
+# Gemini answers 429/5xx now and then (2026-09-23: a signed-in chat got a
+# bare 502 while the same prompt succeeded seconds later). One retry after a
+# short pause covers the blip; anything still failing is logged with its
+# status and reported as "busy", not as a broken backend.
+_TRANSIENT = {429, 500, 502, 503, 504}
+
+
+async def _generate(prompt: str) -> str:
+    for attempt in (1, 2):
+        try:
+            return await agenerate(prompt, system=CHAT_SYSTEM, max_tokens=800, temperature=0.3)
+        except httpx.HTTPStatusError as e:
+            if attempt == 2 or e.response.status_code not in _TRANSIENT:
+                raise
+            logger.warning("chat: Gemini %s, retrying once", e.response.status_code)
+        except (httpx.TimeoutException, httpx.TransportError) as e:
+            if attempt == 2:
+                raise
+            logger.warning("chat: Gemini %s, retrying once", type(e).__name__)
+        await asyncio.sleep(1.5)
+    raise RuntimeError("unreachable")
 
 CHAT_SYSTEM = (
     "You are the Data AI Systems website assistant. Data AI Systems offers cloud "
@@ -62,8 +89,14 @@ async def chat_ask(body: ChatAsk):
             res = await answer_news(body.query, detect_symbol(body.query))
             return ChatAnswer(kind="news", symbol=res["symbol"], answer=res["answer"],
                               headlines=[ChatHeadline(**h) for h in res["headlines"]])
-        answer = await agenerate(body.query, system=CHAT_SYSTEM, max_tokens=800, temperature=0.3)
+        answer = await _generate(body.query)
+    except httpx.HTTPStatusError as e:
+        logger.error("chat: Gemini failed with %s: %s", e.response.status_code, e.response.text[:300])
+        raise HTTPException(status_code=503,
+                            detail="The assistant is busy right now. Please try again in a moment.")
     except Exception:
         # Internals stay in the server log, not in a chat bubble.
-        raise HTTPException(status_code=502, detail="The assistant is unavailable right now.")
+        logger.exception("chat: request failed")
+        raise HTTPException(status_code=503,
+                            detail="The assistant is unavailable right now. Please try again in a moment.")
     return ChatAnswer(kind="chat", answer=answer)

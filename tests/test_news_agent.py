@@ -160,3 +160,34 @@ def test_trader_gets_the_trading_chat_but_not_the_admin_genai_routes(client, mon
         assert client.post("/api/genai/llm", json={"prompt": "hi"}).status_code == 403
     finally:
         app.dependency_overrides.pop(dep, None)
+
+
+def test_chat_retries_a_gemini_blip_and_reports_busy_not_broken(client, monkeypatch):
+    import httpx
+    import GENAI.chat_router as cr
+    calls = []
+
+    def blip(status):
+        req = httpx.Request("POST", "https://gemini")
+        return httpx.HTTPStatusError("x", request=req, response=httpx.Response(status, request=req))
+
+    async def flaky(prompt, system=None, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise blip(503)
+        return "second try"
+    monkeypatch.setattr(cr, "agenerate", flaky)
+    real_sleep = cr.asyncio.sleep
+    monkeypatch.setattr(cr.asyncio, "sleep", lambda s: real_sleep(0))
+    app, dep = _as_role("user")
+    try:
+        r = client.post("/api/chat/ask", json={"query": "what services do you offer"})
+        assert r.status_code == 200 and r.json()["answer"] == "second try" and len(calls) == 2
+
+        async def down(prompt, system=None, **kw):
+            raise blip(429)
+        monkeypatch.setattr(cr, "agenerate", down)
+        r = client.post("/api/chat/ask", json={"query": "what services do you offer"})
+        assert r.status_code == 503 and "busy" in r.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(dep, None)

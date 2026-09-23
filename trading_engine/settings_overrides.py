@@ -124,6 +124,9 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_ORPHAN_UNDER_STOP_CUSHION", "Underlying stop cushion", G_0DTE, "float", "0",
             "Points on the profitable side of break-even where the line sits (0 = at break-even).",
             "pts", 0, 50),
+    Setting("TRADING_ORPHAN_UNDER_STOP_CUSHION_WIDTH", "Underlying stop cushion (x width)", G_0DTE, "float", "0",
+            "Cushion as a fraction of width (0.10 = 1 point on a 10-wide spread); the larger of "
+            "this and the points cushion applies.", "x width", 0, 1),
     Setting("TRADING_ORPHAN_UNDER_STOP_REQUIRE_TAPE", "Underlying stop needs adverse VWAP", G_0DTE, "bool", "true",
             "Only count minutes when the underlying is also under a VWAP moving against the spread."),
     Setting("TRADING_ORPHAN_STALL_MINUTES", "Stall window", G_0DTE, "float", "0",

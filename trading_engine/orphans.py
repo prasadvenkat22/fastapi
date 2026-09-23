@@ -442,6 +442,13 @@ ORPHAN_STRIKE_GUARD_BUFFER = float(os.getenv("TRADING_ORPHAN_STRIKE_GUARD_BUFFER
 ORPHAN_UNDER_STOP = os.getenv("TRADING_ORPHAN_UNDER_STOP", "false").lower() == "true"
 ORPHAN_UNDER_STOP_MINUTES = float(os.getenv("TRADING_ORPHAN_UNDER_STOP_MINUTES", "2") or 2)
 ORPHAN_UNDER_STOP_CUSHION = float(os.getenv("TRADING_ORPHAN_UNDER_STOP_CUSHION", "0") or 0)
+# The same cushion as a FRACTION OF WIDTH, so one setting means the same thing
+# on a 10-wide MU spread and a 60-wide SNDK one; the larger of the two applies.
+# The line only matters once the underlying is back between the strikes -- the
+# partly-in-the-money case, where theta roughly cancels across the legs and
+# the underlying is what moves the value (operator, 2026-09-23 12:07).
+ORPHAN_UNDER_STOP_CUSHION_WIDTH = float(
+    os.getenv("TRADING_ORPHAN_UNDER_STOP_CUSHION_WIDTH", "0") or 0)
 ORPHAN_UNDER_STOP_REQUIRE_TAPE = os.getenv(
     "TRADING_ORPHAN_UNDER_STOP_REQUIRE_TAPE", "true").lower() == "true"
 
@@ -2831,8 +2838,10 @@ def review(engine_symbols: "set | None" = None) -> list:
             under_held = False
             if ORPHAN_UNDER_STOP and zero_dte and past_hold and not st["credit"] and entry_abs:
                 uread = _session_tape(st["root"])
+                _uw = abs(float(st["short_strike"]) - float(st["long_strike"]))
                 line = under_stop_line(st["right"], float(st["long_strike"]), entry_abs,
-                                       ORPHAN_UNDER_STOP_CUSHION)
+                                       max(ORPHAN_UNDER_STOP_CUSHION,
+                                           ORPHAN_UNDER_STOP_CUSHION_WIDTH * _uw))
                 below = (uread is not None and
                          ((uread[0] < line) if st["right"] == "C" else (uread[0] > line)))
                 tape_ok = (not ORPHAN_UNDER_STOP_REQUIRE_TAPE) or (

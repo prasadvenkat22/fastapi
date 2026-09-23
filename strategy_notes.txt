@@ -13539,3 +13539,31 @@ it, dropping rec["ask"] (and with it the strike-guard arming and rule clocks),
 so the engine never checked that order again. Pre-existing; exposed today by
 the 11:17 peak reset. Fixed (update in place). The missed row is to be booked
 by hand with orphans._book (ASK, x10, 6.15 -> 8.00).
+
+
+221. JUDGE THE SLIDE BY THE UNDERLYING, NOT THE MARK  (2026-09-23)
+
+MU 1070/1080 x18 @ 5.64, break-even MU 1075.64. Minute by minute 11:44-11:51:
+mark -7.8%, -4.3%, -8.7%, then -12.3% (11:47) and -18.5% (11:48) with the
+intrinsic hold-off keeping the -10% stop off because intrinsic (6.56, 5.73)
+was still above the entry; released at -20.2% (11:49) when MU crossed
+break-even; the 2-minute confirmation sold 10 at 3.97 (11:51) and the lot cap
+left 8 for 11:52 at 4.10. -2,906, -28.6%. The code did what it said; the rule
+was wrong for a PARTLY in-the-money spread, whose intrinsic moves 1:1 with the
+underlying -- the hold-off protected a number that was disappearing.
+
+Operator: judge it by MU, and "do not sell in haste". So NOT the tempting fix
+(hold-off only when pinned), which would let the mark stop fire on marks that
+swing +-20% a minute. Instead TRADING_ORPHAN_UNDER_STOP: underlying past
+break-even (long strike +/- entry) + CUSHION, AND under an adverse VWAP, for 2
+continuous minutes -> close; a bounce resets it. Live 12:04, cushion 0. With
+the armed strike guard at the short strike above it, MU 1065/1075 x19 @ 6.46 is
+layered: guard at 1075 (3 min), underlying stop at 1071.46 (2 min), flatten.
+
+What it costs, stated: at the break-even line the mark is still below the
+entry by roughly the short leg's time value (about -15 to -20% on today's MU
+spreads midday), so a fire there is not a -10% exit. A cushion moves the line
+up and the exit earlier. Not measured; replay with 218-220 after the close.
+
+Open: the close/ask orders go out in lots of at most 10 (x19 had its 8.00 ask
+on 10 only; 1070/1080's stop filled 10 then 8 a minute later).

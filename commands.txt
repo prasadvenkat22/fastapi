@@ -65,6 +65,10 @@ tset set TRADING_ORPHAN_ASK_FLOOR_WIDTH=0.80           # floor 80% of width (0 =
 # under an adverse VWAP for N continuous minutes (resets on a bounce).
 tset set TRADING_ORPHAN_STRIKE_GUARD=true TRADING_ORPHAN_STRIKE_GUARD_MINUTES=3
 tset set TRADING_ORPHAN_STRIKE_GUARD_BUFFER=0          # points past the strike before the clock starts
+# Underlying stop: close when the UNDERLYING is past break-even (+cushion)
+# under an adverse VWAP for N minutes -- judged on MU, not the spread's mark.
+tset set TRADING_ORPHAN_UNDER_STOP=true TRADING_ORPHAN_UNDER_STOP_MINUTES=2
+tset set TRADING_ORPHAN_UNDER_STOP_CUSHION=0            # points above break-even (calls)
 # DO NOT also place a manual limit on the same legs: a working order the
 # engine did not place switches off its stop, ask and 15:45 flatten
 # (logged every cycle as "an order this engine did not place is working").

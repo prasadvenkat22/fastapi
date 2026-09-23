@@ -37,9 +37,10 @@ tset get TRADING_ORPHAN_STOP_PCT     # one knob: bounds, default, env value, ove
 2. CHANGE SETTINGS (several at once is fine; a bad value changes nothing)
 --------------------------------------------------------------------------
 
-# --- 0DTE stop loss ---
-tset set TRADING_ORPHAN_STOP_PCT=-30                  # stop at -30% of cost   (range -100..0)
-tset set TRADING_ORPHAN_STOP_CONFIRM_MINUTES=2        # must hold 2 min first  (0 = immediate)
+# --- 0DTE stop loss (applies to positions expiring TODAY only) ---
+tset set TRADING_ORPHAN_STOP_PCT=-5                   # stop at -5% of cost    (range -100..0)
+tset set TRADING_ORPHAN_STOP_CONFIRM_MINUTES=0        # 0 = sell on the first check at the level
+tset set TRADING_ORPHAN_STOP_RESPECTS_INTRINSIC=false # false = plain stop on price (no break-even hold-off)
 tset set TRADING_ORPHAN_OTM_STOP=true                 # close the moment a debit spread is OTM
 tset set TRADING_ORPHAN_SLOW_STOP_PCT=-15 TRADING_ORPHAN_SLOW_STOP_MINUTES=30
 

@@ -1409,6 +1409,21 @@ live. A manual limit on the same legs switches all of that off (in_flight);
 the log now says so every cycle: "an order this engine did not place is
 working on its legs".
 
+**The ladder in force at the end of 2026-09-23** (sections 224-225; the
+overrides file is the authority -- `tset list`):
+
+| | Same-day (expires today) | Weekly / later expiry |
+|---|---|---|
+| Loss | `STOP_PCT=-5`, no confirmation, no intrinsic hold-off (`STOP_RESPECTS_INTRINSIC=false`): the first pass at or below -5% of cost sells | none (`LATER_STOP_PCT=0`), including the day before expiry |
+| Profit | profit lock at cost + 10% of width on the mark (`PROFIT_LOCK_WIDTH=0.10`); resting ask 0.90 x width, floor 0.80 | `LATER_TARGET_PCT=0.90` of width; later stall (arm +25%, 30 min, 0.25 ATR) |
+| Off | underlying stop, strike guard (code kept, tunable) | |
+| End | flatten 15:45 (ask withdrawn 15:40) | held overnight |
+
+On its expiry day a weekly IS a same-day position: from 09:35 it gets the
+left-hand column. A fresh fill marks at the sell side and usually reads 10-20%
+under its cost on MU-sized spreads, so the -5% first-pass stop closes most
+offer-side entries about a minute in; entries near the mid avoid that.
+
 **Between the short strike and break-even** (sections 218-219): the stop and
 the tape exit both hold off while intrinsic is above the entry, so the
 **short-strike guard** (`TRADING_ORPHAN_STRIKE_GUARD*`) covers that slide: the

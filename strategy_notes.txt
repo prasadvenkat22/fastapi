@@ -13677,3 +13677,28 @@ mark 4.40), the 2-minute wait ran through a 1.5-point MU drop and it sold at
 an entry bought at the offer on these spreads is often past -5% on that first
 pass, so it will usually be sold ~1 minute after entry unless it is filled
 near the midpoint.
+
+Scope, for the record (15:25): the -5% stop and the profit lock are gated on
+"expires today". Weeklies keep the later ladder (no stop, 0.90-of-width target,
+later stall) until their expiry day, when they become same-day positions and
+get -5% / lock / flatten from 09:35 -- the TSLA 372.5/417.5 weekly (09-25, -27%
+at 11:20, a manual order on its legs since 11:33) is the live case.
+
+Live overrides at 15:25 (supersedes the 223 snapshot):
+    TRADING_ORPHAN_STOP_PCT=-5
+    TRADING_ORPHAN_STOP_CONFIRM_MINUTES=0
+    TRADING_ORPHAN_STOP_RESPECTS_INTRINSIC=false
+    TRADING_ORPHAN_ASK=true
+    TRADING_ORPHAN_ASK_START_WIDTH=0.9
+    TRADING_ORPHAN_ASK_FLOOR_WIDTH=0.8
+    TRADING_ORPHAN_STRIKE_GUARD=false
+    TRADING_ORPHAN_STRIKE_GUARD_MINUTES=3
+    TRADING_ORPHAN_PROFIT_LOCK_WIDTH=0.1
+    TRADING_ORPHAN_UNDER_STOP=false
+    TRADING_ORPHAN_UNDER_STOP_MINUTES=2
+    TRADING_ORPHAN_UNDER_STOP_CUSHION=0
+    TRADING_ORPHAN_UNDER_STOP_CUSHION_WIDTH=0.2
+    TRADING_ORPHAN_UNDER_STOP_ARM_FIRST=true
+    TRADING_ORPHAN_PREARM_STOP_PCT=0
+    TRADING_ORPHAN_LATER_STOP_PCT=0
+    TRADING_ORPHAN_LATER_TARGET_PCT=0.9

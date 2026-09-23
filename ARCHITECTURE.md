@@ -1409,12 +1409,12 @@ live. A manual limit on the same legs switches all of that off (in_flight);
 the log now says so every cycle: "an order this engine did not place is
 working on its legs".
 
-**The ladder in force at the end of 2026-09-23** (sections 224-225; the
+**The ladder in force at the end of 2026-09-23** (sections 224-226; the
 overrides file is the authority -- `tset list`):
 
 | | Same-day (expires today) | Weekly / later expiry |
 |---|---|---|
-| Loss | `STOP_PCT=-5`, no confirmation, no intrinsic hold-off (`STOP_RESPECTS_INTRINSIC=false`): the first pass at or below -5% of cost sells | none (`LATER_STOP_PCT=0`), including the day before expiry |
+| Loss | `STOP_PCT=-5`, no confirmation, no intrinsic hold-off (`STOP_RESPECTS_INTRINSIC=false`): the first pass at or below -5% of cost sells | `LATER_STOP_PCT=-20` with 2+ sessions left, `LATER_STOP_PCT_1D=-10` on the last day, both with a 2-minute confirmation; `LATER_SCALE_DAYS=2` makes it a step (section 226) |
 | Profit | profit lock at cost + 10% of width on the mark (`PROFIT_LOCK_WIDTH=0.10`); resting ask 0.90 x width, floor 0.80 | `LATER_TARGET_PCT=0.90` of width; later stall (arm +25%, 30 min, 0.25 ATR) |
 | Off | underlying stop, strike guard (code kept, tunable) | |
 | End | flatten 15:45 (ask withdrawn 15:40) | held overnight |

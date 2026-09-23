@@ -13702,3 +13702,23 @@ Live overrides at 15:25 (supersedes the 223 snapshot):
     TRADING_ORPHAN_PREARM_STOP_PCT=0
     TRADING_ORPHAN_LATER_STOP_PCT=0
     TRADING_ORPHAN_LATER_TARGET_PCT=0.9
+
+
+226. WEEKLY STOP: 10% OF COST, 2 MINUTES, NO DISCOUNTING  (2026-09-23 15:37)
+
+Operator: a weekly bought at 13.33 "should not lose more than 133.3 ... wait 2
+minutes in case it comes back". Live: LATER_STOP_PCT=-10, LATER_STOP_MINUTES=2,
+and the 1-day values set to the same (-10 / 2) -- otherwise the days-left
+scaling turns -10 into about -25% with two sessions left (it interpolates
+toward the -30% 1-day stop). No discounting: STOP_RESPECTS_INTRINSIC=false
+already clears the intrinsic gate on the later stop. The weekly confirmation
+got the same 10 s of cycle slack as the same-day one.
+
+First position under it: MU 260925 C 1070/1090 x5 @ 7.75 -> stop 6.98 (~-388
+max on x5 at the level; a gap can realise more). Side effect, stated: a
+negative LATER_STOP_PCT switches the days-left scaling back on for the later
+STALL as well, so the weekly stall now reads arm +10% / 15 min / 0.14 ATR on
+this position (from the 1-day values) instead of +25% / 30 min / 0.25 ATR.
+
+The TSLA weekly this rule was asked about had already been closed by hand at
+11:34 at 9.99 (-334).

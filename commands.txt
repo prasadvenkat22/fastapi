@@ -81,7 +81,8 @@ tset set TRADING_ORPHAN_PREARM_STOP_PCT=0                # mark stop until armed
 # (logged every cycle as "an order this engine did not place is working").
 
 # --- Weekly (later-expiry) ladder ---
-tset set TRADING_ORPHAN_LATER_STOP_PCT=-45 TRADING_ORPHAN_LATER_STOP_MINUTES=15
+tset set TRADING_ORPHAN_LATER_STOP_PCT=-10 TRADING_ORPHAN_LATER_STOP_MINUTES=2
+tset set TRADING_ORPHAN_LATER_STOP_PCT_1D=-10 TRADING_ORPHAN_LATER_STOP_MINUTES_1D=2   # keep scaling from widening it
 tset set TRADING_ORPHAN_LATER_STALL_ARM=25            # stall arms once gain reaches +25%
 tset set TRADING_ORPHAN_LATER_STALL_MINUTES=30        # then fires after 30 min without a new peak
 tset set TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR=0.25 # give-back in ATR (replaces points when > 0)

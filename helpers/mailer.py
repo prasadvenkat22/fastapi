@@ -92,6 +92,7 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
 # point PASSWORD_RESET_PAGE there in that case.
 PASSWORD_RESET_PAGE = os.getenv("PASSWORD_RESET_PAGE", "/reset-password")
 FORGOT_PASSWORD_PAGE = os.getenv("FORGOT_PASSWORD_PAGE", "/forgot-password")
+VERIFY_EMAIL_PAGE = os.getenv("VERIFY_EMAIL_PAGE", "/verify-email")
 
 
 def is_configured() -> bool:
@@ -279,6 +280,22 @@ def send_password_reset(to: str, token: str, minutes: int) -> bool:
         f"The link expires in {minutes} minutes and works once.\n\n"
         "If you did not ask for this, ignore this message — your password has "
         "not changed and nobody can use this link without it.\n",
+    )
+
+
+def send_email_verification(to: str, name: str, token: str, hours: int) -> bool:
+    """The sign-up confirmation. Carries the token, so never logged."""
+    if APP_BASE_URL:
+        action = f"Open this link to activate it:\n\n{APP_BASE_URL}{VERIFY_EMAIL_PAGE}?token={token}\n"
+    else:
+        action = f"POST this token to /auth/verify-email to activate it:\n\n{token}\n"
+    hello = f"Hello {name}," if name else "Hello,"
+    return send(
+        to, "Confirm your Data AI Systems account",
+        f"{hello}\n\nSomeone -- we hope you -- created a Data AI Systems account "
+        f"with this address.\n\n{action}\n"
+        f"The link works for {hours} hours. If this was not you, ignore this "
+        "message; the account stays inactive.\n",
     )
 
 

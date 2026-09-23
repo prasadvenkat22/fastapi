@@ -40,6 +40,11 @@ class User(Base):
     # role assigned", which authorization must read as no permissions rather
     # than as a default grant.
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=True, index=True)
+    # True from public sign-up until the emailed link is opened; login refuses
+    # it. A flag rather than a verified-at date so that every account created
+    # before sign-up existed (all admin-made) stays valid without a backfill.
+    pending_verification = Column(Boolean, nullable=False, default=False,
+                                  server_default="false")
 
     service_requests = relationship("ServiceRequest", back_populates="user")
     transactions = relationship("Transaction", back_populates="user")
@@ -178,6 +183,23 @@ class Registraion(Base):
     # visitor's message in `notes`.
     status = Column(String, default='requested')
     notes = Column(Text, nullable=True)
+
+
+class EmailVerificationToken(Base):
+    """The link a public sign-up must open before the account can log in.
+
+    Same shape and the same reasoning as PasswordResetToken below: sha256 of
+    the raw token, kept after use so a second click gets an explanation.
+    """
+    __tablename__ = "email_verification_tokens"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    requested_ip = Column(String, nullable=True)
 
 
 class PasswordResetToken(Base):

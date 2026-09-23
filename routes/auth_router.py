@@ -85,6 +85,14 @@ async def login(body: LoginRequest, db: db_dependency):
         raise invalid
     if not Hasher.verify_password(body.password, user.password_hash):
         raise invalid
+    # After the password check, so this says nothing to someone who does not
+    # already know the password.
+    if user.pending_verification:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Confirm your email first -- open the link we sent you, "
+                   "or sign up again to get a new one.",
+        )
 
     role = user.role.role if user.role is not None else None
     logger.info("Login succeeded for user id=%s role=%s", user.id, role)
@@ -286,6 +294,9 @@ async def reset_password(body: ResetPasswordRequest, background: BackgroundTasks
         raise HTTPException(status_code=400, detail="This reset link is not valid.")
 
     user.password_hash = Hasher.get_password_hash(body.new_password)
+    # A mailed link was just opened, which is exactly what verification
+    # proves; a sign-up that lost its confirmation mail recovers here too.
+    user.pending_verification = False
     row.used_at = _now()
 
     # Every other unused link for this account dies with it. Otherwise an
@@ -380,3 +391,119 @@ f.addEventListener('submit', function (e) {
   });
 });
 </script></body></html>"""
+
+
+# ---------------------------------------------------------------------------
+# Public sign-up (the general site). Always role 'user': a sign-up can never
+# reach the trading desk, whose routes require admin or trader server-side.
+# The account cannot log in until the emailed link is opened.
+# ---------------------------------------------------------------------------
+
+VERIFY_TOKEN_HOURS = int(os.getenv("EMAIL_VERIFY_HOURS", "48"))
+MAX_LIVE_VERIFICATIONS = int(os.getenv("EMAIL_VERIFY_MAX_LIVE", "3"))
+
+
+class SignupRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr
+    password: str = Field(..., min_length=MIN_PASSWORD_LENGTH)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+def _issue_verification(db: Session, user: models.User, request: Request,
+                        background: BackgroundTasks) -> None:
+    live = (
+        db.query(models.EmailVerificationToken)
+        .filter(models.EmailVerificationToken.user_id == user.id,
+                models.EmailVerificationToken.used_at.is_(None),
+                models.EmailVerificationToken.expires_at > _now())
+        .count()
+    )
+    if live >= MAX_LIVE_VERIFICATIONS:
+        logger.warning("Verification for user id=%s: %d links already live. "
+                       "Not sending another.", user.id, live)
+        return
+    raw = secrets.token_urlsafe(32)
+    db.add(models.EmailVerificationToken(
+        user_id=user.id,
+        token_hash=_hash_token(raw),
+        expires_at=_now() + timedelta(hours=VERIFY_TOKEN_HOURS),
+        requested_ip=(request.client.host if request.client else None),
+    ))
+    db.commit()
+    background.add_task(mailer.send_email_verification, user.email, user.name,
+                        raw, VERIFY_TOKEN_HOURS)
+
+
+@router.post("/signup", status_code=status.HTTP_202_ACCEPTED)
+async def signup(body: SignupRequest, request: Request,
+                 background: BackgroundTasks, db: db_dependency):
+    """Create a site account and mail its confirmation link.
+
+    ALWAYS the same 202, for the reason /forgot-password gives: a different
+    answer for a registered address makes this public endpoint a way to test
+    which emails have accounts. Signing up again with a still-pending address
+    re-sends the link, which doubles as "resend confirmation". The password
+    is hashed on every path so the reply takes the same time either way.
+    """
+    problem = password_problem(body.password)
+    if problem:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=problem)
+    password_hash = Hasher.get_password_hash(body.password)
+    email = str(body.email).strip().lower()
+    reply = {"detail": "Check your email for a link to activate the account."}
+
+    existing = db.query(models.User).filter(models.User.email == email).first()
+    if existing is not None:
+        if existing.pending_verification and not existing.disabled:
+            # The latest password wins: whoever can open the mailed link owns it.
+            existing.password_hash = password_hash
+            db.commit()
+            _issue_verification(db, existing, request, background)
+        else:
+            logger.info("Sign-up for an existing account (id=%s); nothing sent.", existing.id)
+        return reply
+
+    role = db.query(models.Role).filter(models.Role.role == "user").first()
+    user = models.User(name=body.name.strip(), email=email, password_hash=password_hash,
+                       role_id=(role.id if role else None), pending_verification=True)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    logger.info("Sign-up created user id=%s (pending verification).", user.id)
+    _issue_verification(db, user, request, background)
+    return reply
+
+
+@router.post("/verify-email", status_code=status.HTTP_204_NO_CONTENT)
+async def verify_email(body: VerifyEmailRequest, db: db_dependency):
+    """Spend a confirmation link. Reports failure, like /reset-password."""
+    row = (
+        db.query(models.EmailVerificationToken)
+        .filter(models.EmailVerificationToken.token_hash == _hash_token(body.token))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=400, detail="This confirmation link is not valid.")
+    user = db.query(models.User).filter(models.User.id == row.user_id).first()
+    if user is None:
+        raise HTTPException(status_code=400, detail="This confirmation link is not valid.")
+    if not user.pending_verification:
+        return  # already confirmed -- a second click is fine
+    if row.used_at is not None:
+        raise HTTPException(status_code=400, detail="This link has already been used.")
+    expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
+    if expires <= _now():
+        raise HTTPException(status_code=400,
+                            detail="This link has expired. Sign up again with the "
+                                   "same email to get a new one.")
+    user.pending_verification = False
+    (db.query(models.EmailVerificationToken)
+       .filter(models.EmailVerificationToken.user_id == user.id,
+               models.EmailVerificationToken.used_at.is_(None))
+       .update({"used_at": _now()}, synchronize_session=False))
+    db.commit()
+    logger.info("Email verified for user id=%s", user.id)

@@ -107,7 +107,7 @@ tail -f /var/log/qqq-trading.log                  # next minute's cycle
   .env.production.bak-<tag>), then `tset unset KEY`.
 
 
-6. FIRST DEPLOY (once) -- settings page, public sign-up, news chat
+6. FIRST DEPLOY (once) -- settings page, public sign-up, signed-in chat
 ------------------------------------------------------------------
 # Recreating `app` costs ~1 min of cron cycles: do it with no 0DTE position
 # open, or outside market hours. It also runs the new alembic migration
@@ -116,12 +116,13 @@ cd /opt/fastapi
 git pull
 grep -q '^APP_BASE_URL=' .env.production || echo "APP_BASE_URL missing: sign-up links will carry a raw token"
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate app
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -t
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -s reload
+# nginx: the HTTPS server serves a COPY of dataaisys.conf's locations
+# (dataaisys-locations.inc); this re-copies it, tests and reloads.
+./scripts/sync_nginx_locations.sh
 
 # front-end (safe during market hours)
 cd /opt/data-ai-solutions && git pull && docker compose -f docker-compose.server.yml up -d --build
 
 # check from anywhere
 curl -s -o /dev/null -w "%{http_code}\n" https://dataaisys.com/trading/settings    # 401 = route live, auth enforced
-curl -s -X POST https://dataaisys.com/api/news/ask -H 'Content-Type: application/json' -d '{"query":"latest news on MU"}'
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://dataaisys.com/api/chat/ask -H 'Content-Type: application/json' -d '{"query":"latest news on MU"}'   # 401 = no AI for anonymous visitors

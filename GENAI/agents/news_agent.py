@@ -13,8 +13,8 @@ and answered from those. This node answers the plain question instead:
        /v2/reference/news live -- the same endpoint news_hourly polls.
     4. Gemini summarises ONLY those headlines, citing each with its time.
 
-PUBLIC-SAFE BY CONSTRUCTION. The public chat widget reaches this through
-/api/news/ask, so everything here reads headlines and the graded news verdict
+SAFE FOR NON-TRADING USERS BY CONSTRUCTION. The site chat widget (any
+verified account, GENAI/chat_router.py) reaches this, so everything here reads headlines and the graded news verdict
 (verdict, confidence, rationale) and nothing else: no positions, no trades, no
 suggested structure. Queries are fixed and parameterised; the model never
 writes SQL here. Answers are cached per symbol so a busy widget does not

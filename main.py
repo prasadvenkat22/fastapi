@@ -13,8 +13,8 @@ import routes.image_router as image_router
 import routes.trading_router as trading_router
 import routes.contact_router as contact_router
 import GENAI.router as genai_router
-import GENAI.news_router as genai_news_router
-from helpers.auth_deps import require_admin, require_trading
+import GENAI.chat_router as genai_chat_router
+from helpers.auth_deps import require_admin, require_role, require_trading
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -80,9 +80,12 @@ app.include_router(trading_router.router, dependencies=[Depends(require_trading(
 # Anthropic and Voyage credit.
 app.include_router(genai_router.router, dependencies=[Depends(require_admin())])
 
-# PUBLIC, on purpose: the chat widget's "latest news on MU". Headlines only,
-# no trading tables; see the module docstring for what it will not do.
-app.include_router(genai_news_router.router)
+# The site chat widget: any signed-in, verified account (a sign-up cannot log
+# in before its email is verified). Anonymous visitors get 401 -- no AI at
+# all. News from the feeds or a tool-less model answer; never the trading
+# tables, which stay behind the admin-only /api/genai above.
+app.include_router(genai_chat_router.router,
+                   dependencies=[Depends(require_role("admin", "trader", "user"))])
 
 # PUBLIC, on purpose: the site's contact form. One POST that writes one row
 # and queues two mails; rate-limited at nginx (five a minute per IP) and

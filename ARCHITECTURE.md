@@ -1187,10 +1187,17 @@ capitalised word) and a news intent, reads the last 72 hours of stored RSS and
 Polygon headlines (`market_news_vectors`, `news_seen`) read-only, falls back to
 Polygon `/v2/reference/news` live when the newest stored row is over 12 hours
 old or there are fewer than three, and has Gemini summarise only those
-headlines. The supervisor routes news questions to it. The site's chat widget
-reaches it through the one PUBLIC route here, `POST /api/news/ask`
-(`GENAI/news_router.py`): 300-character input, headlines and the graded verdict
-only, never positions or SQL, cached per symbol, nginx login zone.
+headlines. The supervisor routes news questions to it.
+
+**The site chat is for signed-in accounts only** (2026-09-23): anonymous
+visitors get no AI. `POST /api/chat/ask` (`GENAI/chat_router.py`) is mounted
+behind `require_role("admin", "trader", "user")`, and a sign-up cannot log in
+before its email is verified, so a token means registered and approved. It
+sends news questions to `news_agent` and everything else to Gemini with a
+fixed system prompt and no tools: never the trading-database agent, positions
+or SQL. 2000-character input, nginx `chat` zone (20 a minute per IP). The
+trading chat stays the AI lab (`/api/genai/*`, admin only). The widget shows
+anonymous visitors a sign-up prompt, and only a desk admin gets file uploads.
 
 ## HTTP: the screener is callable
 

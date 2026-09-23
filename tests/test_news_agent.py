@@ -65,13 +65,61 @@ def test_dedupe_keeps_newest_one_per_headline():
     assert [r["source"] for r in rows] == ["POLYGON:x", "rss"]
 
 
-def test_public_route_refuses_long_input_and_skips_non_news(client, monkeypatch):
+def _as_role(role):
+    """Stand in for get_current_user, so require_role sees an account with `role`."""
+    import types
+    from helpers.auth_deps import get_current_user
+    from main import app
+    app.dependency_overrides[get_current_user] = lambda: types.SimpleNamespace(
+        id=1, email="u@example.com", role=types.SimpleNamespace(role=role) if role else None)
+    return app, get_current_user
+
+
+def test_anonymous_visitors_get_no_chat(client):
+    assert client.post("/api/chat/ask", json={"query": "latest news on MU"}).status_code == 401
+    assert client.post("/api/news/ask", json={"query": "latest news on MU"}).status_code in (404, 405)
+
+
+def test_chat_needs_a_role_and_never_takes_long_input(client, monkeypatch):
+    app, dep = _as_role(None)
+    try:
+        assert client.post("/api/chat/ask", json={"query": "hi"}).status_code == 403
+        _as_role("user")
+        assert client.post("/api/chat/ask", json={"query": "x" * 2001}).status_code == 422
+    finally:
+        app.dependency_overrides.pop(dep, None)
+
+
+def test_signed_in_user_gets_news_from_feeds_and_chat_from_the_model(client, monkeypatch):
+    import GENAI.chat_router as cr
+    na._CACHE.clear()
     called = []
     monkeypatch.setattr(na, "gather", lambda s: called.append(s) or [])
-    assert client.post("/api/news/ask", json={"query": "x" * 301}).status_code == 422
-    r = client.post("/api/news/ask", json={"query": "what services do you offer"})
-    assert r.status_code == 200 and r.json()["is_news"] is False
-    assert called == []                           # no feed read for a non-news question
+    monkeypatch.setattr(na, "latest_verdict", lambda s: None)
+    prompts = []
+
+    async def fake_generate(prompt, system=None, **kw):
+        prompts.append(system)
+        return "general answer"
+    monkeypatch.setattr(cr, "agenerate", fake_generate)
+    app, dep = _as_role("user")
+    try:
+        r = client.post("/api/chat/ask", json={"query": "what is the latest news on MU"}).json()
+        assert r["kind"] == "news" and r["symbol"] == "MU" and called == ["MU"]
+        r = client.post("/api/chat/ask", json={"query": "what services do you offer"}).json()
+        assert r == {"kind": "chat", "answer": "general answer", "symbol": None, "headlines": []}
+        assert called == ["MU"]                   # no feed read for a non-news question
+        assert "NO access to any trading account" in prompts[-1]
+    finally:
+        app.dependency_overrides.pop(dep, None)
+
+
+def test_site_user_still_refused_the_trading_chat(client):
+    app, dep = _as_role("user")
+    try:
+        assert client.post("/api/genai/agent/ask", json={"query": "my positions"}).status_code == 403
+    finally:
+        app.dependency_overrides.pop(dep, None)
 
 
 def test_answer_falls_back_to_list_when_model_fails(monkeypatch):

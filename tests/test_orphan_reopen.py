@@ -84,3 +84,11 @@ def test_under_stop_is_ahead_of_the_intrinsic_hold_off():
     import inspect
     src = inspect.getsource(o.review)
     assert src.index('reason = "UNDER_STOP"') < src.index("zero_dte and ret_pct <= stop_pct and intrinsic_ok")
+
+
+def test_under_stop_arm_first_and_prearm_stop_are_wired():
+    import inspect
+    src = inspect.getsource(o.review)
+    assert 'rec["under_armed"] = True' in src
+    assert "armed and uread is not None" in src
+    assert "stop_pct = ORPHAN_PREARM_STOP_PCT" in src

@@ -449,6 +449,19 @@ ORPHAN_UNDER_STOP_CUSHION = float(os.getenv("TRADING_ORPHAN_UNDER_STOP_CUSHION",
 # the underlying is what moves the value (operator, 2026-09-23 12:07).
 ORPHAN_UNDER_STOP_CUSHION_WIDTH = float(
     os.getenv("TRADING_ORPHAN_UNDER_STOP_CUSHION_WIDTH", "0") or 0)
+# ARM FIRST (2026-09-23 14:05). Twice today a position was bought with the
+# underlying already past its own line (MU 1070/1080 x21 @ 5.17, line 1076.17,
+# MU ~1073.7) and the stop sold it 2-3 minutes after entry. With this on, the
+# underlying stop watches only once the underlying has been on the profitable
+# side of the line since the position opened (or was averaged/resized).
+ORPHAN_UNDER_STOP_ARM_FIRST = os.getenv(
+    "TRADING_ORPHAN_UNDER_STOP_ARM_FIRST", "false").lower() == "true"
+# Until then, the mark stop uses this level instead of TRADING_ORPHAN_STOP_PCT.
+# A fresh debit marks at the price it could be SOLD for, so it shows a loss of
+# roughly the bid-ask gap the moment it fills (the x21 above read -21% one
+# minute in); a -10% stop would cut nearly every entry that does not rise at
+# once. 0 = use the ordinary stop.
+ORPHAN_PREARM_STOP_PCT = float(os.getenv("TRADING_ORPHAN_PREARM_STOP_PCT", "0") or 0)
 ORPHAN_UNDER_STOP_REQUIRE_TAPE = os.getenv(
     "TRADING_ORPHAN_UNDER_STOP_REQUIRE_TAPE", "true").lower() == "true"
 
@@ -2560,6 +2573,13 @@ def review(engine_symbols: "set | None" = None) -> list:
             peaks[key] = rec
             quiet = (now - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0
             stop_pct = ORPHAN_CREDIT_STOP_PCT if st["credit"] else ORPHAN_STOP_PCT
+            # Before the underlying stop has armed, a wider mark stop. See
+            # ORPHAN_PREARM_STOP_PCT; "armed" is from the previous pass.
+            prearm = (ORPHAN_UNDER_STOP and ORPHAN_UNDER_STOP_ARM_FIRST
+                      and ORPHAN_PREARM_STOP_PCT < 0 and not st["credit"]
+                      and not rec.get("under_armed"))
+            if prearm:
+                stop_pct = ORPHAN_PREARM_STOP_PCT
 
             max_ret = _max_return_pct(st)
             ceiling = (ORPHAN_CEILING_FRACTION * max_ret
@@ -2842,7 +2862,16 @@ def review(engine_symbols: "set | None" = None) -> list:
                 line = under_stop_line(st["right"], float(st["long_strike"]), entry_abs,
                                        max(ORPHAN_UNDER_STOP_CUSHION,
                                            ORPHAN_UNDER_STOP_CUSHION_WIDTH * _uw))
-                below = (uread is not None and
+                if (ORPHAN_UNDER_STOP_ARM_FIRST and uread is not None
+                        and not rec.get("under_armed")
+                        and ((uread[0] >= line) if st["right"] == "C" else (uread[0] <= line))):
+                    rec["under_armed"] = True
+                    logger.info("ORPHAN %s %g/%g: %s %.2f on the right side of the %.2f line — "
+                                "underlying stop armed (the ordinary %.0f%% stop applies from here).",
+                                st["root"], st["long_strike"], st["short_strike"], st["root"],
+                                uread[0], line, ORPHAN_STOP_PCT)
+                armed = rec.get("under_armed") or not ORPHAN_UNDER_STOP_ARM_FIRST
+                below = (armed and uread is not None and
                          ((uread[0] < line) if st["right"] == "C" else (uread[0] > line)))
                 tape_ok = (not ORPHAN_UNDER_STOP_REQUIRE_TAPE) or (
                     uread is not None and _tape_against(st["right"], *uread))

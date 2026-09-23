@@ -13646,3 +13646,25 @@ code kept). Consequence, stated: between break-even and the lock nothing sells
 a position that never reached cost + 10% of width until the -10% stop or the
 15:45 flatten -- today's MU marks peaked ~6.9 on a 6.33 entry, i.e. below the
 7.33 lock. Not measured; replay after the close with 218-223.
+
+
+225. A PLAIN 5% STOP ON COST, 2 MINUTES  (2026-09-23 15:07)
+
+MU 1065/1075 x10 @ 6.18 (bought ~14:57) read -11.7% at 14:58 but the stop held
+off because MU (1071.26) was still above break-even (1071.18); MU crossed
+~15:00, the 2-minute confirmation read 1.9 at 15:02 and fired at 15:03 at
+-21.5% (-1,150 booked, -18.6%). Operator: "no, we don't want that, never";
+make it a plain 5% loss on cost with a 2-minute wait.
+
+Live: TRADING_ORPHAN_STOP_PCT=-5, TRADING_ORPHAN_STOP_CONFIRM_MINUTES=2,
+TRADING_ORPHAN_STOP_RESPECTS_INTRINSIC=false (newly tunable; the hold-off built
+on 09-03 for a deep-ITM AVGO spread is off). The confirmation now allows 10 s
+of the cycle's jitter so "2 minutes" fires on the 2-minute pass, not the third.
+With the profit lock at cost + 10% of width (224) that is the whole same-day
+ladder: lock above, -5%/2min below, flatten at 15:45.
+
+Stated, because it will show up: a fresh fill marks at the sell side and read
+-11.7% (x10) and -21% (x21) one minute after entry today, so this stop will
+close many entries ~2-3 minutes in unless the price rises at once; and "never
+-18%" is not guaranteed -- a fast slide during the 2 minutes, or the 10-lot
+cap, can realise more than -5%.

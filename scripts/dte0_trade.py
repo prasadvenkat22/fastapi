@@ -834,6 +834,14 @@ def main() -> None:
                     "down.%s", MACRO_SYMBOL,
                     f"  (factors: {factors})" if factors else "")
 
+    try:
+        from trading_engine.macro_calendar import releases_on
+        for rel in releases_on():
+            logger.info("data release today: %s ET %s%s", rel.get("time"), rel.get("name"),
+                        f" — {rel['note']}" if rel.get("note") else "")
+    except Exception:
+        pass
+
     # The engine's minute-by-minute yield spike, independent of the verdict.
     yield_spike = None
     if YIELD_SPIKE_REFUSES_CALLS and TNX_SPIKE_BPS > 0:

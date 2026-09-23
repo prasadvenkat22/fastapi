@@ -98,3 +98,29 @@ def describe(now: "datetime | None" = None) -> str:
         return ""
     state = "standing aside" if blackout_active(now) else f"blackout {EVENT_BLACKOUT}"
     return f"scheduled macro event today ({now.date().isoformat()}) — {state}"
+
+
+# SCHEDULED DATA RELEASES -- INFORMATIONAL (2026-09-23, section 222).
+#
+# The S&P Global flash PMI at 09:45 moved the 10Y +10bp and the engine only
+# found out from the tape. Unlike EVENT_DATES this list never blocks a trade;
+# it is shown on the desk and logged so the operator knows a release is due.
+# Kept in config/data_releases.json, filled from the publishers' calendars.
+RELEASES_PATH = os.getenv(
+    "TRADING_DATA_RELEASES_PATH",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "config", "data_releases.json"))
+
+
+def releases_on(day: "date | datetime | None" = None) -> list:
+    """[{date, time, name, note}] scheduled for this session, time-ordered."""
+    import json
+    day = day or datetime.now(NY)
+    day = day.date() if hasattr(day, "date") else day
+    try:
+        with open(RELEASES_PATH, encoding="utf-8") as fh:
+            rows = (json.load(fh) or {}).get("releases") or []
+    except (OSError, ValueError):
+        return []
+    out = [r for r in rows if isinstance(r, dict) and r.get("date") == day.isoformat()]
+    return sorted(out, key=lambda r: str(r.get("time") or ""))

@@ -500,6 +500,70 @@ async def update_settings(body: SettingsUpdate,
 
 
 # ---------------------------------------------------------------------------
+# MACRO PANEL. What the engine's risk gates see right now: VIX, crude and the
+# 10Y against the session open and the thresholds that force risk-off, the
+# rotation's QQQ macro verdict, and today's scheduled events and releases.
+# Read-only; each reading fails soft to null rather than 500 the panel.
+# ---------------------------------------------------------------------------
+
+@router.get("/macro")
+async def macro_panel(db: db_dependency):
+    from trading_engine import macro_calendar, nodes
+    from trading_engine.data_feed import fetch_oil, fetch_tnx, fetch_vix
+
+    def _read(fn):
+        try:
+            return fn()
+        except Exception:
+            return None
+
+    vix, oil, tnx = _read(fetch_vix), _read(fetch_oil), _read(fetch_tnx)
+    gates = []
+    if tnx is not None:
+        gates.append({"name": "10Y spike", "value": f"{tnx.change_bps:+.1f}bp",
+                      "limit": f">= +{nodes.TNX_SPIKE_BPS:g}bp",
+                      "tripped": tnx.change_bps >= nodes.TNX_SPIKE_BPS})
+    if vix is not None:
+        gates.append({"name": "VIX level", "value": f"{vix.level:.2f}",
+                      "limit": f">= {nodes.VIX_LEVEL_MAX:g}",
+                      "tripped": vix.level >= nodes.VIX_LEVEL_MAX})
+        gates.append({"name": "VIX spike", "value": f"{vix.change_pct:+.1f}%",
+                      "limit": f">= +{nodes.VIX_SPIKE_PCT:g}%",
+                      "tripped": vix.change_pct >= nodes.VIX_SPIKE_PCT})
+    if oil is not None and nodes.CRUDE_SPIKE_PCT > 0:
+        gates.append({"name": "Crude spike", "value": f"{oil.change_pct:+.2f}%",
+                      "limit": f">= +{nodes.CRUDE_SPIKE_PCT:g}%",
+                      "tripped": oil.change_pct >= nodes.CRUDE_SPIKE_PCT})
+
+    rotation = None
+    try:
+        from trading_engine.symbol_news import classify_day
+        g = classify_day("QQQ") or {}
+        if g.get("verdict"):
+            rotation = {"verdict": g.get("verdict"), "confidence": g.get("confidence")}
+    except Exception:
+        rotation = None
+
+    last = db.query(TradingLog).order_by(TradingLog.timestamp.desc()).first()
+    return _json_safe({
+        "readings": {
+            "vix": vars(vix) if vix else None,
+            "crude": vars(oil) if oil else None,
+            "tnx": vars(tnx) if tnx else None,
+        },
+        "gates": gates,
+        "risk_off": any(x["tripped"] for x in gates),
+        "engine": {"sentiment": getattr(last, "market_sentiment", None),
+                   "status": getattr(last, "execution_status", None),
+                   "at": getattr(last, "timestamp", None)},
+        "rotation": rotation,
+        "calendar": {"event_day": macro_calendar.is_event_day(),
+                     "note": macro_calendar.describe() or None,
+                     "releases": macro_calendar.releases_on()},
+    })
+
+
+# ---------------------------------------------------------------------------
 # SCREENER. Read-only, and slow by the standards of this router: each call
 # fetches daily bars, an option chain and intraday bars per symbol, so a six
 # name screen takes seconds rather than milliseconds. That is why `symbols` is

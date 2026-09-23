@@ -1,0 +1,7 @@
+{
+  "_comment": "Scheduled data releases shown on the desk's Macro panel and in the rotation log. INFORMATIONAL: nothing here blocks a trade (the yield-spike veto reacts to the market instead). Add dates only from the publisher's calendar (S&P Global, BLS, BEA, ISM); a guessed date is worse than none. Times are ET.",
+  "releases": [
+    {"date": "2026-09-23", "time": "09:45", "name": "S&P Global flash US PMI (Sep)",
+     "note": "Services 58.7, highest in ~5 years; input costs rose at the steepest rate in 4 years. 10Y +10bp to ~5.10% by 13:00."}
+  ]
+}

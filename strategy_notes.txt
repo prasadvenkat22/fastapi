@@ -13567,3 +13567,26 @@ up and the exit earlier. Not measured; replay with 218-220 after the close.
 
 Open: the close/ask orders go out in lots of at most 10 (x19 had its 8.00 ask
 on 10 only; 1070/1080's stop filled 10 then 8 a minute later).
+
+
+222. A RATES SHOCK THE ROTATION NEVER SAW; A MACRO PANEL  (2026-09-23)
+
+09:45 ET: S&P Global flash US services PMI 58.7 (a ~5-year high), input costs
+at the steepest rate in 4 years; a Fed governor said more hikes are likely.
+The 10Y went 4.990% at the open -> +4.3bp at 10:06 (the engine's TNX spike rule
+forced risk-off) -> 5.096% (+10.6bp) by 13:00, a 19-year high. The macro
+calendar knew nothing (it lists FOMC and hand-entered dates only); the
+headline macro read stayed NEUTRAL 0.24.
+
+The weekly rotation's TSLA call (09:50) was NOT bought into a bad macro: the
+QQQ verdict read NEUTRAL (open BEARISH) at 09:50 and the spike came 16 minutes
+later. But the rotation reads a verdict refreshed every 15 minutes and never
+saw the engine's minute-level spike. Now it does: 10Y >= TRADING_TNX_SPIKE_BPS
+over the open refuses call debits (put debits allowed), independent of the
+verdict (TRADING_DTE0_YIELD_SPIKE_VETO). The level gate already refuses calls
+on a BEARISH verdict with no confidence floor; at 13:25 it read BEARISH 0.48.
+
+Also: config/data_releases.json -- scheduled data releases, informational only
+(no blackout), shown on a new desk Macro panel (GET /trading/macro: 10Y, VIX,
+crude vs open and the risk-off thresholds, the rotation's verdict, today's
+calendar) and logged by the rotation. Filled only from publishers' calendars.

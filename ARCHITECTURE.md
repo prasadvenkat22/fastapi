@@ -1202,6 +1202,17 @@ logged with its status and answered 503 "busy, try again", never a bare 502
 trading chat is the AI lab (`/api/genai/agent/ask`, admin and trader; uploads and direct prompt admin only). The widget shows
 anonymous visitors a sign-up prompt, and only a desk admin gets file uploads.
 
+## The Macro panel and data releases (section 222)
+
+`GET /trading/macro` (admin/trader) returns what the engine's risk gates see:
+10Y, VIX and crude against the session open with the thresholds that force
+risk-off (`TRADING_TNX_SPIKE_BPS`, `TRADING_VIX_LEVEL_MAX`, `TRADING_VIX_SPIKE_PCT`,
+`TRADING_CRUDE_SPIKE_PCT`), the rotation's QQQ macro verdict, and today's
+calendar: FOMC / `TRADING_EVENT_DATES` plus `config/data_releases.json`
+(informational, never a blackout; dates only from the publishers' calendars).
+The desk shows it as the Macro card. The weekly/0DTE rotation refuses call
+debits whenever the 10Y is spiking, not only when its 15-minute verdict turns.
+
 ## HTTP: the screener is callable
 
 ```

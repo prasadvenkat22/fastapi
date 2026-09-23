@@ -2502,8 +2502,14 @@ def review(engine_symbols: "set | None" = None) -> list:
                       and (prev_iv is None
                            or (iv_now < prev_iv if st["credit"] else iv_now > prev_iv)))
             if better:
-                rec = {"peak_iv": iv_now, "peak_at": now.isoformat(),
-                       "peak_entry": entry_abs}
+                # UPDATE, DO NOT REPLACE. This used to build a fresh dict, which
+                # threw away everything else the record carries -- the engine's
+                # own resting ask, the strike guard's arming, every rule clock.
+                # 2026-09-23 11:22: MU 1065/1075's 8.00 ask filled x10 and was
+                # never booked, because a new peak had dropped rec["ask"].
+                rec = dict(rec, peak_iv=iv_now, peak_at=now.isoformat(),
+                           peak_entry=entry_abs)
+                rec.pop("peak", None)
             elif not rec:
                 rec = {"peak_iv": iv_now, "peak_at": now.isoformat(),
                        "peak_entry": entry_abs}

@@ -64,3 +64,10 @@ def test_strike_guard_source_arms_only_after_pinned():
     src = inspect.getsource(o.review)
     assert 'rec["strike_armed"] = True' in src
     assert 'breach and bool(rec.get("strike_armed"))' in src
+
+
+def test_new_peak_updates_the_record_instead_of_replacing_it():
+    import inspect
+    src = inspect.getsource(o.review)
+    assert "rec = dict(rec, peak_iv=iv_now" in src
+    assert 'rec = {"peak_iv": iv_now, "peak_at": now.isoformat(),\n                       "peak_entry": entry_abs}\n            elif' not in src

@@ -13722,3 +13722,14 @@ this position (from the 1-day values) instead of +25% / 30 min / 0.25 ATR.
 
 The TSLA weekly this rule was asked about had already been closed by hand at
 11:34 at 9.99 (-334).
+
+Addendum to 226 (16:32, after the close): operator -- -20% for every day with 2+
+sessions left, -10% on the last day before expiry, all with the 2-minute wait;
+expiry day itself is the same-day ladder (-5%, first check). The days-left
+scaling interpolates, so -20 / -10 over the default 5-session span would have
+read -12.5 / -15 / -17.5 mid-week; TRADING_ORPHAN_LATER_SCALE_DAYS (now tunable)
+= 2 makes it a step. Checked with later_params for the 09-25 expiry: Mon (4
+left) -20, Wed (2 left) -20, Thu (1 left) -10. The later STALL follows the same
+step: full-week values (+25% / 30 min / 0.25 ATR) with 2+ sessions left, the
+1-day values on the last day. MU 260925 C 1070/1090 x5 @ 7.75 -> stop 6.20 now,
+6.98 on Thursday.

@@ -1,0 +1,127 @@
+TRADING SETTINGS -- COMMANDS FOR THE DIGITALOCEAN DROPLET
+=========================================================
+
+Stop loss, stall, give-back, budgets and the other exit/entry knobs can be
+changed WITHOUT editing .env.production and WITHOUT recreating the app
+container. Changes go to /opt/fastapi/trading_overrides.env and the next cron
+cycle (within a minute) trades on them.
+
+Same file as the web page:  https://dataaisys.com/desk/settings  (admin to save)
+
+Precedence:  trading_overrides.env  >  .env.production  >  code default
+Remove an override and the .env.production value is back next cycle.
+
+Only whitelisted keys are accepted (list them with `list` below). Going live
+(TRADING_DTE0_LIVE, TRADING_MANAGE_ORPHANS) is NOT here -- that stays an
+.env.production edit. The kill switch is the runtime off switch.
+
+
+0. ONE-TIME: log in and set up a shortcut
+-----------------------------------------
+ssh root@159.223.127.31
+cd /opt/fastapi
+
+# paste this once per ssh session (or add it to ~/.bashrc):
+alias tset='docker compose -f /opt/fastapi/docker-compose.yml -f /opt/fastapi/docker-compose.prod.yml --project-directory /opt/fastapi exec -T -w /app -e PYTHONPATH=/app app python scripts/settings.py'
+
+
+1. SEE WHAT IS IN FORCE
+-----------------------
+tset list                    # every knob: * = override, blank = .env.production, . = code default
+tset list --group 0dte       # only the 0DTE exits
+tset list --group weekly     # only the weekly (later-expiry) exits
+tset list --group entries    # budgets, rotations, entry bands
+tset get TRADING_ORPHAN_STOP_PCT     # one knob: bounds, default, env value, override
+
+
+2. CHANGE SETTINGS (several at once is fine; a bad value changes nothing)
+--------------------------------------------------------------------------
+
+# --- 0DTE stop loss ---
+tset set TRADING_ORPHAN_STOP_PCT=-30                  # stop at -30% of cost   (range -100..0)
+tset set TRADING_ORPHAN_STOP_CONFIRM_MINUTES=2        # must hold 2 min first  (0 = immediate)
+tset set TRADING_ORPHAN_OTM_STOP=true                 # close the moment a debit spread is OTM
+tset set TRADING_ORPHAN_SLOW_STOP_PCT=-15 TRADING_ORPHAN_SLOW_STOP_MINUTES=30
+
+# --- 0DTE stall (close a winner that stops making new highs) ---
+tset set TRADING_ORPHAN_STALL_MINUTES=20              # minutes without a new peak (0 = off)
+tset set TRADING_ORPHAN_STALL_GIVEBACK_PCT=10         # give-back in return points
+tset set TRADING_ORPHAN_STALL_GIVEBACK_BAND=0.20      # OR as share of (width - entry); wins when > 0
+tset set TRADING_ORPHAN_STALL_MIN_GAIN_PCT=8          # only exit if it books at least +8%
+
+# --- 0DTE targets and times ---
+tset set TRADING_ORPHAN_TARGET_RETURN_PCT=30          # take profit at +30% on cost
+tset set TRADING_ORPHAN_CEILING=0.90                  # or at 90% of width
+tset set TRADING_ORPHAN_FORCE_CLOSE=15:45             # flatten same-day positions (ET)
+tset set TRADING_ORPHAN_HOLD_UNTIL=09:35              # no loss-taking before (ET)
+
+# --- Weekly (later-expiry) ladder ---
+tset set TRADING_ORPHAN_LATER_STOP_PCT=-45 TRADING_ORPHAN_LATER_STOP_MINUTES=15
+tset set TRADING_ORPHAN_LATER_STALL_ARM=25            # stall arms once gain reaches +25%
+tset set TRADING_ORPHAN_LATER_STALL_MINUTES=30        # then fires after 30 min without a new peak
+tset set TRADING_ORPHAN_LATER_STALL_GIVEBACK_ATR=0.25 # give-back in ATR (replaces points when > 0)
+tset set TRADING_ORPHAN_LATER_HOLD_UNTIL=09:45
+tset set TRADING_ORPHAN_LATER_STOP_PCT_1D=-30         # scaled stop the day before expiry
+
+# --- Account circuit breaker ---
+tset set TRADING_ACCOUNT_FLOOR=12000                  # flatten EVERYTHING below $12,000 equity (0 = off)
+
+# --- Entries and budgets ---
+tset set TRADING_DTE0_MAX_BUDGET=1500 TRADING_WEEKLY_MAX_BUDGET=5000
+tset set TRADING_DTE0_ROTATE_CUTOFF=11:30 TRADING_DTE0_MAX_ROTATIONS=3
+tset set TRADING_DTE0_ROTATE_COOLDOWN_MIN=30
+tset set TRADING_WEEKLY_MIN_PWIN=0.45
+
+(The numbers above are examples of the syntax, not recommendations. Check
+`tset list` first -- several of these are already set in .env.production.)
+
+
+3. UNDO
+-------
+tset unset TRADING_ORPHAN_STOP_PCT        # back to the .env.production value
+tset reset                                # drop EVERY override
+tset log                                  # who changed what, when (UTC)
+
+
+4. CONFIRM THE CYCLE PICKED IT UP
+---------------------------------
+cat /opt/fastapi/trading_overrides.env            # the file itself
+tail -f /var/log/qqq-trading.log                  # next minute's cycle
+# a hand-edited bad line shows up in that log as:
+#   [trading_overrides] line N: ... -- ignored
+
+
+5. NOTES
+--------
+* Takes effect on the next cron minute for decisions. The rule columns on
+  the Positions page come from the API process and show the new values only
+  after the next app recreate:
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate app
+  That recreate costs ~1 minute of cycles; time it against open 0DTE positions.
+* A change applies to positions ALREADY open, not just new ones. Tightening
+  a stop can close a position on the very next cycle.
+* trading_overrides.env and trading_overrides.log are gitignored: `git pull`
+  never touches them.
+* The permanent home for a setting is still .env.production. To make an
+  override permanent: add it there (back up first as
+  .env.production.bak-<tag>), then `tset unset KEY`.
+
+
+6. FIRST DEPLOY (once) -- settings page, public sign-up, news chat
+------------------------------------------------------------------
+# Recreating `app` costs ~1 min of cron cycles: do it with no 0DTE position
+# open, or outside market hours. It also runs the new alembic migration
+# (users.pending_verification + email_verification_tokens).
+cd /opt/fastapi
+git pull
+grep -q '^APP_BASE_URL=' .env.production || echo "APP_BASE_URL missing: sign-up links will carry a raw token"
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate app
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -t
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -s reload
+
+# front-end (safe during market hours)
+cd /opt/data-ai-solutions && git pull && docker compose -f docker-compose.server.yml up -d --build
+
+# check from anywhere
+curl -s -o /dev/null -w "%{http_code}\n" https://dataaisys.com/trading/settings    # 401 = route live, auth enforced
+curl -s -X POST https://dataaisys.com/api/news/ask -H 'Content-Type: application/json' -d '{"query":"latest news on MU"}'

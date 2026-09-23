@@ -4,9 +4,12 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+import models_pgdb.models as models
 from config.db_pgrs import SessionLocal
+from helpers.auth_deps import require_admin
 from models_pgdb.trading_models import OpenPosition, TradeHistory, TradingLog
 from schemas_pgrs.trading_schema import (
     BrokerPosition,
@@ -20,7 +23,7 @@ from schemas_pgrs.trading_schema import (
     TradingCycleResponse,
     TradingStatusResponse,
 )
-from trading_engine import orphans, scheduler, tradier_orders
+from trading_engine import orphans, scheduler, settings_overrides, tradier_orders
 from trading_engine.broker import estimate_credit_value, estimate_spread_value, fill_price, is_credit
 from trading_engine.playbook import WINDOWS
 from trading_engine.data_feed import TradierDataError, fetch_qqq_spot
@@ -463,6 +466,37 @@ async def toggle_kill_switch(action: str = Query(..., pattern="^(ACTIVATE|DEACTI
             os.remove(KILL_SWITCH_PATH)
 
     return KillSwitchResponse(kill_switch_active=os.path.exists(KILL_SWITCH_PATH))
+
+
+# ---------------------------------------------------------------------------
+# SETTINGS. The whitelisted exit/entry knobs, written to trading_overrides.env
+# (see trading_engine/settings_overrides.py). Reading is open to the trading
+# roles; writing is admin-only, because a stop-loss change moves real money
+# on the next cron minute.
+# ---------------------------------------------------------------------------
+
+class SettingsUpdate(BaseModel):
+    values: dict[str, str | float | int | bool] = Field(default_factory=dict)
+    unset: list[str] = Field(default_factory=list)
+
+
+@router.get("/settings")
+async def get_settings():
+    """Every tunable: code default, .env.production value, override, effective."""
+    return settings_overrides.snapshot()
+
+
+@router.put("/settings")
+async def update_settings(body: SettingsUpdate,
+                          user: Annotated[models.User, Depends(require_admin())]):
+    """Validate everything first, then write once; a bad value changes nothing."""
+    try:
+        settings_overrides.unset(body.unset, who=user.email)
+        values = {k: (str(v).lower() if isinstance(v, bool) else v) for k, v in body.values.items()}
+        settings_overrides.set_many(values, who=user.email)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return settings_overrides.snapshot()
 
 
 # ---------------------------------------------------------------------------

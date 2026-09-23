@@ -27,3 +27,9 @@ data/
 app/nginx/conf.d/*-ssl.conf
 app/nginx/conf.d/*-locations.inc
 app/nginx/conf.d/*.disabled*
+
+# Operator-tuned trading settings and their audit trail, written on the
+# droplet by /trading/settings and scripts/settings.py. Per-host state.
+trading_overrides.env
+trading_overrides.log
+.trading_overrides.*.tmp

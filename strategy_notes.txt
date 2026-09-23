@@ -13463,3 +13463,21 @@ SET LIVE (overrides, 10:39): ASK=true, ASK_START_WIDTH 0.90 (operator), ASK_FLOO
 0.80 (operator, from the midday-bid measurement). First fire 10:40: MU 1065/1075
 x16 resting at 9.00, floor 8.00. Not measured: whether 0.90 fills as often as
 0.88 did; the 09-19 sample saw 90%+ bids in one cycle in five from 12:00-14:00.
+
+
+218. THE TAPE EXIT NOW RESPECTS INTRINSIC, LIKE THE STOP  (2026-09-23)
+
+MU 1065/1075 x16 (entry 6.15) at 10:47: MU 1076 under a falling VWAP 1085.5,
+intrinsic 10.00, mark 5.80 (-5.7%) on short-leg time premium. The tape clock
+was 9 of 15 minutes from selling a structure worth 10.00 at expiry for ~5.80
+(about -$560). The stop already refuses exactly this (STOP_RESPECTS_INTRINSIC);
+the tape exit did not, and whether it could fire depended on the mark being
+above or below -10% that minute, because the stop's intrinsic branch comes
+first in the chain. Operator decision: hold it off the same way. Live 10:51
+(the clock reset that cycle). TRADING_ORPHAN_TAPE_EXIT_RESPECTS_INTRINSIC=false
+restores the old rule. NOT measured against section 211's +9,891; that
+replay should be re-run with the guard before the next change to this rule.
+
+Asked, not built: resetting the tape clock when the underlying bounces or
+stalls under a still-falling VWAP (today it resets only on a close back
+above VWAP or a VWAP that stops falling). Needs a replay first.

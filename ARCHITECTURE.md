@@ -1181,6 +1181,17 @@ ends with the SQL. `POST /api/genai/agent/ask {"query": ...}` is the entry
 point. First live answers on 2026-09-19: realised P&L by underlying for the
 week with close reasons, and SanDisk's September verdict history.
 
+**`news_agent`** (2026-09-23) answers "what is the latest news on MU": it
+detects the ticker (`$TICKER`, an `ALIASES` company name, a known symbol, or a
+capitalised word) and a news intent, reads the last 72 hours of stored RSS and
+Polygon headlines (`market_news_vectors`, `news_seen`) read-only, falls back to
+Polygon `/v2/reference/news` live when the newest stored row is over 12 hours
+old or there are fewer than three, and has Gemini summarise only those
+headlines. The supervisor routes news questions to it. The site's chat widget
+reaches it through the one PUBLIC route here, `POST /api/news/ask`
+(`GENAI/news_router.py`): 300-character input, headlines and the graded verdict
+only, never positions or SQL, cached per symbol, nginx login zone.
+
 ## HTTP: the screener is callable
 
 ```
@@ -1351,7 +1362,25 @@ restart.
 
 ## What manages an open position
 
-`orphans.py`, every cycle. Current settings:
+`orphans.py`, every cycle. The values below are `.env.production`; any of the
+whitelisted knobs can be overridden live (next section), so `tset list` on the
+droplet or `/desk/settings` is the authority on what is in force today.
+
+### Tuning without a restart (2026-09-23, section 216)
+
+`trading_engine/settings_overrides.py` holds a whitelist (`REGISTRY`) of about
+37 exit and entry knobs with types and bounds. Overrides live in
+`/opt/fastapi/trading_overrides.env` (gitignored, audit trail in
+`trading_overrides.log`) and `trading_engine/__init__.py` loads them into
+`os.environ` before any module reads a knob. Cron starts a fresh process each
+minute, so the next cycle trades on a change; the uvicorn process only sees it
+after an `app` recreate, which is why the Positions page's rule columns lag.
+Precedence: override > `.env.production` > code default. Going live
+(`TRADING_DTE0_LIVE`, `TRADING_MANAGE_ORPHANS`) is deliberately not tunable.
+Writers: `PUT /trading/settings` (role `admin`), `scripts/settings.py`
+(`list/get/set/unset/reset/log`), both validating before a single atomic write.
+
+Current settings:
 
 ```
 TRADING_ORPHAN_UNDERLYING=          empty = EVERY symbol

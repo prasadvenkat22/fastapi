@@ -13420,3 +13420,21 @@ number rather than gate on it: delta_long / delta_short / delta_net are on
 every screener row and the board shows "Net Δ" beside Pwin as net with
 long/short small, amber above 0.50, tooltip carrying the chain's own P(max).
 Sits there for comparison, as asked.
+
+
+216. EXIT SETTINGS TUNABLE WITHOUT A RESTART  (2026-09-23)
+
+OPERATIONAL, NOT A MEASUREMENT. Changing a stop or a stall used to mean a hand
+edit of .env.production (the same file as the database password) and an app
+recreate that costs a minute of cycles. Now a whitelisted set of knobs -- the
+0DTE and weekly exit ladders, the account floor, budgets, rotation limits and
+entry bands -- is overridden from trading_overrides.env, written by
+/desk/settings (admin only) or scripts/settings.py on the droplet, and read by
+the next cron cycle. commands.txt has the commands; ARCHITECTURE.md "Tuning
+without a restart" has the mechanism.
+
+What it does not change: any number. Nothing was re-tuned in this change, and
+an override applies to positions already open -- tightening a stop can close
+one on the next minute. Every change lands in trading_overrides.log with who
+and when, so a later section can line a result up against the setting that
+produced it.

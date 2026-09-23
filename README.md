@@ -25,6 +25,16 @@ forgotten one at `POST /auth/forgot-password` (needs SMTP configured). `scripts/
 `scripts/set_password.py` do the same against the database directly, and are the way
 back when nobody can log in. See auth_notes.txt.
 
+Public sign-up (2026-09-23): `POST /auth/signup` creates a role `user` account that
+cannot log in until the mailed link is spent at `POST /auth/verify-email` (needs
+`APP_BASE_URL` and mail configured). The reply is the same whether or not the
+address exists. A `user` gets 403 from every `/trading` route.
+
+Trading settings (2026-09-23): stop loss, stall, give-back, budgets and the other
+whitelisted knobs are tuned without a restart through `trading_overrides.env`,
+from `/desk/settings` (`GET`/`PUT /trading/settings`, admin to write) or
+`scripts/settings.py` on the droplet. `commands.txt` has the copy-paste commands.
+
 Every router except `/auth` requires a token, applied in `main.py`; `/`, `/docs`,
 `/openapi.json` and `/static` stay public. There is still no TLS, so tokens cross
 the wire in plain HTTP — auth_notes.txt section 6 lists what is left.

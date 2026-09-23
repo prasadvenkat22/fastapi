@@ -69,6 +69,9 @@ tset set TRADING_ORPHAN_STRIKE_GUARD_BUFFER=0          # points past the strike 
 # under an adverse VWAP for N minutes -- judged on MU, not the spread's mark.
 tset set TRADING_ORPHAN_UNDER_STOP=true TRADING_ORPHAN_UNDER_STOP_MINUTES=2
 tset set TRADING_ORPHAN_UNDER_STOP_CUSHION=0            # points above break-even (calls)
+tset set TRADING_ORPHAN_UNDER_STOP_CUSHION_WIDTH=0.20     # OR as a share of width; the larger applies
+tset set TRADING_ORPHAN_UNDER_STOP_ARM_FIRST=true        # watch only once MU has been above the line
+tset set TRADING_ORPHAN_PREARM_STOP_PCT=0                # mark stop until armed (0 = ordinary -10%)
 # DO NOT also place a manual limit on the same legs: a working order the
 # engine did not place switches off its stop, ask and 15:45 flatten
 # (logged every cycle as "an order this engine did not place is working").

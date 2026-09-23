@@ -13605,3 +13605,25 @@ not VWAP: 2 continuous minutes at or below -10%, reset when the mark recovers
 or the underlying is back above break-even. Stated for the record: a fresh fill
 marks at the sell side and read -21% one minute in, so the -10% stop can still
 cut an entry made below break-even within minutes.
+
+Addendum to 223 (14:33): underlying-stop cushion raised to 20% of width
+(operator, after watching a MU 1065/1075 x12 @ 6.33 give back from +8.9% to
++0.3% at 14:31). Line for that position 1073.33 = break-even + 2.00, expiry
+value 8.33 at the line; a midday fire there sells near cost because of the
+time-value discount. Global: applies to every same-day debit, and arming now
+needs the underlying at break-even + 20% of width.
+
+Live overrides at the end of the 09-23 session changes (trading_overrides.env):
+    TRADING_ORPHAN_ASK=true
+    TRADING_ORPHAN_ASK_START_WIDTH=0.9
+    TRADING_ORPHAN_ASK_FLOOR_WIDTH=0.8
+    TRADING_ORPHAN_STRIKE_GUARD=false
+    TRADING_ORPHAN_STRIKE_GUARD_MINUTES=3
+    TRADING_ORPHAN_UNDER_STOP=true
+    TRADING_ORPHAN_UNDER_STOP_MINUTES=2
+    TRADING_ORPHAN_UNDER_STOP_CUSHION=0
+    TRADING_ORPHAN_UNDER_STOP_CUSHION_WIDTH=0.2
+    TRADING_ORPHAN_UNDER_STOP_ARM_FIRST=true
+    TRADING_ORPHAN_PREARM_STOP_PCT=0
+    TRADING_ORPHAN_LATER_STOP_PCT=0
+    TRADING_ORPHAN_LATER_TARGET_PCT=0.9

@@ -12,4 +12,6 @@ class SupervisorState(TypedDict, total=False):
     db_answer: Optional[str]
     db_sql: Optional[str]
     db_rows: int
+    news_answer: Optional[str]
+    news_symbol: Optional[str]
     final_answer: str

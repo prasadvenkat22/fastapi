@@ -204,6 +204,7 @@ class AgentUploadResponse(BaseModel):
     pdf_answer: Optional[str] = None
     db_answer: Optional[str] = None
     db_sql: Optional[str] = None
+    news_answer: Optional[str] = None
     agents_used: List[str]
 
 
@@ -217,14 +218,17 @@ async def genai_agent_ask(request: AskRequest):
     trading-database agent, which has Gemini write one guarded read-only SELECT
     over the trading and news tables, runs it, searches the news vectors when
     the question is about news, and answers with the SQL it used (section 200).
+    "Latest news on MU" goes to the news agent instead (GENAI/agents/news_agent.py).
     """
     try:
         state = await run_supervisor(query=request.query, use_db=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    agents_used = [name for name, key in (("trading_db_agent", "db_answer"), ("news_agent", "news_answer"))
+                   if state.get(key)]
     return AgentUploadResponse(
         final_answer=state.get("final_answer", ""), db_answer=state.get("db_answer"),
-        db_sql=state.get("db_sql"), agents_used=["trading_db_agent"] if state.get("db_answer") else [])
+        db_sql=state.get("db_sql"), news_answer=state.get("news_answer"), agents_used=agents_used)
 
 
 @router.post("/agent/upload", response_model=AgentUploadResponse)

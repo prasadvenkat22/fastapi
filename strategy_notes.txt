@@ -13996,3 +13996,23 @@ Cosmetic, not fixed: the holding log's "stall N pts" is computed from the
 intrinsic peak, so with STALL_ON_MARK on and a negative intrinsic peak it falls
 through to the ATR give-back (740/738 read "241.7pts"). The exit itself uses
 the sale-price peak and the 2%-of-peak give-back.
+
+
+236. A STOP THAT DID NOT FILL SWITCHED ITSELF OFF  (2026-09-24)
+
+16:51:11 UTC QQQ 743/740 x1 STOP_LOSS sent a limit at the natural; the price
+kept falling, it did not fill in the 12-second wait ("still working -- booking
+deferred"), and from 16:52 the position read "[observation only]": the next
+cycle saw a working order on the legs and stood the ladder down (in_flight),
+treating the engine's own stop as a stranger's order. Fix fd6e561d3 (pulled
+16:58): every close -- not only §233's mid closes -- is cancelled when it does
+not fill, a fill during the cancel is booked, and the next cycle re-sends at
+the fresh price. tests/test_close_cancel.py.
+
+The same window had two other causes of "stop not working", both by design:
+  - 16:49 the operator's own working orders on 743/740 and 742/739 turned
+    stop, stall and flatten OFF for those legs until they filled.
+  - 16:54 averaging 743/739 from x2 @ 1.77 to x4 @ 1.90 is a new position: its
+    peak and the stop's clock start over.
+743/739 x4 then stopped at 16:59 (-17.2% mark, -130.00 booked). Also 16:56:
+the operator moved "Stall starts watching at" back from 15 to 30 in the UI.

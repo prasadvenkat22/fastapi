@@ -254,7 +254,7 @@ async def get_broker_positions():
             band = orphans.ORPHAN_STALL_GIVEBACK_BAND
             flat = orphans.STALL_GIVEBACK_PCT
             quiet_needed = orphans.STALL_MINUTES
-            armed = (peak or 0) > 0
+            armed = orphans.stall_arm_reached(peak)
         else:
             band = orphans.ORPHAN_LATER_STALL_GIVEBACK_BAND
             flat = None

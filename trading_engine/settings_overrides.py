@@ -186,6 +186,10 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_ORPHAN_STALL_MINUTES", "Stall window", G_0DTE, "float", "0",
             "Close a winner that has not made a new peak for this long. 0 disables.",
             "min", 0, 240),
+    Setting("TRADING_ORPHAN_STALL_ARM", "Stall starts watching at", G_0DTE, "float", "0",
+            "The same-day stall only watches once the peak gain reaches this. After that every "
+            "new high resets the watch to that level (a local max) and restarts the stall window. "
+            "0 = watch from any gain.", "%", 0, 500),
     Setting("TRADING_ORPHAN_STALL_GIVEBACK_PCT", "Stall give-back (points)", G_0DTE, "float", "0",
             "Give-back from peak, in return points, that also fires the stall.",
             "pts", 0, 200),

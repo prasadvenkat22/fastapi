@@ -772,6 +772,24 @@ STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_STALL_MINUTES",
 STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT",
                                      os.getenv("TRADING_STALL_GIVEBACK_PCT", "0")))
 
+# WHERE THE SAME-DAY STALL STARTS WATCHING. Section 229.
+#
+# Until now the same-day stall watched from the first cent of gain (peak > 0),
+# while the weekly one has always waited for ORPHAN_LATER_STALL_ARM. Operator,
+# 2026-09-24: "start watching at X% ... if profit goes up to 40% it should reset
+# to that level ... like a local max". That is this arm plus the peak tracking
+# already here: the peak is a high-water mark on intrinsic, every new high
+# restarts the quiet clock, and the stall fires only after STALL_MINUTES with no
+# new high AND the give-back below that high. Unmeasured; 0 = the old behaviour.
+ORPHAN_STALL_ARM_PCT = float(os.getenv("TRADING_ORPHAN_STALL_ARM", "0") or 0)
+
+
+def stall_arm_reached(peak_pct: "float | None") -> bool:
+    """Has a same-day position's peak reached the level where the stall watches?"""
+    if peak_pct is None:
+        return False
+    return peak_pct >= ORPHAN_STALL_ARM_PCT if ORPHAN_STALL_ARM_PCT > 0 else peak_pct > 0
+
 # Peak tracking must survive a container recreate or the stall resets on every
 # deploy and can never fire. A file under the mounted working directory.
 # CEILING: book when there is no meaningful upside left to hold for.
@@ -3019,7 +3037,8 @@ def review(engine_symbols: "set | None" = None) -> list:
                     ORPHAN_LATER_STALL_GIVEBACK_BAND, LP["giveback_atr"]))
 
             stall_armed = (
-                zero_dte and past_hold and STALL_MINUTES > 0 and rec["peak"] > 0
+                zero_dte and past_hold and STALL_MINUTES > 0
+                and stall_arm_reached(rec["peak"])
                 and quiet >= STALL_MINUTES
                 and stall_pct <= rec["peak"] - _giveback_points(
                     st["root"], entry_abs, rec["peak"], STALL_GIVEBACK_PCT,
@@ -3262,12 +3281,15 @@ def review(engine_symbols: "set | None" = None) -> list:
                         # The effective number, not the setting -- under the
                         # fraction basis it is derived per structure and the
                         # raw setting would describe a rule not in force.
-                        parts.append("stall %.1fpts/%.0fmin%s" % (
+                        parts.append("stall %.1fpts/%.0fmin%s%s" % (
                             _giveback_points(
                                 st["root"], entry_abs, rec["peak"],
                                 STALL_GIVEBACK_PCT,
                                 abs(st["short_strike"] - st["long_strike"])),
                             STALL_MINUTES,
+                            "" if ORPHAN_STALL_ARM_PCT <= 0 else (
+                                " ARMED" if stall_arm_reached(rec["peak"])
+                                else " arms at %+.0f%%" % ORPHAN_STALL_ARM_PCT),
                             "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
                     if ORPHAN_FORCE_CLOSE:
                         parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)

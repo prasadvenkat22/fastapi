@@ -13802,3 +13802,30 @@ stall on and watching from entry (CREDIT_STALL_ARM=false). The two morning keys
 remain the orphan stall's fallback, but TRADING_ORPHAN_STALL_MINUTES and
 _GIVEBACK_PCT are both set on the droplet, so tuning the engine's stall does not
 move the orphan one. No playbook window overrides the stall.
+
+
+229. THE SAME-DAY STALL STARTS WATCHING AT X%  (2026-09-24)
+
+Operator: "start watching at X% for same day 0DTE positions ... a stall on it
+for 5 minutes which resets if profits keep going up. Like current it is 30%,
+start watching this profit; then it is up to 40%, it should reset to that
+level ... and start watching at that level like a local max."
+
+The weekly stall has always had an arm (TRADING_ORPHAN_LATER_STALL_ARM, 25 live);
+the same-day stall watched from the first cent of gain (peak > 0). New knob
+TRADING_ORPHAN_STALL_ARM ("Stall starts watching at", 0DTE exits group, code
+default 0 = unchanged). The rest of the request was already the stall's shape:
+the peak is a high-water mark on INTRINSIC vs entry (so it moves with the
+underlying, not with the short leg's decay), every new high restarts the quiet
+clock, and it fires after TRADING_ORPHAN_STALL_MINUTES with no new high AND the
+give-back below that high (0.15 of the band live), and only if the sale books
+at least TRADING_ORPHAN_STALL_MIN_GAIN_PCT (8). The holding log line now says
+"arms at +30%" or "ARMED". /trading/positions' stall_armed uses the same test.
+
+Applies to every same-day position orphans.py manages (manual QQQ and the
+rotation), open or new, from the next cron minute. NOT the engine's own QQQ
+bucket trades -- those are nodes.py's stall (section 228). Unmeasured: set at
+the operator's direction as an experiment; 0 reverts it.
+
+Caveat on the live QQQ 740/738: its reconstructed entry (34-73 on a 2-wide)
+makes every percentage rule meaningless on that position, this one included.

@@ -1418,6 +1418,11 @@ not open. The QQQ bucket's own trades exit on nodes.py's stall, tunable in the
 `TRADING_CREDIT_STALL_MINUTES` / `_GIVEBACK_PCT` (blank = follow the morning
 values). `tset list --group engine` shows them.
 
+**Same-day stall arm** (section 229): `TRADING_ORPHAN_STALL_ARM` ("Stall starts
+watching at", 0DTE exits) holds the same-day stall off until the peak gain
+reaches it; after that each new intrinsic high resets the watch level and the
+`TRADING_ORPHAN_STALL_MINUTES` clock. 0 = watch from any gain.
+
 **Ask mode is the auto-managed 0DTE sell limit** (`TRADING_ORPHAN_ASK_*`,
 tunable since section 217): on a pinned spread it rests a sell at START x
 width, holds while the underlying is at or above session VWAP, steps down

@@ -13921,3 +13921,32 @@ The interaction to know: the give-back and the floor still apply. Pressed at
 near +4%, under the +8% floor, so it would not sell. The button protects a
 gain comfortably above floor + give-back; lower either knob to protect smaller
 ones. Unmeasured; the button is opt-in per position.
+
+
+233. PROFIT EXITS AT THE MID; THE 16:08 OUTAGE; A TEST THAT RUNS THE LOOP  (2026-09-24)
+
+Outage: §232's watch-now block read zero_dte before review() assigned it.
+UnboundLocalError every cycle 16:08-16:11 UTC; review() swallows exceptions by
+design, so the cycle reported "ok" while RECONCILE logged the 740/735 x8 as
+"managed by nobody" -- no stop, stall or flatten for four minutes. Hotfix
+9078dd848 (pulled on the droplet at 16:11, live 16:12). Every §229-§232 test
+had read the source text; none executed review(). tests/test_review_replay.py
+now drives review() minute by minute with the broker stubbed and a fake clock,
+and fails on the "Orphan review failed" log line; with the bug re-inserted it
+fails with the same UnboundLocalError.
+
+The operator closed the 740/735 by hand: "so many bugs, the stall never
+worked". On the sale price the stall never had a profit to protect (best
++1.7%, then +4.5% at 16:12 against an 8% floor); on intrinsic it fired and
+refused to sell at a loss -- see 231.
+
+Operator: "it should always sell at mid ... never let profits slip below the
+current level, max 10% of current profit: at 10% sell when it falls to 9%".
+  - New TRADING_ORPHAN_PROFIT_EXIT_AT_MID (default false): STALL, STALL_LATER,
+    PROFIT_LOCK, TARGET, LATER_TARGET, CEILING and GIVEBACK close at the leg-mid
+    price. An unfilled mid close is cancelled after the fill wait and re-priced
+    next cycle, because any working order on the legs switches the ladder off
+    (in_flight). Stops, the floor and the flatten keep the natural.
+  - "10% of current profit" is the existing share-of-peak give-back
+    (TRADING_ORPHAN_STALL_GIVEBACK_FRACTION=0.10), which only applies with the
+    share-of-band give-back at 0 (band wins in _giveback_points).

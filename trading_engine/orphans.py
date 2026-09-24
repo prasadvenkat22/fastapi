@@ -2200,6 +2200,70 @@ def _send_close(st: dict, reason: str, limit_price: float) -> "tuple | None":
         return None
 
 
+# PROFIT EXITS SELL AT THE MID. Section 233.
+#
+# Operator, 2026-09-24: "it should always sell at mid". Every close used to be
+# a limit at the natural (long bid - short ask), which on a deep in-the-money
+# 0DTE spread gives away the whole bid-ask of both legs. With this on, the
+# PROFIT exits below are priced at the mid (long mid - short mid). Loss exits
+# and the flatten keep the natural: a stop that does not fill is worse than a
+# stop that fills a few cents lower.
+#
+# A MID ORDER IS NEVER LEFT RESTING. Any working order on the legs makes the
+# ladder stand down (in_flight) -- stop, stall and flatten all off. So an
+# unfilled mid close is CANCELLED after the usual fill wait, and the next cycle
+# re-prices it at the new mid while every rule stays live. Unmeasured.
+PROFIT_EXIT_AT_MID = os.getenv("TRADING_ORPHAN_PROFIT_EXIT_AT_MID", "false").lower() == "true"
+_MID_REASONS = frozenset({"STALL", "STALL_LATER", "PROFIT_LOCK", "TARGET",
+                          "LATER_TARGET", "CEILING", "GIVEBACK"})
+
+
+def _mid_value(st: dict) -> "float | None":
+    """Spread mid from live leg quotes: what a profit exit asks, or None."""
+    try:
+        q = tradier_orders.quotes([st["long"], st["short"]])
+        lq, sq = q.get(st["long"]) or {}, q.get(st["short"]) or {}
+
+        def _m(x):
+            b, a = float(x.get("bid") or 0), float(x.get("ask") or 0)
+            return (b + a) / 2.0 if b > 0 and a > 0 else None
+        lm, sm = _m(lq), _m(sq)
+        if lm is None or sm is None:
+            return None
+        v = (sm - lm) if st["credit"] else (lm - sm)
+        return round(v, 2) if v > 0 else None
+    except Exception:
+        logger.warning("Mid quote failed for %s.", st.get("key"), exc_info=True)
+        return None
+
+
+def _close_at_mid(st: dict, reason: str, natural: float) -> "tuple | None":
+    """Close at the mid; cancel if it does not fill, so nothing rests on the legs."""
+    mid = _mid_value(st)
+    # A mid on the wrong side of the natural is a bad quote, not a better price.
+    if mid is None or (mid > natural if st["credit"] else mid < natural):
+        mid = natural
+    sent = _send_close(st, reason, mid)
+    if not sent:
+        return None
+    got = _fill_value(sent[0])
+    if got is None and sent[0]:
+        try:
+            tradier_orders.cancel_order(sent[0])
+            status = (tradier_orders.order_status(sent[0]).get("status") or "").lower()
+        except Exception:
+            logger.exception("ORPHAN mid close %s: cancel failed.", sent[0])
+            status = ""
+        if status == "filled":
+            got = _fill_value(sent[0])      # filled in the same second: book it
+        else:
+            logger.info(
+                "ORPHAN %s %g/%g: %s at the %.2f mid did not fill (natural %.2f) — "
+                "cancelled; re-priced at the new mid next cycle, every rule still live.",
+                st["root"], st["long_strike"], st["short_strike"], reason, mid, natural)
+    return got
+
+
 def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
     """Send the closing order and wait; return (filled value, contracts), or None.
 
@@ -3508,7 +3572,10 @@ def review(engine_symbols: "set | None" = None) -> list:
                                 st["root"], st["long_strike"], st["short_strike"], reason,
                                 rec["ask"]["price"])
                     rec["ask"] = None
-                got = _close(st, reason, value)
+                if PROFIT_EXIT_AT_MID and reason in _MID_REASONS:
+                    got = _close_at_mid(st, reason, value)
+                else:
+                    got = _close(st, reason, value)
                 if got is not None:
                     filled, filled_qty = got
                     # Book what it FILLED at, not the mark that triggered it.

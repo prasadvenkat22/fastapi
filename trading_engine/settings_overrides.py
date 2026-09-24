@@ -190,6 +190,10 @@ REGISTRY: tuple[Setting, ...] = (
             "The same-day stall only watches once the peak gain reaches this. After that every "
             "new high resets the watch to that level (a local max) and restarts the stall window. "
             "0 = watch from any gain.", "%", 0, 500),
+    Setting("TRADING_ORPHAN_PROFIT_EXIT_AT_MID", "Profit exits sell at the mid", G_0DTE, "bool", "false",
+            "Stall, profit lock and target exits are priced at the spread mid instead of the "
+            "bid/ask natural. An unfilled mid order is cancelled and re-priced next minute, so it "
+            "never blocks the stop. Stops and the flatten always sell at the natural."),
     Setting("TRADING_ORPHAN_STALL_ON_MARK", "Stall watches the sale price", G_0DTE, "bool", "false",
             "true = the start level, the peak, the stall window and the give-back are all measured on "
             "what the spread would SELL for now, and the extrinsic-drag guard does not hold the exit "

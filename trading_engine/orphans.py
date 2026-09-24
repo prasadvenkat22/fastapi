@@ -2714,7 +2714,8 @@ def review(engine_symbols: "set | None" = None) -> list:
             prev_m = rec.get("mpeak_v")
             if prev_m is None or (value < prev_m if st["credit"] else value > prev_m):
                 rec["mpeak_v"], rec["mpeak_at"] = value, now.isoformat()
-            if zero_dte:
+            # zero_dte is only assigned further down this loop; ask directly.
+            if _expires_today(st):
                 req = _take_watch_now(key)
                 if req is not None:
                     # Section 232: watch from HERE. The peak becomes today's

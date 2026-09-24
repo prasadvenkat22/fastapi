@@ -13733,3 +13733,28 @@ left) -20, Wed (2 left) -20, Thu (1 left) -10. The later STALL follows the same
 step: full-week values (+25% / 30 min / 0.25 ATR) with 2+ sessions left, the
 1-day values on the last day. MU 260925 C 1070/1090 x5 @ 7.75 -> stop 6.20 now,
 6.98 on Thursday.
+
+
+227. TRADE BUCKETS, OFF BY DEFAULT; SAME-DAY STOP -20% / 5 MIN  (2026-09-24)
+
+Operator: single-stock 0DTE, single-stock weekly and QQQ 0DTE are different
+trade buckets, each switched on or off in the UI, and the default is NO
+trading. Until now all three shared switches that also governed exits
+(TRADING_DTE0_LIVE for both rotation books, TRADING_LIVE_ORDERS for the engine).
+
+New, entry-only: TRADING_BUCKET_QQQ_0DTE (engine: action BUCKET_OFF, placed
+beside the daily-loss halt, before any entry is chosen -- the engine writes its
+position row whatever the broker says, so the order alone could not be
+blocked), TRADING_BUCKET_STOCK_0DTE and TRADING_BUCKET_STOCK_WEEKLY (dte0_trade:
+the run screens and logs as a dry run). All default false in code; live off
+from 09:06 (pull) with the app restarted 09:07 so /desk/settings shows them.
+Open positions are managed either way (orphans.py, engine exits).
+
+Also 09:00: same-day stop -20% of cost with a 5-minute confirmation (operator,
+"default it to 20% and 5 minutes for now"), hold-off still off; weeklies
+unchanged (-20% / 2 min, last day -10% / 2 min).
+
+Next: an outside 0DTE "greeks blueprint" (0.05-0.10 delta credit spreads and
+condors, 30%/70% harvests, 20%/5-min stall stop, 2x premium hard stop, 15:30
+time stop, IV/expected-move/VIX1D/gamma tracking, macro-gated QQQ entries) is
+being measured against the repo's own data before any of it is built.

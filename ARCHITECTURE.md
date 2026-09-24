@@ -1202,6 +1202,15 @@ logged with its status and answered 503 "busy, try again", never a bare 502
 trading chat is the AI lab (`/api/genai/agent/ask`, admin and trader; uploads and direct prompt admin only). The widget shows
 anonymous visitors a sign-up prompt, and only a desk admin gets file uploads.
 
+## Trade buckets (section 227)
+
+Three entry switches, **off by default**, on `/desk/settings` (first group) or
+`tset`: `TRADING_BUCKET_QQQ_0DTE` (the engine's own QQQ entries; action
+`BUCKET_OFF`), `TRADING_BUCKET_STOCK_0DTE` and `TRADING_BUCKET_STOCK_WEEKLY`
+(`dte0_trade.py`, which then runs as a dry run). Off stops NEW entries only;
+open positions keep their exits. `TRADING_DTE0_LIVE` / `TRADING_LIVE_ORDERS`
+still exist beneath them as the account-level live switches.
+
 ## The Macro panel and data releases (section 222)
 
 `GET /trading/macro` (admin/trader) returns what the engine's risk gates see:
@@ -1414,7 +1423,7 @@ overrides file is the authority -- `tset list`):
 
 | | Same-day (expires today) | Weekly / later expiry |
 |---|---|---|
-| Loss | `STOP_PCT=-5`, no confirmation, no intrinsic hold-off (`STOP_RESPECTS_INTRINSIC=false`): the first pass at or below -5% of cost sells | `LATER_STOP_PCT=-20` with 2+ sessions left, `LATER_STOP_PCT_1D=-10` on the last day, both with a 2-minute confirmation; `LATER_SCALE_DAYS=2` makes it a step (section 226) |
+| Loss | `STOP_PCT=-20` with a 5-minute confirmation (09-24), no intrinsic hold-off (`STOP_RESPECTS_INTRINSIC=false`) | `LATER_STOP_PCT=-20` with 2+ sessions left, `LATER_STOP_PCT_1D=-10` on the last day, both with a 2-minute confirmation; `LATER_SCALE_DAYS=2` makes it a step (section 226) |
 | Profit | profit lock at cost + 10% of width on the mark (`PROFIT_LOCK_WIDTH=0.10`); resting ask 0.90 x width, floor 0.80 | `LATER_TARGET_PCT=0.90` of width; later stall (arm +25%, 30 min, 0.25 ATR) |
 | Off | underlying stop, strike guard (code kept, tunable) | |
 | End | flatten 15:45 (ask withdrawn 15:40) | held overnight |

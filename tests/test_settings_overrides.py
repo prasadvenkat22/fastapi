@@ -113,3 +113,39 @@ def test_bucket_budgets_sit_in_the_bucket_group():
     assert "TRADING_BUCKET_INDEX_EVENT" not in so.BY_KEY
     src = open(os.path.join(REPO, "scripts", "dte0_trade.py"), encoding="utf-8").read()
     assert 'budget = WEEKLY_MAX_BUDGET if args.book == "weekly" else MAX_BUDGET' in src
+
+
+ENGINE_STALL_KEYS = ("TRADING_STALL_MINUTES", "TRADING_STALL_GIVEBACK_PCT", "TRADING_STALL_ON_CREDIT",
+                     "TRADING_CREDIT_STALL_ARM", "TRADING_CREDIT_STALL_MINUTES",
+                     "TRADING_CREDIT_STALL_GIVEBACK_PCT")
+
+
+def test_engine_stall_knobs_are_tunable_in_their_own_group():
+    """Section 228: the QQQ bucket's trades exit on nodes.py's stall, not the orphan one."""
+    for k in ENGINE_STALL_KEYS:
+        assert so.BY_KEY[k].group == so.G_ENGINE
+    assert so.validate("TRADING_STALL_GIVEBACK_PCT", "3.3") == "3.3"
+    assert so.validate("TRADING_STALL_ON_CREDIT", "on") == "true"
+    assert so.validate("TRADING_CREDIT_STALL_MINUTES", "") == ""   # blank = follow the ride
+    for key, bad in [("TRADING_STALL_MINUTES", ""), ("TRADING_STALL_MINUTES", "-1"),
+                     ("TRADING_STALL_GIVEBACK_PCT", "500")]:
+        with pytest.raises(ValueError):
+            so.validate(key, bad)
+
+
+def test_fresh_process_engine_stall_follows_the_override(tmp_path):
+    ov = tmp_path / "ov.env"
+    ov.write_text("TRADING_STALL_MINUTES=7\nTRADING_STALL_GIVEBACK_PCT=4.5\n"
+                  "TRADING_STALL_ON_CREDIT=true\nTRADING_CREDIT_STALL_ARM=false\n"
+                  "TRADING_CREDIT_STALL_MINUTES=\n")
+    env = {**os.environ, "TRADING_OVERRIDES_PATH": str(ov), "TRADING_STALL_MINUTES": "5",
+           "TRADING_CREDIT_STALL_GIVEBACK_PCT": "9", "PYTHONPATH": REPO}
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "from trading_engine import nodes as n;"
+         "print(n.STALL_MINUTES, n.STALL_GIVEBACK_PCT, n.STALL_ON_CREDIT,"
+         " n.CREDIT_STALL_REQUIRES_ARM, n.CREDIT_STALL_MINUTES, n.CREDIT_STALL_GIVEBACK_PCT)"],
+        cwd=REPO, env=env, capture_output=True, text=True, timeout=180)
+    assert out.returncode == 0, out.stderr
+    # blank credit window falls back to the ride's 7; the env's credit give-back still applies
+    assert out.stdout.strip().splitlines()[-1] == "7.0 4.5 True False 7.0 9.0"

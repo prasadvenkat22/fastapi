@@ -13777,3 +13777,28 @@ switch: TRADING_POSITION_BUDGET (QQQ engine, live 6,500), TRADING_DTE0_MAX_BUDGE
 (single-stock 0DTE, live 5,000), TRADING_WEEKLY_MAX_BUDGET (weekly, live 5,000).
 The rotation now uses the setting as THE budget; the cron's --budget 5000 used
 to cap it (min of the two), so raising the setting in the UI did nothing.
+
+
+228. THE ENGINE'S OWN STALL IS NOW A UI SETTING  (2026-09-24)
+
+Operator asked whether the stall profit-taking percent is configurable in the
+UI, having just switched TRADING_BUCKET_QQQ_0DTE on. It was only half true:
+/desk/settings carried the ORPHAN stall (TRADING_ORPHAN_STALL_*, orphans.py),
+which manages positions the engine did NOT open -- manual trades and the
+rotation. The QQQ bucket's own trades exit on nodes.py's stall
+(TRADING_STALL_MINUTES / TRADING_STALL_GIVEBACK_PCT, section 43; the credit
+variant, section 55), which lived only in .env.production. Changing the UI's
+stall moved nothing on a QQQ engine trade.
+
+New registry group "QQQ engine exits (the engine's own trades)", six keys:
+TRADING_STALL_MINUTES, TRADING_STALL_GIVEBACK_PCT, TRADING_STALL_ON_CREDIT,
+TRADING_CREDIT_STALL_ARM, TRADING_CREDIT_STALL_MINUTES and
+TRADING_CREDIT_STALL_GIVEBACK_PCT. The last two accept BLANK, which means
+"follow the morning value" (nodes.py already treated "" that way); validate()
+now honours allow_blank for numbers as well as times.
+
+No values changed. In force from .env.production: 5 min / 3.3 points, credit
+stall on and watching from entry (CREDIT_STALL_ARM=false). The two morning keys
+remain the orphan stall's fallback, but TRADING_ORPHAN_STALL_MINUTES and
+_GIVEBACK_PCT are both set on the droplet, so tuning the engine's stall does not
+move the orphan one. No playbook window overrides the stall.

@@ -1410,6 +1410,14 @@ Precedence: override > `.env.production` > code default. Going live
 Writers: `PUT /trading/settings` (role `admin`), `scripts/settings.py`
 (`list/get/set/unset/reset/log`), both validating before a single atomic write.
 
+**Two stalls, two groups** (section 228). The "0DTE exits" stall
+(`TRADING_ORPHAN_STALL_*`) is orphans.py's and manages positions the engine did
+not open. The QQQ bucket's own trades exit on nodes.py's stall, tunable in the
+"QQQ engine exits" group: `TRADING_STALL_MINUTES` / `TRADING_STALL_GIVEBACK_PCT`
+(morning debit), `TRADING_STALL_ON_CREDIT`, `TRADING_CREDIT_STALL_ARM`, and
+`TRADING_CREDIT_STALL_MINUTES` / `_GIVEBACK_PCT` (blank = follow the morning
+values). `tset list --group engine` shows them.
+
 **Ask mode is the auto-managed 0DTE sell limit** (`TRADING_ORPHAN_ASK_*`,
 tunable since section 217): on a pinned spread it rests a sell at START x
 width, holds while the underlying is at or above session VWAP, steps down

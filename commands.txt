@@ -28,6 +28,7 @@ alias tset='docker compose -f /opt/fastapi/docker-compose.yml -f /opt/fastapi/do
 1. SEE WHAT IS IN FORCE
 -----------------------
 tset list                    # every knob: * = override, blank = .env.production, . = code default
+tset list --group engine     # the QQQ engine's own stall (morning debit + credit)
 tset list --group 0dte       # only the 0DTE exits
 tset list --group weekly     # only the weekly (later-expiry) exits
 tset list --group entries    # budgets, rotations, entry bands

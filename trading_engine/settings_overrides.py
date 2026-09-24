@@ -63,9 +63,10 @@ class Setting:
     unit: str = ""
     min: Optional[float] = None
     max: Optional[float] = None
-    allow_blank: bool = False  # time knobs where "" means "disabled"
+    allow_blank: bool = False  # "" is valid: "disabled" on a time, "follow the other knob" on a number
 
 
+G_ENGINE = "QQQ engine exits (the engine's own trades)"
 G_0DTE = "0DTE exits"
 G_WEEKLY = "Weekly exits (later expiry)"
 G_ACCOUNT = "Account"
@@ -92,6 +93,27 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_WEEKLY_MAX_BUDGET", "Single-stock weekly budget", G_BUCKETS, "float", "5000",
             "Total the weekly rotation commits per run, split across its max trades.",
             "$", 0, 1_000_000),
+    # --- The engine's own QQQ trades (trading_engine/nodes.py) ---------------
+    # Section 228. The 0DTE group below is orphans.py, which manages positions the
+    # engine did NOT open; the QQQ bucket's trades exit on these instead.
+    Setting("TRADING_STALL_MINUTES", "Stall window (morning debit)", G_ENGINE, "float", "0",
+            "Close the engine's QQQ debit spread once it has gone this long without a new peak "
+            "AND sits the give-back below it. 0 disables. Also the orphan stall window when "
+            "TRADING_ORPHAN_STALL_MINUTES is unset.", "min", 0, 240),
+    Setting("TRADING_STALL_GIVEBACK_PCT", "Stall give-back (morning debit)", G_ENGINE, "float", "0",
+            "Return points below the peak that the stall needs. 0 disables. Also the orphan "
+            "give-back when TRADING_ORPHAN_STALL_GIVEBACK_PCT is unset.", "pts", 0, 200),
+    Setting("TRADING_STALL_ON_CREDIT", "Stall on the credit trade", G_ENGINE, "bool", "false",
+            "The afternoon credit spread exits on the stall instead of booking at its take-profit."),
+    Setting("TRADING_CREDIT_STALL_ARM", "Credit stall waits for the target", G_ENGINE, "bool", "true",
+            "true = the credit stall only watches once the take-profit is reached. "
+            "false = it watches from entry, like the morning stall."),
+    Setting("TRADING_CREDIT_STALL_MINUTES", "Credit stall window", G_ENGINE, "float", "",
+            "Its own window for the credit stall. Blank = same as the morning window.",
+            "min", 0, 240, allow_blank=True),
+    Setting("TRADING_CREDIT_STALL_GIVEBACK_PCT", "Credit stall give-back", G_ENGINE, "float", "",
+            "Its own give-back for the credit stall. Blank = same as the morning give-back.",
+            "pts", 0, 200, allow_blank=True),
     # --- 0DTE exit ladder (trading_engine/orphans.py) -----------------------
     Setting("TRADING_ORPHAN_STOP_PCT", "Stop loss", G_0DTE, "float", "-25",
             "Close a debit spread when its return on cost falls to this.",
@@ -260,6 +282,8 @@ def validate(key: str, raw: str) -> str:
     if s is None:
         raise ValueError(f"{key} is not a tunable setting")
     v = str(raw).strip()
+    if v == "" and s.allow_blank:
+        return ""
     if s.kind == "bool":
         low = v.lower()
         if low in ("true", "1", "yes", "on"):
@@ -268,8 +292,6 @@ def validate(key: str, raw: str) -> str:
             return "false"
         raise ValueError(f"{key}: expected true/false, got {raw!r}")
     if s.kind == "time":
-        if v == "" and s.allow_blank:
-            return ""
         if not _TIME_RE.match(v):
             raise ValueError(f"{key}: expected HH:MM (24h, ET), got {raw!r}")
         return v

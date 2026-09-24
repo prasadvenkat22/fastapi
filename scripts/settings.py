@@ -61,7 +61,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     ls = sub.add_parser("list")
-    ls.add_argument("--group", help="substring of the group name: 0dte, weekly, account, entries")
+    ls.add_argument("--group", help="substring of the group name: engine, 0dte, weekly, account, entries")
     sub.add_parser("get").add_argument("key")
     sub.add_parser("set").add_argument("pairs", nargs="+", metavar="KEY=VALUE")
     sub.add_parser("unset").add_argument("keys", nargs="+")

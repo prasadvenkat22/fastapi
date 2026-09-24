@@ -2243,25 +2243,32 @@ def _close_at_mid(st: dict, reason: str, natural: float) -> "tuple | None":
     # A mid on the wrong side of the natural is a bad quote, not a better price.
     if mid is None or (mid > natural if st["credit"] else mid < natural):
         mid = natural
-    sent = _send_close(st, reason, mid)
-    if not sent:
-        return None
-    got = _fill_value(sent[0])
-    if got is None and sent[0]:
-        try:
-            tradier_orders.cancel_order(sent[0])
-            status = (tradier_orders.order_status(sent[0]).get("status") or "").lower()
-        except Exception:
-            logger.exception("ORPHAN mid close %s: cancel failed.", sent[0])
-            status = ""
-        if status == "filled":
-            got = _fill_value(sent[0])      # filled in the same second: book it
-        else:
-            logger.info(
-                "ORPHAN %s %g/%g: %s at the %.2f mid did not fill (natural %.2f) — "
-                "cancelled; re-priced at the new mid next cycle, every rule still live.",
-                st["root"], st["long_strike"], st["short_strike"], reason, mid, natural)
-    return got
+    return _close(st, reason, mid)
+
+
+def _cancel_unfilled(st: dict, reason: str, order_id: str, price: float) -> "tuple | None":
+    """Cancel a close that did not fill; return its fill if it filled meanwhile.
+
+    Section 236. A close left WORKING makes the next cycle see an order on the
+    legs and stand the whole ladder down (in_flight) -- the engine's own stop
+    switched itself off. 2026-09-24 16:51: QQQ 743/740 STOP_LOSS limit at the
+    natural did not fill in the wait as the price kept falling, and from 16:52
+    the position was "[observation only]". Cancel it; the next cycle re-sends
+    at the fresh price with every rule live.
+    """
+    try:
+        tradier_orders.cancel_order(order_id)
+        status = (tradier_orders.order_status(order_id).get("status") or "").lower()
+    except Exception:
+        logger.exception("ORPHAN close %s: cancel failed.", order_id)
+        status = ""
+    if status == "filled":
+        return _fill_value(order_id)            # filled in the same second: book it
+    logger.warning(
+        "ORPHAN %s %g/%g: %s at %.2f did not fill — cancelled; re-sent at the "
+        "fresh price next cycle, every rule still live.",
+        st["root"], st["long_strike"], st["short_strike"], reason, price)
+    return None
 
 
 def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
@@ -2274,7 +2281,10 @@ def _close(st: dict, reason: str, limit_price: float) -> "tuple | None":
     sent = _send_close(st, reason, limit_price)
     if not sent:
         return None
-    return _fill_value(sent[0])
+    got = _fill_value(sent[0])
+    if got is None and sent[0]:
+        got = _cancel_unfilled(st, reason, sent[0], limit_price)
+    return got
 
 
 def _past_clock(hhmm: str) -> bool:

@@ -3262,11 +3262,20 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             # Both checks run before the price fetch below, so a halted or
             # out-of-window cycle costs nothing.
             eq = current_equity(POSITION_BUDGET)
+            # THE QQQ 0DTE BUCKET SWITCH (2026-09-24, section 227). Off means
+            # no NEW engine entries; an open position is still managed, like
+            # the daily-loss halt below. OFF unless switched on (operator,
+            # 09-24: no bucket trades by default). Read per cycle.
+            bucket_on = os.getenv("TRADING_BUCKET_QQQ_0DTE", "false").lower() == "true"
             # Hoisted: sizing below needs to know whether this entry follows
             # a loss, and a second query would just ask the same question of
             # the same rows.
             streak = 0
-            if eq.halted:
+            if not bucket_on:
+                window = None
+                action = "BUCKET_OFF"
+                logger.info("QQQ 0DTE bucket is OFF (TRADING_BUCKET_QQQ_0DTE) — no new entry.")
+            elif eq.halted:
                 window = None
                 action = "HALTED_DAILY_LOSS"
             else:

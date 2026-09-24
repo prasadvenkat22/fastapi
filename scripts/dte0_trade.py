@@ -747,6 +747,16 @@ def main() -> None:
     live = args.live and LIVE_ENABLED
     if args.live and not LIVE_ENABLED:
         logger.warning("--live given but TRADING_DTE0_LIVE is not true — DRY RUN.")
+    # THE BUCKET SWITCHES (2026-09-24, section 227): single-stock 0DTE and
+    # single-stock weekly can be turned off separately. Off = this run places
+    # nothing (it still screens and logs, as a dry run); open positions are
+    # managed by orphans.py either way.
+    bucket_key = ("TRADING_BUCKET_STOCK_WEEKLY" if args.book == "weekly"
+                  else "TRADING_BUCKET_STOCK_0DTE")
+    if os.getenv(bucket_key, "false").lower() != "true":
+        if live:
+            logger.warning("%s is OFF — DRY RUN, no orders this run.", bucket_key)
+        live = False
 
     # The per-trade allowance has to be known BEFORE selection, or a symbol
     # whose best-EV structure is unaffordable gets dropped entirely instead of

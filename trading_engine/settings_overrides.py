@@ -70,8 +70,19 @@ G_0DTE = "0DTE exits"
 G_WEEKLY = "Weekly exits (later expiry)"
 G_ACCOUNT = "Account"
 G_ENTRY = "Entries & budgets"
+G_BUCKETS = "Trade buckets (new entries on/off)"
 
 REGISTRY: tuple[Setting, ...] = (
+    # --- Buckets: new entries only; open positions are always managed --------
+    # OFF BY DEFAULT (operator, 2026-09-24): nothing opens a new trade until a
+    # bucket is switched on in /desk/settings (or `tset set ...=true`).
+    Setting("TRADING_BUCKET_QQQ_0DTE", "QQQ 0DTE (engine)", G_BUCKETS, "bool", "false",
+            "The engine's own QQQ same-day entries (debit, credit, condor). Off: no new "
+            "entries; an open position is still managed."),
+    Setting("TRADING_BUCKET_STOCK_0DTE", "Single-stock 0DTE (rotation)", G_BUCKETS, "bool", "false",
+            "dte0_trade.py same-day entries on single names. Off: screens and logs only."),
+    Setting("TRADING_BUCKET_STOCK_WEEKLY", "Single-stock weekly (rotation)", G_BUCKETS, "bool", "false",
+            "dte0_trade.py --book weekly entries. Off: screens and logs only."),
     # --- 0DTE exit ladder (trading_engine/orphans.py) -----------------------
     Setting("TRADING_ORPHAN_STOP_PCT", "Stop loss", G_0DTE, "float", "-25",
             "Close a debit spread when its return on cost falls to this.",

@@ -84,3 +84,24 @@ def test_fresh_process_trades_on_the_override(tmp_path):
         cwd=REPO, env=env, capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip().splitlines()[-1] == "-41.0 33.0"
+
+
+def test_bucket_switches_are_tunable_bools():
+    for k in ("TRADING_BUCKET_QQQ_0DTE", "TRADING_BUCKET_STOCK_0DTE", "TRADING_BUCKET_STOCK_WEEKLY"):
+        assert so.BY_KEY[k].kind == "bool"
+        assert so.validate(k, "off") == "false"
+
+
+def test_rotation_honours_its_bucket_switch():
+    src = open(os.path.join(REPO, "scripts", "dte0_trade.py"), encoding="utf-8").read()
+    assert 'TRADING_BUCKET_STOCK_WEEKLY" if args.book == "weekly"' in src
+    src = open(os.path.join(REPO, "trading_engine", "nodes.py"), encoding="utf-8").read()
+    assert 'action = "BUCKET_OFF"' in src
+
+
+def test_buckets_default_off():
+    for k in ("TRADING_BUCKET_QQQ_0DTE", "TRADING_BUCKET_STOCK_0DTE", "TRADING_BUCKET_STOCK_WEEKLY"):
+        assert so.BY_KEY[k].default == "false"
+    for path, needle in (("trading_engine/nodes.py", 'os.getenv("TRADING_BUCKET_QQQ_0DTE", "false")'),
+                         ("scripts/dte0_trade.py", 'os.getenv(bucket_key, "false")')):
+        assert needle in open(os.path.join(REPO, path), encoding="utf-8").read()

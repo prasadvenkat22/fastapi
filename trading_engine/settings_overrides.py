@@ -81,6 +81,10 @@ REGISTRY: tuple[Setting, ...] = (
             "entries; an open position is still managed."),
     Setting("TRADING_BUCKET_STOCK_0DTE", "Single-stock 0DTE (rotation)", G_BUCKETS, "bool", "false",
             "dte0_trade.py same-day entries on single names. Off: screens and logs only."),
+    Setting("TRADING_BUCKET_INDEX_EVENT", "Index-inclusion events", G_BUCKETS, "bool", "false",
+            "index_event_trade.py: a call debit on a name announced to JOIN the S&P 500/100 or "
+            "Nasdaq-100, until the day before the effective close. Off: logs 'would place' only. "
+            "Unmeasured on this account (one example)."),
     Setting("TRADING_BUCKET_STOCK_WEEKLY", "Single-stock weekly (rotation)", G_BUCKETS, "bool", "false",
             "dte0_trade.py --book weekly entries. Off: screens and logs only."),
     # --- 0DTE exit ladder (trading_engine/orphans.py) -----------------------

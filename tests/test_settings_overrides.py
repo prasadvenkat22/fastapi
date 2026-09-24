@@ -105,3 +105,9 @@ def test_buckets_default_off():
     for path, needle in (("trading_engine/nodes.py", 'os.getenv("TRADING_BUCKET_QQQ_0DTE", "false")'),
                          ("scripts/dte0_trade.py", 'os.getenv(bucket_key, "false")')):
         assert needle in open(os.path.join(REPO, path), encoding="utf-8").read()
+
+
+def test_index_event_bucket_defaults_off_and_drives_live():
+    assert so.BY_KEY["TRADING_BUCKET_INDEX_EVENT"].default == "false"
+    src = open(os.path.join(REPO, "scripts", "index_event_trade.py"), encoding="utf-8").read()
+    assert 'os.getenv("TRADING_BUCKET_INDEX_EVENT", "false")' in src

@@ -37,7 +37,12 @@ from trading_engine import index_events, tradier_orders  # noqa: E402
 from trading_engine.screener import rank  # noqa: E402
 
 logger = logging.getLogger("index_event_trade")
-LIVE = os.getenv("TRADING_INDEX_EVENT_LIVE", "false").lower() == "true"
+# THE BUCKET SWITCH IS THE LIVE SWITCH (2026-09-24, section 227): orders go out
+# only when TRADING_BUCKET_INDEX_EVENT is on (/desk/settings, off by default).
+# The older TRADING_INDEX_EVENT_LIVE still counts, so a deployment that had set
+# it keeps working until the bucket is used.
+LIVE = (os.getenv("TRADING_BUCKET_INDEX_EVENT", "false").lower() == "true"
+        or os.getenv("TRADING_INDEX_EVENT_LIVE", "false").lower() == "true")
 BUDGET = float(os.getenv("TRADING_INDEX_EVENT_BUDGET", "1000"))
 MIN_PWIN = float(os.getenv("TRADING_INDEX_EVENT_MIN_PWIN", "0.40"))
 MIN_DAYS = int(os.getenv("TRADING_INDEX_EVENT_MIN_DAYS", "1"))   # expiry at least this many days out

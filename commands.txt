@@ -41,6 +41,7 @@ tset get TRADING_ORPHAN_STOP_PCT     # one knob: bounds, default, env value, ove
 tset set TRADING_BUCKET_QQQ_0DTE=true         # engine's QQQ same-day entries
 tset set TRADING_BUCKET_STOCK_0DTE=true       # single-stock 0DTE rotation
 tset set TRADING_BUCKET_STOCK_WEEKLY=true     # single-stock weekly rotation
+tset set TRADING_BUCKET_INDEX_EVENT=true      # index-inclusion event trader (unmeasured)
 
 # --- 0DTE stop loss (applies to positions expiring TODAY only) ---
 tset set TRADING_ORPHAN_STOP_PCT=-20                  # stop at -20% of cost   (range -100..0)

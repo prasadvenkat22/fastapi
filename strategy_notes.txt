@@ -13758,3 +13758,10 @@ Next: an outside 0DTE "greeks blueprint" (0.05-0.10 delta credit spreads and
 condors, 30%/70% harvests, 20%/5-min stall stop, 2x premium hard stop, 15:30
 time stop, IV/expected-move/VIX1D/gamma tracking, macro-gated QQQ entries) is
 being measured against the repo's own data before any of it is built.
+
+Addendum to 227: a fourth bucket, TRADING_BUCKET_INDEX_EVENT (off by default),
+now IS the live switch for scripts/index_event_trade.py (call debit into an
+announced S&P 500/100 or Nasdaq-100 inclusion, section 197). It had never been
+live: TRADING_INDEX_EVENT_LIVE was not set, it has logged "would place" since it
+shipped, and the events table has no rows. Evidence for it on this account is
+one example (SanDisk 09-04 -> 09-18); the effect is from the literature.

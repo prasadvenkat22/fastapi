@@ -1427,6 +1427,26 @@ def _rolled_net(orders: list, lsym: str, ssym: str, qty: int) -> "float | None":
     try:
         seen, frontier = set(), {lsym, ssym}
         used, net = [], 0.0
+        # SECTION 230: A ROUND TRIP IS NOT PART OF ANYONE'S COST. The walk used
+        # to follow every order sharing a strike, so on 2026-09-24 -- 22 QQQ put
+        # orders, every one a plain open or a plain close -- a 740/738 x1 bought
+        # at 1.25 walked through the 738/735, 737/735, 740/737 and 740/735 round
+        # trips and summed them all into a 37.97 "basis". The -20% stop read it
+        # at -97% and sold it. A pair that was opened and fully closed today
+        # (net quantity <= 0) is finished business: it is neither walked nor
+        # expanded through.
+        pair_qty: dict = {}
+        for o in orders:
+            if o.get("opening") or o.get("closing"):
+                k = tuple(sorted(l["symbol"] for l in o["legs"]))
+                pair_qty[k] = pair_qty.get(k, 0) + (o.get("qty") or 0) * (1 if o.get("opening") else -1)
+        me_pair = tuple(sorted((lsym, ssym)))
+
+        def _finished(o) -> bool:
+            if not (o.get("opening") or o.get("closing")):
+                return False               # a roll order is never finished business
+            k = tuple(sorted(l["symbol"] for l in o["legs"]))
+            return k != me_pair and pair_qty.get(k, 0) <= 0
         # SEED FROM THE CACHE FIRST. Tradier's /orders is the CURRENT SESSION
         # only, so a pair opened yesterday and rolled today has its OPEN in the
         # cached structures and its ROLL in today's orders -- neither source
@@ -1463,7 +1483,7 @@ def _rolled_net(orders: list, lsym: str, ssym: str, qty: int) -> "float | None":
                 if oid in seen:
                     continue
                 syms = {l["symbol"] for l in o["legs"]}
-                if not (syms & frontier):
+                if not (syms & frontier) or _finished(o):
                     continue
                 seen.add(oid)
                 used.append(o)
@@ -1473,6 +1493,12 @@ def _rolled_net(orders: list, lsym: str, ssym: str, qty: int) -> "float | None":
             frontier |= nxt
         if len(used) < 2:
             return None                        # no roll; per-leg price stands
+        # NO ROLL ORDER, NO ROLL. A roll is one order that closes one leg and
+        # opens another; without one among today's orders, whatever the walk
+        # reached is separate trades, and the per-leg price is the basis.
+        if not any(not str(o.get("id", "")).startswith("cache:")
+                   and not o.get("opening") and not o.get("closing") for o in used):
+            return None
         for o in used:
             # A closing order on OTHER strikes can share no leg and is never
             # reached; one that is reached is part of this structure's history.
@@ -1480,7 +1506,19 @@ def _rolled_net(orders: list, lsym: str, ssym: str, qty: int) -> "float | None":
             net += abs(float(o["net"])) * sign * int(o.get("qty") or 1)
         per = net / max(1, qty)
         # Sanity: a basis outside the strike width is not a basis.
-        return round(per, 4) if 0 < per < 1e5 else None
+        if not 0 < per < 1e5:
+            return None
+        # A DEBIT ABOVE THE WIDTH can never be recovered at expiry; after a
+        # losing roll it is possible, but far more often it is the walk having
+        # swept up other trades. Refuse it loudly and keep the per-leg price.
+        pl, ps = _parse(lsym), _parse(ssym)
+        if pl and ps and per > abs(pl[3] - ps[3]) + 0.01:
+            logger.warning(
+                "ORPHAN roll-aware basis for %s|%s came out at %.2f, above the "
+                "%g width — not a basis; keeping the per-leg price.",
+                lsym, ssym, per, abs(pl[3] - ps[3]))
+            return None
+        return round(per, 4)
     except Exception:
         logger.warning("Roll-aware basis failed — falling back to per-leg "
                        "prices, which understate a rolled pair.", exc_info=True)

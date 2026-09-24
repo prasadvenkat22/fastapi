@@ -13829,3 +13829,35 @@ the operator's direction as an experiment; 0 reverts it.
 
 Caveat on the live QQQ 740/738: its reconstructed entry (34-73 on a 2-wide)
 makes every percentage rule meaningless on that position, this one included.
+
+
+230. A ROUND TRIP IS NOT PART OF ANYONE'S COST  (2026-09-24)
+
+Live, 14:36-15:17: a manual QQQ 740/738 x1 put debit bought at 1.25 was managed
+at an entry of 37.97, then 36.70, 34.00, 32.36 -- impossible on a 2-wide. The
+-20% stop read it at -97% and sold it twice (14:38 and 15:10), booking
+-3,670.00 and -3,236.00 to trading_history for trades that were about flat
+(+0 and +37 in cash). The same cycle logged "cache 6.68 -> order history 59.83"
+on MU 1060/1070, "1.10 -> 0.24" on QQQ 737/740 calls and "5.71 -> 7.86" on QQQ
+735/738.
+
+Cause: _rolled_net (added 2026-09-18 for the SNDK 1605 roll, which it prices
+correctly) walks every order that shares ANY leg with the pair, transitively,
+and sums their cash. On a day of repeated trading on the same strikes -- 22 QQQ
+put orders on 09-24, every one a plain open or a plain close -- it chained the
+738/735, 737/735, 740/737 and 740/735 round trips into one "structure" and
+divided their combined cash by the 1 contract still held.
+
+Three guards, each sufficient for today's data:
+  1. NO ROLL ORDER, NO ROLL: the walk must reach at least one order that is
+     neither all-to-open nor all-to-close; otherwise the per-leg price stands.
+  2. A pair opened and fully closed today (net qty <= 0) is neither summed nor
+     walked through.
+  3. A debit basis above the pair's width is refused with a warning.
+Replayed locally on the day's real orders (kept out of git): the old
+code returns 30.15 / 0.24 / 3.35 / 3.77 on four pairs, the new one None (the
+per-leg price) on all four; the 09-18 SNDK roll still prices at 46.90.
+tests/test_rolled_net.py reproduces the shape synthetically (old code: 26.20).
+
+Not done without the operator: correcting the two phantom trading_history rows,
+which feed the daily-loss limit and the consecutive-loss breaker.

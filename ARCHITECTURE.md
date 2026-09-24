@@ -1423,6 +1423,12 @@ watching at", 0DTE exits) holds the same-day stall off until the peak gain
 reaches it; after that each new intrinsic high resets the watch level and the
 `TRADING_ORPHAN_STALL_MINUTES` clock. 0 = watch from any gain.
 
+**Roll-aware basis guards** (section 230): `_rolled_net` only replaces the
+per-leg entry when the order walk reaches a real roll order (mixed to_open /
+to_close), skips pairs opened and fully closed today, and refuses a debit basis
+above the width. Before this, same-strike round trips were summed into a held
+pair's cost (QQQ 740/738 at 37.97 on 2026-09-24).
+
 **Ask mode is the auto-managed 0DTE sell limit** (`TRADING_ORPHAN_ASK_*`,
 tunable since section 217): on a pinned spread it rests a sell at START x
 width, holds while the underlying is at or above session VWAP, steps down

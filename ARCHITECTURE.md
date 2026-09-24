@@ -1422,6 +1422,10 @@ values). `tset list --group engine` shows them.
 watching at", 0DTE exits) holds the same-day stall off until the peak gain
 reaches it; after that each new intrinsic high resets the watch level and the
 `TRADING_ORPHAN_STALL_MINUTES` clock. 0 = watch from any gain.
+`TRADING_ORPHAN_STALL_ON_MARK` (section 231, "Stall watches the sale price")
+switches that same-day stall from intrinsic to the mark: arm, peak, clock and
+give-back are read off what the spread would sell for, the drag guard stands
+aside for the stall exit, and the minimum-gain floor still prevents a loss.
 
 **Roll-aware basis guards** (section 230): `_rolled_net` only replaces the
 per-leg entry when the order walk reaches a real roll order (mixed to_open /

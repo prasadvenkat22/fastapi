@@ -784,6 +784,32 @@ STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT",
 ORPHAN_STALL_ARM_PCT = float(os.getenv("TRADING_ORPHAN_STALL_ARM", "0") or 0)
 
 
+# WHICH PROFIT THE SAME-DAY STALL WATCHES. Section 231.
+#
+# By default the stall's peak is INTRINSIC vs entry, so it follows the
+# underlying and ignores the short leg's decay. On a deep in-the-money 0DTE
+# spread that is not money anyone will pay: 2026-09-24, QQQ 740/735 x8 @ 3.56
+# peaked at +40.4% on intrinsic while the best sale price all session was
+# +1.7%; the stall fired at 15:37 and correctly refused to sell at -8%.
+# Operator: "never at a loss; watch the current profit and do not give it
+# back; after the stall minutes, if it starts slipping, sell it."
+#
+# true = the arm, the peak, the quiet clock and the give-back are all read off
+# the SALE PRICE (the mark), and the drag guard (ORPHAN_MAX_DRAG_WIDTH) does not
+# hold a stall exit back -- the sale price is exactly what was asked to be
+# protected. The +STALL_MIN_GAIN_PCT floor still applies, so it never sells at
+# a loss. Unmeasured; false reverts.
+STALL_ON_MARK = os.getenv("TRADING_ORPHAN_STALL_ON_MARK", "false").lower() == "true"
+
+
+def mark_peak(rec: dict, entry_abs: float, credit: bool) -> "float | None":
+    """The sale-price peak as a return on the CURRENT entry, from the stored dollars."""
+    v = rec.get("mpeak_v")
+    if v is None or not entry_abs:
+        return None
+    return ((entry_abs - v) if credit else (v - entry_abs)) / entry_abs * 100.0
+
+
 def stall_arm_reached(peak_pct: "float | None") -> bool:
     """Has a same-day position's peak reached the level where the stall watches?"""
     if peak_pct is None:
@@ -2639,6 +2665,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                 rec["peak"] = rec.get("peak", stall_pct)
             peaks[key] = rec
             quiet = (now - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0
+            # The SALE-PRICE peak, kept in dollars for the same reason as the
+            # intrinsic one (a scale-in moves the entry, not the price).
+            prev_m = rec.get("mpeak_v")
+            if prev_m is None or (value < prev_m if st["credit"] else value > prev_m):
+                rec["mpeak_v"], rec["mpeak_at"] = value, now.isoformat()
+            mpeak = mark_peak(rec, entry_abs, st["credit"])
+            mquiet = (now - datetime.fromisoformat(rec["mpeak_at"])).total_seconds() / 60.0
             stop_pct = ORPHAN_CREDIT_STOP_PCT if st["credit"] else ORPHAN_STOP_PCT
             # Before the underlying stop has armed, a wider mark stop. See
             # ORPHAN_PREARM_STOP_PCT; "armed" is from the previous pass.
@@ -3074,12 +3107,17 @@ def review(engine_symbols: "set | None" = None) -> list:
                     abs(st["short_strike"] - st["long_strike"]),
                     ORPHAN_LATER_STALL_GIVEBACK_BAND, LP["giveback_atr"]))
 
+            # Section 231: the same rule on the sale price when STALL_ON_MARK.
+            if STALL_ON_MARK:
+                s_peak, s_now, s_quiet = mpeak, _gain_pct, mquiet
+            else:
+                s_peak, s_now, s_quiet = rec["peak"], stall_pct, quiet
             stall_armed = (
                 zero_dte and past_hold and STALL_MINUTES > 0
-                and stall_arm_reached(rec["peak"])
-                and quiet >= STALL_MINUTES
-                and stall_pct <= rec["peak"] - _giveback_points(
-                    st["root"], entry_abs, rec["peak"], STALL_GIVEBACK_PCT,
+                and stall_arm_reached(s_peak)
+                and s_quiet >= STALL_MINUTES
+                and s_now <= s_peak - _giveback_points(
+                    st["root"], entry_abs, s_peak, STALL_GIVEBACK_PCT,
                     abs(st["short_strike"] - st["long_strike"])))
 
             if (stall_armed or stall_later_armed) and not books_a_gain:
@@ -3108,7 +3146,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             stall_later_ready = stall_later_armed and books_a_gain
 
             if drag_blocks and (later_target_hit or stall_later_ready
-                                or stall_ready):
+                                or (stall_ready and not STALL_ON_MARK)):
                 logger.info(
                     "ORPHAN %s %g/%g would close on %s at %.2f, but "
                     "intrinsic is %.2f — closing now forfeits %.2f, which is "
@@ -3236,7 +3274,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # purpose -- this rule exists precisely for the case where the
                 # mark is under water and the expiry value is walking away.
                 reason = "GIVEBACK"
-            elif stall_ready and not drag_blocks:
+            elif stall_ready and (STALL_ON_MARK or not drag_blocks):
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
@@ -3325,9 +3363,11 @@ def review(engine_symbols: "set | None" = None) -> list:
                                 STALL_GIVEBACK_PCT,
                                 abs(st["short_strike"] - st["long_strike"])),
                             STALL_MINUTES,
-                            "" if ORPHAN_STALL_ARM_PCT <= 0 else (
-                                " ARMED" if stall_arm_reached(rec["peak"])
-                                else " arms at %+.0f%%" % ORPHAN_STALL_ARM_PCT),
+                            ("" if ORPHAN_STALL_ARM_PCT <= 0 else (
+                                " ARMED" if stall_arm_reached(mpeak if STALL_ON_MARK else rec["peak"])
+                                else " arms at %+.0f%%" % ORPHAN_STALL_ARM_PCT))
+                            + (" on sale price, sale peak %+.1f%%" % mpeak
+                               if STALL_ON_MARK and mpeak is not None else ""),
                             "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
                     if ORPHAN_FORCE_CLOSE:
                         parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)

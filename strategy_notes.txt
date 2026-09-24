@@ -13868,3 +13868,30 @@ STOP_LOSS -3,670.00 -> 0.00 (entry 1.27, exit 1.27); 15:10 x1 STOP_LOSS
 -3,236.00 -> +37.00 (entry 1.27, exit 1.64). The 09-24 QQQ day now reads +349
 (0 / +270 / +37 / +42) instead of -6,594. The 15:17 740/738 x1 close at 1.63
 has no history row (five contracts closed against four opened); left as is.
+
+
+231. THE SAME-DAY STALL CAN WATCH THE SALE PRICE  (2026-09-24)
+
+QQQ 740/735 x8 @ 3.56 (opened 15:13-15:21 UTC) armed the 30% stall on INTRINSIC
+at 15:27 and peaked at +40.4% (intrinsic 5.00) at 15:31. The best sale price
+all session was 3.62 (+1.7%): on a deep in-the-money 0DTE spread the mark sat
+1.00-1.40 under intrinsic throughout. The stall fired at 15:37 (5 min quiet,
+20 points off the peak) and refused to sell at 3.27 (-8.1%); the resting ask
+stepped 4.50 -> 4.00 unfilled. By 15:54 the mark was 3.17 (-11%). Operator:
+"it gave back the profits ... it should have booked 30%" -- there was no 30%
+to book at any bid.
+
+Operator decision: "never at a loss; watch the current profit levels and do
+not give back current profits -- watch for the stall minutes and if profit
+starts slipping, sell it." That is a stall on the SALE PRICE. New switch
+TRADING_ORPHAN_STALL_ON_MARK ("Stall watches the sale price", 0DTE exits, code
+default false). When true: the arm, the peak (kept in dollars of mark, reset
+with the position like the intrinsic one), the quiet clock and the give-back
+are all read off the mark; the drag guard (ORPHAN_MAX_DRAG_WIDTH) no longer
+holds a stall exit back, since the sale price is what was asked to be
+protected; the +STALL_MIN_GAIN_PCT floor still applies, so it never sells at a
+loss. The holding log says "on sale price, sale peak +x%"; /trading/positions
+shows the sale-price peak for same-day positions.
+
+On 09-24's trade it would have done nothing either (sale peak +1.7% never
+reaches a 30% arm). Unmeasured; set at the operator's direction; false reverts.

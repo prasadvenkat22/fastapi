@@ -225,11 +225,16 @@ async def get_broker_positions():
 
         rec = peaks.get(st["key"]) or {}
         peak = rec.get("peak")
+        peak_at = rec.get("peak_at")
+        if orphans.STALL_ON_MARK and orphans._expires_today(st):
+            # Section 231: the stall watches the sale price; show its peak.
+            peak = orphans.mark_peak(rec, abs(st["entry"]), st["credit"])
+            peak_at = rec.get("mpeak_at")
         quiet = None
-        if rec.get("peak_at"):
+        if peak_at:
             try:
                 quiet = round((datetime.now(timezone.utc)
-                               - datetime.fromisoformat(rec["peak_at"])).total_seconds() / 60.0, 1)
+                               - datetime.fromisoformat(peak_at)).total_seconds() / 60.0, 1)
             except Exception:
                 quiet = None
 

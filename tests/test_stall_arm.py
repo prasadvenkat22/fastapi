@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from trading_engine import orphans
 from trading_engine import settings_overrides as so
 
@@ -27,7 +29,7 @@ def test_arm_waits_for_the_peak_to_reach_the_level(monkeypatch):
 
 def test_ladder_and_positions_page_use_the_arm():
     src = open(os.path.join(REPO, "trading_engine", "orphans.py"), encoding="utf-8").read()
-    assert 'and stall_arm_reached(rec["peak"])' in src
+    assert 'and stall_arm_reached(s_peak)' in src
     assert 'rec["peak"] > 0\n' not in src
     src = open(os.path.join(REPO, "routes", "trading_router.py"), encoding="utf-8").read()
     assert "armed = orphans.stall_arm_reached(peak)" in src
@@ -50,3 +52,39 @@ def test_fresh_process_reads_the_override(tmp_path):
         cwd=REPO, env=env, capture_output=True, text=True, timeout=180)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip().splitlines()[-1] == "30.0 5.0 False True"
+
+
+# --- Section 231: the stall on the sale price -------------------------------
+
+def test_mark_peak_is_a_return_on_the_current_entry():
+    assert orphans.mark_peak({"mpeak_v": 4.60}, 3.56, credit=False) == pytest.approx(29.21, abs=0.01)
+    assert orphans.mark_peak({"mpeak_v": 0.40}, 1.00, credit=True) == pytest.approx(60.0)
+    assert orphans.mark_peak({}, 3.56, credit=False) is None
+
+
+def test_sale_price_mode_is_a_ui_switch_default_off():
+    s = so.BY_KEY["TRADING_ORPHAN_STALL_ON_MARK"]
+    assert (s.group, s.kind, s.default) == (so.G_0DTE, "bool", "false")
+    assert so.validate("TRADING_ORPHAN_STALL_ON_MARK", "on") == "true"
+
+
+def test_sale_price_mode_wiring():
+    src = open(os.path.join(REPO, "trading_engine", "orphans.py"), encoding="utf-8").read()
+    # the stall reads the sale-price series when the switch is on ...
+    assert "s_peak, s_now, s_quiet = mpeak, _gain_pct, mquiet" in src
+    # ... the drag guard does not hold that exit back ...
+    assert "elif stall_ready and (STALL_ON_MARK or not drag_blocks):" in src
+    # ... and it still never sells below the minimum gain
+    assert "stall_ready = stall_armed and books_a_gain" in src
+    src = open(os.path.join(REPO, "routes", "trading_router.py"), encoding="utf-8").read()
+    assert "peak = orphans.mark_peak(rec, abs(st[\"entry\"]), st[\"credit\"])" in src
+
+
+def test_fresh_process_reads_the_sale_price_switch(tmp_path):
+    ov = tmp_path / "ov.env"
+    ov.write_text("TRADING_ORPHAN_STALL_ON_MARK=true\n")
+    env = {**os.environ, "TRADING_OVERRIDES_PATH": str(ov), "PYTHONPATH": REPO}
+    out = subprocess.run([sys.executable, "-c", "from trading_engine import orphans as o; print(o.STALL_ON_MARK)"],
+                         cwd=REPO, env=env, capture_output=True, text=True, timeout=180)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "True"

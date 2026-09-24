@@ -190,6 +190,11 @@ REGISTRY: tuple[Setting, ...] = (
             "The same-day stall only watches once the peak gain reaches this. After that every "
             "new high resets the watch to that level (a local max) and restarts the stall window. "
             "0 = watch from any gain.", "%", 0, 500),
+    Setting("TRADING_ORPHAN_STALL_ON_MARK", "Stall watches the sale price", G_0DTE, "bool", "false",
+            "true = the start level, the peak, the stall window and the give-back are all measured on "
+            "what the spread would SELL for now, and the extrinsic-drag guard does not hold the exit "
+            "back. It still never sells below the stall minimum gain. false = measured on intrinsic "
+            "(moves with the underlying; a deep in-the-money spread can show +40% it cannot sell for)."),
     Setting("TRADING_ORPHAN_STALL_GIVEBACK_PCT", "Stall give-back (points)", G_0DTE, "float", "0",
             "Give-back from peak, in return points, that also fires the stall.",
             "pts", 0, 200),

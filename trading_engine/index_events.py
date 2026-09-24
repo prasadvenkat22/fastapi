@@ -9,8 +9,9 @@ documented pattern: the demand is scheduled, the buying is mechanical, and
 the effective-day close is the END of it.
 
 THIS MODULE turns such a headline into a row: symbol, index, action,
-announcement time, effective date. scripts/index_event_trade.py reads the
-rows. Nothing here trades.
+announcement time, effective date. The trader that read these rows
+(scripts/index_event_trade.py) was removed on 2026-09-24 -- unmeasured on this
+account -- and the rows are still recorded. Nothing here trades.
 
 DETECTION IS ON THE NAMES BEFORE THE VERB. "Bloom Energy, Illumina, and
 Everpure Set to Join S&P 500" names three joiners in the segment before "Set

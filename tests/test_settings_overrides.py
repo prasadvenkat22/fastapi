@@ -107,7 +107,9 @@ def test_buckets_default_off():
         assert needle in open(os.path.join(REPO, path), encoding="utf-8").read()
 
 
-def test_index_event_bucket_defaults_off_and_drives_live():
-    assert so.BY_KEY["TRADING_BUCKET_INDEX_EVENT"].default == "false"
-    src = open(os.path.join(REPO, "scripts", "index_event_trade.py"), encoding="utf-8").read()
-    assert 'os.getenv("TRADING_BUCKET_INDEX_EVENT", "false")' in src
+def test_bucket_budgets_sit_in_the_bucket_group():
+    for k in ("TRADING_POSITION_BUDGET", "TRADING_DTE0_MAX_BUDGET", "TRADING_WEEKLY_MAX_BUDGET"):
+        assert so.BY_KEY[k].group == so.G_BUCKETS
+    assert "TRADING_BUCKET_INDEX_EVENT" not in so.BY_KEY
+    src = open(os.path.join(REPO, "scripts", "dte0_trade.py"), encoding="utf-8").read()
+    assert 'budget = WEEKLY_MAX_BUDGET if args.book == "weekly" else MAX_BUDGET' in src

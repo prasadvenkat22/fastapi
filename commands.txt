@@ -41,7 +41,7 @@ tset get TRADING_ORPHAN_STOP_PCT     # one knob: bounds, default, env value, ove
 tset set TRADING_BUCKET_QQQ_0DTE=true         # engine's QQQ same-day entries
 tset set TRADING_BUCKET_STOCK_0DTE=true       # single-stock 0DTE rotation
 tset set TRADING_BUCKET_STOCK_WEEKLY=true     # single-stock weekly rotation
-tset set TRADING_BUCKET_INDEX_EVENT=true      # index-inclusion event trader (unmeasured)
+tset set TRADING_POSITION_BUDGET=6500 TRADING_DTE0_MAX_BUDGET=5000 TRADING_WEEKLY_MAX_BUDGET=5000   # per-bucket budgets ($)
 
 # --- 0DTE stop loss (applies to positions expiring TODAY only) ---
 tset set TRADING_ORPHAN_STOP_PCT=-20                  # stop at -20% of cost   (range -100..0)
@@ -100,7 +100,6 @@ tset set TRADING_ORPHAN_LATER_STOP_PCT_1D=-30         # scaled stop the day befo
 tset set TRADING_ACCOUNT_FLOOR=12000                  # flatten EVERYTHING below $12,000 equity (0 = off)
 
 # --- Entries and budgets ---
-tset set TRADING_DTE0_MAX_BUDGET=1500 TRADING_WEEKLY_MAX_BUDGET=5000
 tset set TRADING_DTE0_ROTATE_CUTOFF=11:30 TRADING_DTE0_MAX_ROTATIONS=3
 tset set TRADING_DTE0_ROTATE_COOLDOWN_MIN=30
 tset set TRADING_WEEKLY_MIN_PWIN=0.45

@@ -13765,3 +13765,15 @@ announced S&P 500/100 or Nasdaq-100 inclusion, section 197). It had never been
 live: TRADING_INDEX_EVENT_LIVE was not set, it has logged "would place" since it
 shipped, and the events table has no rows. Evidence for it on this account is
 one example (SanDisk 09-04 -> 09-18); the effect is from the literature.
+
+Addendum to 227 (09:2x): the index-inclusion trader is REMOVED (operator: no
+evidence either way on this account -> not needed). scripts/index_event_trade.py
+deleted with its bucket switch; the headline scanner (trading_engine/index_events,
+its table and tests) stays, so events are still recorded if the idea returns.
+The 10:05 cron line must be dropped on the droplet.
+
+Bucket budgets are now settings in the Trade buckets group, each under its
+switch: TRADING_POSITION_BUDGET (QQQ engine, live 6,500), TRADING_DTE0_MAX_BUDGET
+(single-stock 0DTE, live 5,000), TRADING_WEEKLY_MAX_BUDGET (weekly, live 5,000).
+The rotation now uses the setting as THE budget; the cron's --budget 5000 used
+to cap it (min of the two), so raising the setting in the UI did nothing.

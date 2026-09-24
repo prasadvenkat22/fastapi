@@ -79,14 +79,19 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_BUCKET_QQQ_0DTE", "QQQ 0DTE (engine)", G_BUCKETS, "bool", "false",
             "The engine's own QQQ same-day entries (debit, credit, condor). Off: no new "
             "entries; an open position is still managed."),
+    Setting("TRADING_POSITION_BUDGET", "QQQ 0DTE budget", G_BUCKETS, "float", "1000",
+            "Capital the engine sizes a QQQ same-day entry against (realised equity, daily-loss "
+            "limit and position risk are all scaled from it).", "$", 0, 1_000_000),
     Setting("TRADING_BUCKET_STOCK_0DTE", "Single-stock 0DTE (rotation)", G_BUCKETS, "bool", "false",
             "dte0_trade.py same-day entries on single names. Off: screens and logs only."),
-    Setting("TRADING_BUCKET_INDEX_EVENT", "Index-inclusion events", G_BUCKETS, "bool", "false",
-            "index_event_trade.py: a call debit on a name announced to JOIN the S&P 500/100 or "
-            "Nasdaq-100, until the day before the effective close. Off: logs 'would place' only. "
-            "Unmeasured on this account (one example)."),
+    Setting("TRADING_DTE0_MAX_BUDGET", "Single-stock 0DTE budget", G_BUCKETS, "float", "1500",
+            "Total the same-day rotation commits per run, split across its max trades.",
+            "$", 0, 1_000_000),
     Setting("TRADING_BUCKET_STOCK_WEEKLY", "Single-stock weekly (rotation)", G_BUCKETS, "bool", "false",
             "dte0_trade.py --book weekly entries. Off: screens and logs only."),
+    Setting("TRADING_WEEKLY_MAX_BUDGET", "Single-stock weekly budget", G_BUCKETS, "float", "5000",
+            "Total the weekly rotation commits per run, split across its max trades.",
+            "$", 0, 1_000_000),
     # --- 0DTE exit ladder (trading_engine/orphans.py) -----------------------
     Setting("TRADING_ORPHAN_STOP_PCT", "Stop loss", G_0DTE, "float", "-25",
             "Close a debit spread when its return on cost falls to this.",
@@ -224,10 +229,6 @@ REGISTRY: tuple[Setting, ...] = (
             "Flatten EVERYTHING when equity falls to this. 0 disables.", "$", 0, 1_000_000),
 
     # --- Entries (scripts/dte0_trade.py) -------------------------------------
-    Setting("TRADING_DTE0_MAX_BUDGET", "0DTE budget", G_ENTRY, "float", "1500",
-            "Maximum debit the 0DTE book commits.", "$", 0, 100_000),
-    Setting("TRADING_WEEKLY_MAX_BUDGET", "Weekly budget", G_ENTRY, "float", "5000",
-            "Maximum debit the weekly book commits.", "$", 0, 100_000),
     Setting("TRADING_DTE0_MAX_ROTATIONS", "Max rotations", G_ENTRY, "int", "3",
             "New entries allowed per day after exits.", "", 0, 20),
     Setting("TRADING_DTE0_ROTATE_COOLDOWN_MIN", "Rotation cooldown", G_ENTRY, "float", "30",

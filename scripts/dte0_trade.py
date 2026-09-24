@@ -665,10 +665,13 @@ def main() -> None:
                          "TRADING_DTE0_ROTATE=true as well.")
     args = ap.parse_args()
 
-    ceiling = WEEKLY_MAX_BUDGET if args.book == "weekly" else MAX_BUDGET
-    budget = min(args.budget, ceiling)
-    if budget < args.budget:
-        logger.info("Budget clamped to the $%.0f ceiling.", ceiling)
+    # THE BUCKET BUDGET IS THE BUDGET (2026-09-24, section 227): set per bucket
+    # on /desk/settings. --budget (the cron passes 5000) is ignored when it
+    # differs, and said so, so raising the setting in the UI actually raises it.
+    budget = WEEKLY_MAX_BUDGET if args.book == "weekly" else MAX_BUDGET
+    if args.budget != budget:
+        logger.info("Budget $%.0f from the %s bucket setting (--budget %.0f ignored).",
+                    budget, args.book, args.budget)
     syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     exp = _resolve_expiry(args.expiry, args.book)
     if args.book == "weekly":

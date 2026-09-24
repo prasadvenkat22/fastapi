@@ -13967,3 +13967,32 @@ Also at the operator's direction: stall give-back 2% of peak
 (TRADING_ORPHAN_STALL_GIVEBACK_FRACTION=0.02, band 0 so it applies) with a
 1-minute window. Unmeasured and tight: one quote-noise minute after a new high
 will sell. Both in trading_overrides.env.
+
+
+235. END OF 2026-09-24: THE SAME-DAY LADDER IN FORCE, AND THE FIRST STOPS ON IT
+
+Operator-set live (trading_overrides.env, 16:29-16:34 UTC): STALL_ON_MARK=true,
+PROFIT_EXIT_AT_MID=true, STALL_MIN_GAIN_PCT=1, STALL_ARM=15 (from the UI), with
+section 234's stop -10% / 2 min and stall give-back 2% of peak / 1 min. The
+first tset attempt did nothing: the `tset` alias lives in commands.txt, not the
+droplet's shell profile, so the paste block failed silently on that line.
+
+First two stops under -10% / 2 min:
+  QQQ 740/737 x2 @ 1.28  breached 16:28, STOP_LOSS 16:30 at -12.5%, filled
+                         1.14 (-10.9%), -28.00.
+  QQQ 740/738 x5 @ 0.97  -7.2% 16:35 -> -25.8% 16:36 (QQQ through 740 in one
+                         minute) -> STOP_LOSS 16:38 at -35.1%, -170.00. The
+                         2-minute confirmation cost ~9 points on the gap; an
+                         immediate stop would have sold ~-26%.
+
+OTM stop considered and left OFF: at 16:36 the 740/738 went out of the money,
+where OTM_STOP (no confirmation) would have sold. It was reverted on 09-16
+(section above: fired on 11 of 22, preempted every other exit, -876 vs -330)
+and nothing since re-measures it below the stall/stop. The lever for gap loss
+is the stop's confirmation minutes, operator's call; no stop setting prevents
+a one-minute -7% -> -26% gap.
+
+Cosmetic, not fixed: the holding log's "stall N pts" is computed from the
+intrinsic peak, so with STALL_ON_MARK on and a negative intrinsic peak it falls
+through to the ATR give-back (740/738 read "241.7pts"). The exit itself uses
+the sale-price peak and the 2%-of-peak give-back.

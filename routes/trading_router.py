@@ -226,7 +226,7 @@ async def get_broker_positions():
         rec = peaks.get(st["key"]) or {}
         peak = rec.get("peak")
         peak_at = rec.get("peak_at")
-        if orphans.STALL_ON_MARK and orphans._expires_today(st):
+        if (orphans.STALL_ON_MARK or rec.get("watch_now")) and orphans._expires_today(st):
             # Section 231: the stall watches the sale price; show its peak.
             peak = orphans.mark_peak(rec, abs(st["entry"]), st["credit"])
             peak_at = rec.get("mpeak_at")
@@ -259,7 +259,7 @@ async def get_broker_positions():
             band = orphans.ORPHAN_STALL_GIVEBACK_BAND
             flat = orphans.STALL_GIVEBACK_PCT
             quiet_needed = orphans.STALL_MINUTES
-            armed = orphans.stall_arm_reached(peak)
+            armed = bool(rec.get("watch_now")) or orphans.stall_arm_reached(peak)
         else:
             band = orphans.ORPHAN_LATER_STALL_GIVEBACK_BAND
             flat = None
@@ -317,6 +317,8 @@ async def get_broker_positions():
             quote_tradeable=orphans._quotes_tradeable(
                 tradier_orders.quotes([st["long"], st["short"]]), st),
             note=None if zero_dte else "no 15:45 flatten; runs to expiry",
+            key=st["key"],
+            watching_now=bool(rec.get("watch_now")) or (st["key"] in orphans._read_watch_now()),
         ))
 
     return BrokerPositionsResponse(
@@ -324,6 +326,34 @@ async def get_broker_positions():
         managed_underlyings=sorted(orphans.MANAGE_UNDERLYING),
         total_unrealized_dollars=round(total, 2) if out else None,
     )
+
+
+class WatchNowRequest(BaseModel):
+    key: str
+
+
+@router.post("/positions/watch-now")
+async def watch_profits_now(body: WatchNowRequest,
+                            user: Annotated[models.User, Depends(require_admin())]):
+    """Section 232: start this same-day position's stall from its CURRENT sale price.
+
+    Places nothing. It queues a request the next cron cycle applies: from then
+    the stall watches the sale price from where it is now, raises the level on
+    every new high, and after the stall window sells once profit slips -- never
+    below the stall minimum gain. Admin-only, like the settings it overrides.
+    """
+    try:
+        structures = orphans.open_structures()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Broker positions unavailable: {exc}")
+    st = next((s for s in structures if s["key"] == body.key), None)
+    if st is None:
+        raise HTTPException(status_code=404, detail="No open position with that key")
+    if not orphans._expires_today(st):
+        raise HTTPException(status_code=422, detail="Watch-now is for same-day positions only")
+    req = orphans.request_watch_now(body.key, who=user.email)
+    return {"key": body.key, "queued_at": req["at"],
+            "applies": "next cron cycle (within a minute)"}
 
 
 @router.get("/history", response_model=TradeHistoryResponse)

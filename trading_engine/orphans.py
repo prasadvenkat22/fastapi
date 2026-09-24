@@ -50,6 +50,7 @@ narrows it further to the engine's own symbol.
 import json
 import logging
 import os
+import tempfile
 import time
 from datetime import datetime, timezone
 
@@ -1308,6 +1309,49 @@ ORPHAN_GIVEBACK_CONFIRM_MIN = float(
     os.getenv("TRADING_ORPHAN_GIVEBACK_CONFIRM_MIN", "5") or 0)
 
 STATE_PATH = os.getenv("TRADING_ORPHAN_STATE", "orphan_peaks.json")
+
+# "START WATCHING PROFITS NOW", per position. Section 232.
+#
+# Operator, 2026-09-24: a button per same-day position that starts the stall
+# from that spread's CURRENT sale-price profit, whatever the arm setting says.
+# The API only appends a request here; the cron applies it on its next cycle
+# (resets that structure's sale-price peak to the current mark and marks it
+# manually watched) and then removes it. The API never writes STATE_PATH, so a
+# request cannot race the cron's own read-modify-write of the peaks.
+WATCH_NOW_PATH = os.getenv("TRADING_ORPHAN_WATCH_NOW", "orphan_watch_now.json")
+
+
+def _read_watch_now() -> dict:
+    try:
+        with open(WATCH_NOW_PATH) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def _write_watch_now(d: dict) -> None:
+    folder = os.path.dirname(os.path.abspath(WATCH_NOW_PATH))
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".watch_now.", suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(d, fh)
+    os.replace(tmp, WATCH_NOW_PATH)
+
+
+def request_watch_now(key: str, who: str) -> dict:
+    """Queue 'start watching profits now' for one structure (applied next cycle)."""
+    d = _read_watch_now()
+    d[key] = {"at": datetime.now(timezone.utc).isoformat(), "who": who}
+    _write_watch_now(d)
+    return d[key]
+
+
+def _take_watch_now(key: str) -> "dict | None":
+    d = _read_watch_now()
+    req = d.pop(key, None)
+    if req is not None:
+        _write_watch_now(d)
+    return req
 
 
 def _load() -> dict:
@@ -2670,6 +2714,21 @@ def review(engine_symbols: "set | None" = None) -> list:
             prev_m = rec.get("mpeak_v")
             if prev_m is None or (value < prev_m if st["credit"] else value > prev_m):
                 rec["mpeak_v"], rec["mpeak_at"] = value, now.isoformat()
+            if zero_dte:
+                req = _take_watch_now(key)
+                if req is not None:
+                    # Section 232: watch from HERE. The peak becomes today's
+                    # sale price, so only profit from now on is protected.
+                    rec["mpeak_v"], rec["mpeak_at"] = value, now.isoformat()
+                    rec["watch_now"] = req.get("at") or now.isoformat()
+                    logger.info(
+                        "ORPHAN %s %g/%g: WATCH NOW (%s) -- stall watches the sale "
+                        "price from %.2f (%+.1f%%); sells after %.0f min without a "
+                        "new high once it slips, never below +%.0f%%.",
+                        st["root"], st["long_strike"], st["short_strike"],
+                        req.get("who") or "?", value, ret_pct, STALL_MINUTES,
+                        STALL_MIN_GAIN_PCT)
+            watched = bool(rec.get("watch_now"))
             mpeak = mark_peak(rec, entry_abs, st["credit"])
             mquiet = (now - datetime.fromisoformat(rec["mpeak_at"])).total_seconds() / 60.0
             stop_pct = ORPHAN_CREDIT_STOP_PCT if st["credit"] else ORPHAN_STOP_PCT
@@ -3108,13 +3167,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                     ORPHAN_LATER_STALL_GIVEBACK_BAND, LP["giveback_atr"]))
 
             # Section 231: the same rule on the sale price when STALL_ON_MARK.
-            if STALL_ON_MARK:
+            if STALL_ON_MARK or watched:
                 s_peak, s_now, s_quiet = mpeak, _gain_pct, mquiet
             else:
                 s_peak, s_now, s_quiet = rec["peak"], stall_pct, quiet
             stall_armed = (
                 zero_dte and past_hold and STALL_MINUTES > 0
-                and stall_arm_reached(s_peak)
+                and (watched or stall_arm_reached(s_peak))
                 and s_quiet >= STALL_MINUTES
                 and s_now <= s_peak - _giveback_points(
                     st["root"], entry_abs, s_peak, STALL_GIVEBACK_PCT,
@@ -3146,7 +3205,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             stall_later_ready = stall_later_armed and books_a_gain
 
             if drag_blocks and (later_target_hit or stall_later_ready
-                                or (stall_ready and not STALL_ON_MARK)):
+                                or (stall_ready and not (STALL_ON_MARK or watched))):
                 logger.info(
                     "ORPHAN %s %g/%g would close on %s at %.2f, but "
                     "intrinsic is %.2f — closing now forfeits %.2f, which is "
@@ -3274,7 +3333,7 @@ def review(engine_symbols: "set | None" = None) -> list:
                 # purpose -- this rule exists precisely for the case where the
                 # mark is under water and the expiry value is walking away.
                 reason = "GIVEBACK"
-            elif stall_ready and (STALL_ON_MARK or not drag_blocks):
+            elif stall_ready and (STALL_ON_MARK or watched or not drag_blocks):
                 # The take-profit ARMS this rather than firing it, exactly as
                 # the engine's own credit window now does: a structure that
                 # keeps making new highs is not finished.
@@ -3363,11 +3422,12 @@ def review(engine_symbols: "set | None" = None) -> list:
                                 STALL_GIVEBACK_PCT,
                                 abs(st["short_strike"] - st["long_strike"])),
                             STALL_MINUTES,
-                            ("" if ORPHAN_STALL_ARM_PCT <= 0 else (
+                            (" WATCHING NOW" if watched else
+                             "" if ORPHAN_STALL_ARM_PCT <= 0 else (
                                 " ARMED" if stall_arm_reached(mpeak if STALL_ON_MARK else rec["peak"])
                                 else " arms at %+.0f%%" % ORPHAN_STALL_ARM_PCT))
                             + (" on sale price, sale peak %+.1f%%" % mpeak
-                               if STALL_ON_MARK and mpeak is not None else ""),
+                               if (STALL_ON_MARK or watched) and mpeak is not None else ""),
                             "" if past_hold else " from %s" % ORPHAN_HOLD_UNTIL))
                     if ORPHAN_FORCE_CLOSE:
                         parts.append("flatten %s" % ORPHAN_FORCE_CLOSE)

@@ -13895,3 +13895,29 @@ shows the sale-price peak for same-day positions.
 
 On 09-24's trade it would have done nothing either (sale peak +1.7% never
 reaches a 30% arm). Unmeasured; set at the operator's direction; false reverts.
+
+
+232. "START WATCHING PROFITS NOW", PER POSITION  (2026-09-24)
+
+Operator: "there must be a button that says start watching profits now,
+meaning at the current profit level -- 10%, 20%, 30%, 40%, 50%." Chosen scope:
+one button per same-day position on /desk (Positions).
+
+Pressing it POSTs /trading/positions/watch-now {key} (admin-only, same-day
+only). The API writes nothing but a request in orphan_watch_now.json; the next
+cron cycle takes it (and deletes it), sets that structure's SALE-PRICE peak to
+the current mark and marks it watched. From then, for that structure only and
+whatever TRADING_ORPHAN_STALL_ARM / _STALL_ON_MARK say: the stall reads the sale
+price, every new high raises the level and restarts the clock, and after
+TRADING_ORPHAN_STALL_MINUTES without a new high AND the give-back below that
+high it sells -- never below TRADING_ORPHAN_STALL_MIN_GAIN_PCT, and the drag
+guard does not hold it back. The flag lives in the peak record, so a new
+position on the same legs (which resets the record) starts unwatched. The log
+says "WATCH NOW (who)" once and "WATCHING NOW on sale price, sale peak +x%" on
+every holding line; /trading/positions carries key and watching_now.
+
+The interaction to know: the give-back and the floor still apply. Pressed at
++10% with the live band give-back (~6 pts on a 740/735) the sell trigger sits
+near +4%, under the +8% floor, so it would not sell. The button protects a
+gain comfortably above floor + give-back; lower either knob to protect smaller
+ones. Unmeasured; the button is opt-in per position.

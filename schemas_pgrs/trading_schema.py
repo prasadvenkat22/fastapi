@@ -106,6 +106,10 @@ class BrokerPosition(BaseModel):
     managed: bool
     quote_tradeable: Optional[bool] = None
     note: Optional[str] = None
+    # Section 232: identifies the structure for POST /trading/positions/watch-now,
+    # and whether that button is in force on it (stall on the sale price).
+    key: Optional[str] = None
+    watching_now: Optional[bool] = None
 
 
 class BrokerPositionsResponse(BaseModel):

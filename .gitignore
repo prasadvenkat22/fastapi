@@ -33,3 +33,7 @@ app/nginx/conf.d/*.disabled*
 trading_overrides.env
 trading_overrides.log
 .trading_overrides.*.tmp
+
+# orphans.py runtime state (section 232)
+orphan_peaks.json
+orphan_watch_now.json

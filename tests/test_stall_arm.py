@@ -29,10 +29,10 @@ def test_arm_waits_for_the_peak_to_reach_the_level(monkeypatch):
 
 def test_ladder_and_positions_page_use_the_arm():
     src = open(os.path.join(REPO, "trading_engine", "orphans.py"), encoding="utf-8").read()
-    assert 'and stall_arm_reached(s_peak)' in src
+    assert 'and (watched or stall_arm_reached(s_peak))' in src
     assert 'rec["peak"] > 0\n' not in src
     src = open(os.path.join(REPO, "routes", "trading_router.py"), encoding="utf-8").read()
-    assert "armed = orphans.stall_arm_reached(peak)" in src
+    assert 'armed = bool(rec.get("watch_now")) or orphans.stall_arm_reached(peak)' in src
 
 
 def test_arm_is_a_ui_setting():
@@ -73,7 +73,7 @@ def test_sale_price_mode_wiring():
     # the stall reads the sale-price series when the switch is on ...
     assert "s_peak, s_now, s_quiet = mpeak, _gain_pct, mquiet" in src
     # ... the drag guard does not hold that exit back ...
-    assert "elif stall_ready and (STALL_ON_MARK or not drag_blocks):" in src
+    assert "elif stall_ready and (STALL_ON_MARK or watched or not drag_blocks):" in src
     # ... and it still never sells below the minimum gain
     assert "stall_ready = stall_armed and books_a_gain" in src
     src = open(os.path.join(REPO, "routes", "trading_router.py"), encoding="utf-8").read()

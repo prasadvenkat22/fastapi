@@ -1426,6 +1426,10 @@ reaches it; after that each new intrinsic high resets the watch level and the
 switches that same-day stall from intrinsic to the mark: arm, peak, clock and
 give-back are read off what the spread would sell for, the drag guard stands
 aside for the stall exit, and the minimum-gain floor still prevents a loss.
+**Watch profits now** (section 232): a per-position button on `/desk` POSTs
+`/trading/positions/watch-now`; the next cycle starts that same-day spread's
+stall on the sale price from its current profit, ignoring the arm. Requests
+queue in `orphan_watch_now.json` (the API never writes `orphan_peaks.json`).
 
 **Roll-aware basis guards** (section 230): `_rolled_net` only replaces the
 per-leg entry when the order walk reaches a real roll order (mixed to_open /

@@ -1450,7 +1450,7 @@ overrides file is the authority -- `tset list`):
 
 | | Same-day (expires today) | Weekly / later expiry |
 |---|---|---|
-| Loss | `STOP_PCT=-20` with a 5-minute confirmation (09-24), no intrinsic hold-off (`STOP_RESPECTS_INTRINSIC=false`) | `LATER_STOP_PCT=-20` with 2+ sessions left, `LATER_STOP_PCT_1D=-10` on the last day, both with a 2-minute confirmation; `LATER_SCALE_DAYS=2` makes it a step (section 226) |
+| Loss | `STOP_PCT=-10` with a 2-minute confirmation (09-24 afternoon, section 234; was -20% / 5 min from 09:00), no intrinsic hold-off (`STOP_RESPECTS_INTRINSIC=false`) | `LATER_STOP_PCT=-20` with 2+ sessions left, `LATER_STOP_PCT_1D=-10` on the last day, both with a 2-minute confirmation; `LATER_SCALE_DAYS=2` makes it a step (section 226) |
 | Profit | profit lock at cost + 10% of width on the mark (`PROFIT_LOCK_WIDTH=0.10`); resting ask 0.90 x width, floor 0.80 | `LATER_TARGET_PCT=0.90` of width; later stall (arm +25%, 30 min, 0.25 ATR) |
 | Off | underlying stop, strike guard (code kept, tunable) | |
 | End | flatten 15:45 (ask withdrawn 15:40) | held overnight |

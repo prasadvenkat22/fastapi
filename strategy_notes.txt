@@ -13950,3 +13950,20 @@ current level, max 10% of current profit: at 10% sell when it falls to 9%".
   - "10% of current profit" is the existing share-of-peak give-back
     (TRADING_ORPHAN_STALL_GIVEBACK_FRACTION=0.10), which only applies with the
     share-of-band give-back at 0 (band wins in _giveback_points).
+
+
+234. SAME-DAY STOP -10% / 2 MIN; STALL GIVE-BACK 2% OF PEAK / 1 MIN  (2026-09-24)
+
+The -20% / 5-minute stop set at 09:00 was breached on QQQ 740/735 x8 at 16:15
+UTC (-21%) and was 1.9 of 5 minutes into its confirmation at 16:17 (-56%); the
+operator closed by hand at 1.35 (-62%, about -1,768). Operator: "stop loss 20%
+never worked" -- it was working as configured, and the confirmation was the
+problem on a two-minute collapse. Changed to -10% / 2 min, the arm that beat
+-20% / 5 min in all four views of this morning's measurement
+(scratch/blueprint_measurement.md claim 3b: +53,882 / worst day -4,329 against
++38,078 / -14,329, intrinsic valuation, 141 structure-days, 10 sessions).
+
+Also at the operator's direction: stall give-back 2% of peak
+(TRADING_ORPHAN_STALL_GIVEBACK_FRACTION=0.02, band 0 so it applies) with a
+1-minute window. Unmeasured and tight: one quote-noise minute after a new high
+will sell. Both in trading_overrides.env.

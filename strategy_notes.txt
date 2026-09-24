@@ -13861,3 +13861,10 @@ tests/test_rolled_net.py reproduces the shape synthetically (old code: 26.20).
 
 Not done without the operator: correcting the two phantom trading_history rows,
 which feed the daily-loss limit and the consecutive-loss breaker.
+
+Addendum to 230: the two phantom rows were corrected in trading_history by the
+operator at ~15:45 ET (backup: trading_history_bak_20260924). 14:38 740/738 x1
+STOP_LOSS -3,670.00 -> 0.00 (entry 1.27, exit 1.27); 15:10 x1 STOP_LOSS
+-3,236.00 -> +37.00 (entry 1.27, exit 1.64). The 09-24 QQQ day now reads +349
+(0 / +270 / +37 / +42) instead of -6,594. The 15:17 740/738 x1 close at 1.63
+has no history row (five contracts closed against four opened); left as is.

@@ -14088,3 +14088,11 @@ is never refused there. 0 contracts (cannot pay for one, or balances
 unreadable) means no entry, logged. Live orders only; paper runs and sweeps
 size as before. With $131.68 of buying power a debit spread up to $1.31 can
 now be bought at 1 contract instead of being refused at budget size.
+
+Addendum to 239 (09-25 ~14:30 UTC): bucket budgets lowered to the account --
+TRADING_POSITION_BUDGET, TRADING_DTE0_MAX_BUDGET and TRADING_WEEKLY_MAX_BUDGET
+all 130 (were 2,500 / 1,000 / 5,000) against $131.68 of option buying power.
+Each is within the account alone; they share the same cash, so the
+buying-power check (238) is what stops them overspending together. The QQQ
+engine derives its daily-loss limit and tail cap from its budget, so at $130
+its entries are effectively off: no window's spread fits (3-wide ITM ~$180+).

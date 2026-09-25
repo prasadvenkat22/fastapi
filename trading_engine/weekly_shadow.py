@@ -388,7 +388,9 @@ def _maybe_trade(symbol, variant, expiry, cs, cl, ps, pl, priced):
         logger.exception("Weekly live: %s %s order FAILED — row stays an observation.",
                          symbol, variant)
         return None, None
-    oid = str(res.get("id")) if isinstance(res, dict) else None
+    # str(None) is "None", which is truthy: a refused order (section 238, no
+    # id) must not be recorded as a live order numbered "None".
+    oid = str(res["id"]) if isinstance(res, dict) and res.get("id") else None
     if not oid:
         logger.warning("Weekly live: %s %s returned no order id (%s) — treating as unfilled.",
                        symbol, variant, res)

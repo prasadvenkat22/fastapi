@@ -168,6 +168,45 @@ def _post_order(payload: dict, preview: bool) -> dict:
     return result
 
 
+# NO OPENING ORDER WITHOUT THE MONEY FOR IT. Section 238.
+#
+# 2026-09-25: the account held $131.68 of option buying power while the three
+# bucket budgets added up to $8,500, so an entry sized to its budget could only
+# be refused by the broker. Operator: "submitted orders with real money is a
+# waste -- an order should be placed only if there is money for that trade."
+# Every OPENING order is checked against the account's option buying power
+# first; a trade that does not fit is not sent and comes back
+# {"status": "refused"}, which service._open_rejected treats as a rejection (no
+# phantom position row). Closes are never checked: an exit must always go out.
+REQUIRE_BUYING_POWER = os.getenv("TRADING_REQUIRE_BUYING_POWER", "true").lower() == "true"
+
+
+def buying_power() -> "float | None":
+    """Option buying power from /balances, whatever the account type; None if unreadable."""
+    try:
+        b = account_snapshot() or {}
+        if b.get("error"):
+            return None
+        for section in ("margin", "pdt", "cash"):
+            d = b.get(section)
+            if isinstance(d, dict):
+                v = d.get("option_buying_power", d.get("cash_available"))
+                if v is not None:
+                    return float(v)
+        return None
+    except Exception:
+        logger.warning("Could not read buying power.", exc_info=True)
+        return None
+
+
+def opening_requirement(long_strike: float, short_strike: float, quantity: int,
+                        limit_price: float, is_credit: bool) -> float:
+    """Dollars an opening vertical ties up: the debit, or width minus credit."""
+    per = ((abs(long_strike - short_strike) - abs(limit_price)) if is_credit
+           else abs(limit_price))
+    return max(per, 0.0) * 100.0 * quantity
+
+
 def submit_vertical(underlying: str, expiry: "date | str", call_put: str,
                     long_strike: float, short_strike: float, quantity: int,
                     opening: bool, limit_price: float, is_credit: bool,
@@ -202,6 +241,18 @@ def submit_vertical(underlying: str, expiry: "date | str", call_put: str,
     # a different trade at a different price, and it would have been filled.
     long_sym = occ_symbol(underlying, expiry, call_put, long_strike)
     short_sym = occ_symbol(underlying, expiry, call_put, short_strike)
+
+    if opening and LIVE_ORDERS and not preview and REQUIRE_BUYING_POWER:
+        need = opening_requirement(long_strike, short_strike, quantity, limit_price, is_credit)
+        have = buying_power()
+        if have is None or need > have + 0.005:
+            logger.warning(
+                "OPEN REFUSED before sending: %s %s/%s x%d needs $%.2f, option buying "
+                "power is %s. Not placing an order the account cannot pay for.",
+                underlying, long_strike, short_strike, quantity, need,
+                "unreadable" if have is None else f"${have:.2f}")
+            return {"status": "refused", "reason": "insufficient_buying_power",
+                    "required": round(need, 2), "buying_power": have}
 
     if opening:
         long_side, short_side = "buy_to_open", "sell_to_open"

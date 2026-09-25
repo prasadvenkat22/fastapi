@@ -582,6 +582,35 @@ def _exits_today(symbols: set, now: datetime) -> dict:
     return out
 
 
+def _bucket_exposure(book: str, today: str) -> "float | None":
+    """Dollars already at risk in this book's open spreads; None if unreadable.
+
+    Section 238. The budget used to be a per-RUN allowance, so every 15-minute
+    run started from the full amount whatever earlier runs had opened. It is
+    now a cap on the whole bucket. Membership is by expiry, excluding QQQ (the
+    engine's own bucket): same-day spreads for the 0DTE book, later expiries
+    for the weekly book. Manual spreads on those names count too -- it is the
+    money that is in use, whoever placed it.
+    """
+    try:
+        from trading_engine import orphans
+        total = 0.0
+        for st in orphans.open_structures():
+            if st["root"] == "QQQ":
+                continue
+            same_day = st["expiry"] == today
+            if (book == "weekly") == same_day:
+                continue
+            width = abs(st["short_strike"] - st["long_strike"])
+            e = abs(float(st["entry"]))
+            per = (width - e) if st["credit"] else e
+            total += max(per, 0.0) * 100.0 * int(st["qty"])
+        return total
+    except Exception:
+        logger.warning("Could not read open positions for the bucket cap.", exc_info=True)
+        return None
+
+
 def _rotation_filter(syms: list, now: datetime) -> list:
     """Which names may take a NEW position right now."""
     cutoff = WEEKLY_ROTATE_CUTOFF if BOOK == "weekly" else ROTATE_CUTOFF
@@ -773,6 +802,27 @@ def main() -> None:
     # falling back to one that fits. MU on 2026-09-12 was exactly that: its
     # top row was a 50-wide at $1,936 and the name vanished from the plan.
     per_trade_cap = budget / max(args.max_trades, 1)
+    # SECTION 238: THE BUDGET IS A CAP ON THE BUCKET, AND NOTHING IS SENT
+    # WITHOUT THE MONEY FOR IT. Available = budget minus what this book already
+    # has open, and never more than the account's option buying power.
+    exposure = _bucket_exposure(args.book, now.strftime("%y%m%d"))
+    bp = tradier_orders.buying_power() if live else None
+    if exposure is None:
+        if live:
+            logger.warning("bucket exposure unreadable — DRY RUN, no orders this run.")
+        live = False
+        exposure = 0.0
+    available = max(budget - exposure, 0.0)
+    if live:
+        if bp is None:
+            logger.warning("buying power unreadable — DRY RUN, no orders this run.")
+            live = False
+        else:
+            available = min(available, bp)
+    logger.info("bucket %s: budget $%.0f, already open $%.0f, buying power %s -> "
+                "$%.0f available this run", args.book, budget, exposure,
+                "n/a (dry run)" if bp is None else f"${bp:.0f}", available)
+    per_trade_cap = min(per_trade_cap, available)
 
     # WHY NOTHING CLEARED IS AS IMPORTANT AS WHAT DID. Five filters run in
     # series and a silent "nothing cleared" leaves you unable to tell a quiet
@@ -1086,7 +1136,7 @@ def main() -> None:
         sym, side, cost, w = r["sym"], r["_side"], float(r["cost"]), float(r["w"])
         long_k = r["_long"]
         short_k = float(r["hi"]) if long_k == float(r["lo"]) else float(r["lo"])
-        qty = min(int(per // (cost * 100)), tradier_orders.MAX_CONTRACTS)
+        qty = min(int(min(per, available) // (cost * 100)), tradier_orders.MAX_CONTRACTS)
         logger.info(
             "%-5s %-4s %.0f/%.0f w%.1f x%d @ %.2f = $%.0f | Pwin %.1f%% need %.1f%% "
             "EV $%+.0f | entry %.0f%% of width, extr %.0f%%, short %.2f ATR out, "
@@ -1097,8 +1147,9 @@ def main() -> None:
             r.get("news") or "none", r.get("news_conf") or 0.0,
             mv or "none", mopen or "-")
         if qty < 1:
-            logger.info("   costs $%.0f, above the $%.0f per-trade budget — skipped.",
-                        cost * 100, per)
+            logger.info("   costs $%.0f, above the $%.0f available (slot $%.0f, bucket/"
+                        "buying power left $%.0f) — skipped.",
+                        cost * 100, min(per, available), per, available)
             continue
         if sym in held:
             logger.info("   the account already holds %s options expiring %s "
@@ -1112,8 +1163,12 @@ def main() -> None:
                 sym, exp, "call" if side == "call" else "put",
                 long_strike=long_k, short_strike=short_k, quantity=qty,
                 opening=True, limit_price=cost, is_credit=False)
+            if (res or {}).get("status") == "refused":
+                logger.warning("   NOT SENT — %s.", res.get("reason"))
+                continue
             logger.info("   ORDER SENT: %s", res)
             placed += 1
+            available = max(available - cost * 100 * qty, 0.0)
         except Exception:
             logger.exception("   order failed for %s — nothing opened.", sym)
 

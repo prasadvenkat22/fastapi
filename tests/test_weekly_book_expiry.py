@@ -54,3 +54,20 @@ def test_weekly_book_has_its_own_rotation_cutoff(monkeypatch):
     assert m._rotation_filter(["MU"], at_1350) == []           # 0DTE: past 13:30
     monkeypatch.setattr(m, "BOOK", "weekly")
     assert m._rotation_filter(["MU"], at_1350) == ["MU"]       # weekly: before 15:30
+
+
+def test_bucket_exposure_counts_by_book(monkeypatch):
+    import importlib
+    import pytest
+    pytest.importorskip("yfinance")
+    import dte0_trade as m
+    from trading_engine import orphans
+    m = importlib.reload(m)
+    rows = [
+        {"root": "MU", "expiry": "260925", "long_strike": 100, "short_strike": 105, "entry": 2.0, "credit": False, "qty": 3},
+        {"root": "MU", "expiry": "261002", "long_strike": 100, "short_strike": 110, "entry": 4.0, "credit": False, "qty": 1},
+        {"root": "QQQ", "expiry": "260925", "long_strike": 740, "short_strike": 735, "entry": 3.0, "credit": False, "qty": 5},
+    ]
+    monkeypatch.setattr(orphans, "open_structures", lambda *a, **k: rows)
+    assert m._bucket_exposure("dte0", "260925") == 600.0     # MU same-day only; QQQ is the engine's
+    assert m._bucket_exposure("weekly", "260925") == 400.0   # later expiries

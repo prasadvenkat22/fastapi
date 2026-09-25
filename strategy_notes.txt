@@ -14041,3 +14041,36 @@ run while TRADING_BUCKET_STOCK_WEEKLY is off. Cron hours are UTC: after DST
 ends on 2026-11-01 every trading line runs an hour earlier in ET.
 Also 09-25 (desk repo fe8ad93): a show/hide toggle on every password field
 (login, signin, signup, reset-password, account, users), live on dataaisys.com.
+
+
+238. NO OPENING ORDER WITHOUT THE MONEY FOR IT; BUDGETS CAP THE BUCKET  (2026-09-25)
+
+Found while answering "how does the engine decide where to invest": the account
+(Tradier margin) shows total equity $131.68 and option buying power $131.68,
+against bucket budgets of $2,500 (QQQ engine) + $1,000 (single-stock 0DTE) +
+$5,000 (weekly). Any entry sized to its budget could only be refused.
+Operator: "submitted orders with real money is a waste -- an order should be
+placed only if there is money for that trade."
+
+  1. tradier_orders.submit_vertical: every OPENING order (live, not preview)
+     is checked against option buying power first -- debit x 100 x qty, or
+     (width - credit) x 100 x qty. Not affordable, or balances unreadable ->
+     not sent, returns {"status": "refused"}. Closes are never checked.
+     TRADING_REQUIRE_BUYING_POWER=false reverts.
+  2. service: _open_rejected treats "refused" as a rejection, and an OPEN that
+     RAISED now returns "refused" too -- before, None kept the position row
+     (the 09-02 phantom). If such an order did reach the broker, orphans
+     adopts it.
+  3. dte0_trade: the budget is a cap on the whole bucket, not per run.
+     available = budget - already open in the book (same-day non-QQQ spreads
+     for dte0, later expiries for weekly, manual ones included), never above
+     buying power; each placed order reduces it within the run. Slots are
+     still budget / max-trades, now also capped by what is available.
+     Unreadable exposure or buying power -> dry run.
+  4. weekly_shadow: str(res.get("id")) turned a missing id into "None", which
+     is truthy -- a refused order would have been recorded as live order
+     "None". Fixed.
+
+Not changed: the QQQ engine still sizes against TRADING_POSITION_BUDGET; with
+$131 of buying power its entries are refused before sending (ENTRY REJECTED,
+no row) rather than resized.

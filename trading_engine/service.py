@@ -150,7 +150,11 @@ def _route_order(position_like, quantity: int, opening: bool, limit_price: float
         return result
     except Exception:
         logger.exception("Order [%s] failed — the engine's own state is unchanged.", label)
-        return None
+        # Section 238: an OPEN that raised is not a position. Returning None
+        # kept the row (only an explicit refusal counted), which is the 09-02
+        # phantom again. If the order did reach the broker, the orphan manager
+        # adopts it next cycle.
+        return {"status": "refused", "reason": "exception"} if opening else None
 
 
 # Terminal states in which the broker has refused or abandoned an order. A
@@ -217,6 +221,11 @@ def _close_rejected(order_result: "dict | None", kind: str = "Close") -> bool:
     through, the slow case is the recoverable one -- _reconcile compares
     against the broker every cycle and says so out loud.
     """
+    if order_result and order_result.get("status") == "refused":
+        # Section 238: never sent (no buying power) or failed to send.
+        logger.error("%s refused before reaching the broker: %s", kind,
+                     order_result.get("reason"))
+        return True
     if not tradier_orders.LIVE_ORDERS or not order_result:
         return False
     order_id = order_result.get("id")

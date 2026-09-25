@@ -1683,7 +1683,14 @@ second schedule (section 237) buys the **7-day** weekly: the same command with
 next Friday (8 days on Thursday, 7 on Friday). Both schedules share the
 `TRADING_BUCKET_STOCK_WEEKLY` switch and `TRADING_WEEKLY_MAX_BUDGET`, and the
 weekly book has its own entry cutoff, `TRADING_WEEKLY_ROTATE_CUTOFF` (15:30 ET)
--- before section 237 it used the 0DTE cutoff and the 13:50 run never entered. Same
+-- before section 237 it used the 0DTE cutoff and the 13:50 run never entered.
+
+**Money checks** (section 238). Every opening order is checked against the
+account's option buying power in `tradier_orders.submit_vertical` and refused
+before sending if it does not fit (closes are never checked). The rotation's
+budgets (`TRADING_DTE0_MAX_BUDGET`, `TRADING_WEEKLY_MAX_BUDGET`) are caps on the
+whole bucket: each run spends at most budget minus what that book already has
+open, and never more than buying power. Same
 gate chain in the same order (macro veto, news veto, tape veto until 10:30,
 options-flow line, EV/Pwin/edge ranking, rotation cooldown, quote-width
 ceiling, per-slot budget, already-held check on **any** expiry). Four things

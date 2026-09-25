@@ -14033,3 +14033,11 @@ Found while adding it: the rotation cutoff (TRADING_DTE0_ROTATE_CUTOFF, 13:30,
 the rotation cutoff -- no new entries" every day (09-22, 09-23). Its reason is
 0DTE-only (a late same-day entry cannot reach target before the flatten). New
 TRADING_WEEKLY_ROTATE_CUTOFF, default 15:30, in the UI (Entries & budgets).
+
+Addendum to 237: the Thu/Fri line (`50 13,17 * * 4-5 ... --expiry +5`) was
+installed on the droplet by the operator at ~13:40 UTC 09-25 (backup
+/root/crontab.bak-20260925); first runs 09:50 and 13:50 ET the same day, dry
+run while TRADING_BUCKET_STOCK_WEEKLY is off. Cron hours are UTC: after DST
+ends on 2026-11-01 every trading line runs an hour earlier in ET.
+Also 09-25 (desk repo fe8ad93): a show/hide toggle on every password field
+(login, signin, signup, reset-password, account, users), live on dataaisys.com.

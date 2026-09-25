@@ -37,3 +37,6 @@ trading_overrides.log
 # orphans.py runtime state (section 232)
 orphan_peaks.json
 orphan_watch_now.json
+
+# host crontab copy for /trading/schedule (section 240)
+crontab.snapshot

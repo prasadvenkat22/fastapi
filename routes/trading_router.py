@@ -328,6 +328,13 @@ async def get_broker_positions():
     )
 
 
+@router.get("/schedule")
+async def get_schedule():
+    """Section 240: the single-stock 0DTE and weekly entry runs, from the host crontab."""
+    from trading_engine import schedule
+    return schedule.snapshot()
+
+
 class WatchNowRequest(BaseModel):
     key: str
 

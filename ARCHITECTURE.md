@@ -1684,7 +1684,9 @@ second schedule (section 237) buys the **7-day** weekly: the same command with
 next Friday (8 days on Thursday, 7 on Friday). Both schedules share the
 `TRADING_BUCKET_STOCK_WEEKLY` switch and `TRADING_WEEKLY_MAX_BUDGET`, and the
 weekly book has its own entry cutoff, `TRADING_WEEKLY_ROTATE_CUTOFF` (15:30 ET)
--- before section 237 it used the 0DTE cutoff and the 13:50 run never entered.
+-- before section 237 it used the 0DTE cutoff and the 13:50 run never entered. `/desk/settings`
+shows both schedules and the 0DTE rotation read-only as "Entry schedule"
+(section 240), parsed from a crontab copy the host writes every ten minutes.
 
 **Money checks** (section 238). Every opening order is checked against the
 account's option buying power in `tradier_orders.submit_vertical` and refused

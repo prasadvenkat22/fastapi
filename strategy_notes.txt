@@ -14096,3 +14096,23 @@ Each is within the account alone; they share the same cash, so the
 buying-power check (238) is what stops them overspending together. The QQQ
 engine derives its daily-loss limit and tail cap from its budget, so at $130
 its entries are effectively off: no window's spread fits (3-wide ITM ~$180+).
+
+
+240. THE ENTRY SCHEDULE IN THE UI; PRICE ALERTS OFF  (2026-09-25)
+
+Operator: "show the weekly schedule in the UI". The single-stock 0DTE and
+weekly runs live in the droplet's crontab, which the API container cannot
+read. A host cron line (`*/10 * * * * crontab -l > /opt/fastapi/crontab.snapshot`,
+gitignored) copies it into the bind-mounted repo; trading_engine/schedule.py
+parses the dte0_trade.py lines (days, times converted from UTC to ET for the
+date asked, expiry rule, max trades, symbols); GET /trading/schedule serves it;
+/desk/settings shows it read-only as "Entry schedule" above the setting groups.
+A missing or hour-old snapshot is reported, not guessed. Changing the schedule
+is still a crontab edit.
+
+Operator: "turn off notifications Price alert: SNDK 1763.43 crossed >1762".
+Source: the price_alert.py cron line (every 5 min, 09:00-17:55 ET) with rules
+"SNDK<1762,SNDK>1762,SNDK<1700,CRWV<95" -- a < and > rule on the same level
+fires on every wiggle around it. The whole job is commented out in the
+crontab (all its rules were SNDK/CRWV levels), not deleted; uncomment to
+restore.

@@ -588,7 +588,7 @@ places orders, so the guards come first:
 ```
 --live required            dry run is the default and prints the same plan
 TRADING_DTE0_LIVE=true     must ALSO be set; --live alone does nothing
-TRADING_DTE0_MAX_BUDGET    hard ceiling, 1500
+TRADING_DTE0_MAX_BUDGET    the bucket budget (section 238)
 --max-trades 3             one per underlying
 already-held check         refuses a symbol the account already holds for
                            today's expiry, and FAILS CLOSED if it cannot read
@@ -1495,8 +1495,9 @@ TRADING_DTE0_OPTIONS_FLOW=record    OPTIONS line per candidate; veto refuses aga
 TRADING_OPTFLOW_CP_RATIO=2.0  TRADING_OPTFLOW_TURNOVER=0.5  TRADING_OPTFLOW_MIN_VOLUME=500
 TRADING_INDEX_EVENT_LIVE=false      "would place" until true (§197)
 TRADING_INDEX_EVENT_BUDGET=1000  TRADING_INDEX_EVENT_MIN_PWIN=0.40  TRADING_INDEX_EVENT_MIN_DAYS=1
-TRADING_DTE0_MAX_BUDGET=5000        ceiling on the 0DTE rotation's --budget (cron passes 5000 / 4 slots)
-TRADING_WEEKLY_MAX_BUDGET=5000      ceiling on the weekly book's --budget (cron passes 5000 / 3 slots)
+TRADING_DTE0_MAX_BUDGET=130         THE single-stock 0DTE bucket budget (UI setting; cap on the whole bucket, §238; 130 since 09-25 to match the account)
+TRADING_WEEKLY_MAX_BUDGET=130       THE weekly bucket budget, same rules; the cron's --budget is ignored (§227)
+TRADING_POSITION_BUDGET=130         the QQQ engine's budget; its sizing also stops at buying power (§239)
 TRADING_WEEKLY_MIN_ENTRY_WIDTH=0.20 TRADING_WEEKLY_MIN_PWIN=0.45 TRADING_WEEKLY_RR_MIN=1.0 TRADING_WEEKLY_RR_MAX=3.0
 TRADING_MAX_ORDER_CONTRACTS=10      raised from 5 on 2026-09-19 after 5+5 fills on the QQQ close; one order covers the 9-lot MU exit and its ask
 ```
@@ -1702,8 +1703,9 @@ the structure band is the plan's, not the day's — entry 20–75% of width, R:R
 1..3 ranked by edge, **Pwin ≥ 0.45**, with the 0DTE extrinsic and ATR-distance
 limits switched off because a five-day spread is mostly time value and a daily
 ATR is the wrong ruler; and the positions land in the LATER ladder. Budgets are
-**not** an endpoint: each is the `--budget` argument on a cron line, capped by
-`TRADING_DTE0_MAX_BUDGET` / `TRADING_WEEKLY_MAX_BUDGET` in the server env.
+the `TRADING_DTE0_MAX_BUDGET` / `TRADING_WEEKLY_MAX_BUDGET` settings (in
+`/desk/settings`, section 227; the cron's `--budget` is ignored), each a cap on
+its whole bucket and never above buying power (section 238).
 
 **News sources, after 2026-09-19.** The hourly sweep (`news_enrich.py`, cron
 13–20 UTC weekdays) reads two kinds of feed. **Macro wires** — Fed, CNBC,
@@ -1723,7 +1725,7 @@ Filing and index-release feeds are quiet by nature and are exempt from the
 dead/stale warnings. Section 196.
 
 **Single-name 0DTE entries** (`dte0_trade.py --rotate --live`, every 15 min
-09:00–13:45 ET, budget **$5,000 over four slots** since 2026-09-19, no entries after 13:30) clear, in
+09:00–13:45 ET, budget `TRADING_DTE0_MAX_BUDGET` over four slots -- $130 since 2026-09-25, capped by what the bucket already holds and by buying power -- no entries after 13:30) clear, in
 order: the **macro veto** (bearish read refuses call debits, bullish refuses
 puts), the **Polygon news veto** per symbol (BEARISH ≥ 0.50 confidence refuses
 calls, BULLISH refuses puts), the **VWAP flow veto** (`vwap_gate.py`, section

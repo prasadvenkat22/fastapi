@@ -14074,3 +14074,17 @@ placed only if there is money for that trade."
 Not changed: the QQQ engine still sizes against TRADING_POSITION_BUDGET; with
 $131 of buying power its entries are refused before sending (ENTRY REJECTED,
 no row) rather than resized.
+
+
+239. THE QQQ ENGINE SIZES AGAINST BUYING POWER  (2026-09-25)
+
+Follow-up to 238, at the operator's request. The engine's sizing chain was
+budget fraction -> live contract cap -> half size after a loss -> daily risk
+share -> tail cap; it now ends with a buying-power cap
+(nodes.cap_to_buying_power): contracts = min(quantity, option buying power //
+per-contract requirement), where the requirement is the debit, or width minus
+credit -- the same figure submit_vertical checks, so an entry the engine sizes
+is never refused there. 0 contracts (cannot pay for one, or balances
+unreadable) means no entry, logged. Live orders only; paper runs and sweeps
+size as before. With $131.68 of buying power a debit spread up to $1.31 can
+now be bought at 1 contract instead of being refused at budget size.

@@ -1690,7 +1690,9 @@ account's option buying power in `tradier_orders.submit_vertical` and refused
 before sending if it does not fit (closes are never checked). The rotation's
 budgets (`TRADING_DTE0_MAX_BUDGET`, `TRADING_WEEKLY_MAX_BUDGET`) are caps on the
 whole bucket: each run spends at most budget minus what that book already has
-open, and never more than buying power. Same
+open, and never more than buying power. The QQQ engine's sizing ends with the same limit
+(section 239, `nodes.cap_to_buying_power`): it buys at most what buying power
+pays for, and skips the entry if that is zero. Same
 gate chain in the same order (macro veto, news veto, tape veto until 10:30,
 options-flow line, EV/Pwin/edge ranking, rotation cooldown, quote-width
 ceiling, per-slot budget, already-held check on **any** expiry). Four things

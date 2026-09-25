@@ -64,6 +64,30 @@ KILL_SWITCH_PATH = "KILL_SWITCH.txt"
 # Debit-spread strategy config — see execution_risk_agent below.
 POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
 
+
+def cap_to_buying_power(quantity: int, per_contract: float) -> int:
+    """Contracts the account can actually pay for (section 239); 0 if unreadable.
+
+    per_contract is what one contract ties up at the broker -- the debit on a
+    debit spread, width minus credit on a credit one -- the same figure
+    tradier_orders.opening_requirement checks, so an entry sized here is never
+    refused there. Only while orders are live: paper runs and sweeps size as
+    before.
+    """
+    if not tradier_orders.LIVE_ORDERS or quantity <= 0 or per_contract <= 0:
+        return quantity
+    bp = tradier_orders.buying_power()
+    if bp is None:
+        logger.warning("Buying power unreadable — no entry this cycle.")
+        return 0
+    fit = int(bp // per_contract)
+    if fit < quantity:
+        logger.info(
+            "Buying power: $%.2f pays for %d contract(s) at $%.0f each — sizing %d, not %d.",
+            bp, fit, per_contract, fit, quantity)
+        return fit
+    return quantity
+
 # Share of the budget the opening trade may consume. The remainder is held
 # back to fund scale-ins.
 #
@@ -3461,6 +3485,12 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                             MAX_POSITION_RISK_PCT * 100, eq.equity, max_by_tail,
                         )
                         quantity = max_by_tail
+
+                # SIZE AGAINST THE MONEY IN THE ACCOUNT (section 239). The budget
+                # says what the engine MAY deploy; buying power says what it CAN.
+                # On 2026-09-25 the account held $131.68 against a $2,500 budget,
+                # so every budget-sized entry was refused before sending.
+                quantity = cap_to_buying_power(quantity, structural_per_contract)
 
                 if is_credit_window and 0 < quantity and net_debit < MIN_CREDIT:
                     logger.info(

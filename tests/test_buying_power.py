@@ -57,3 +57,35 @@ def test_buying_power_reads_each_account_type(monkeypatch):
 
 def test_engine_treats_refused_open_as_rejected():
     assert service._open_rejected({"status": "refused", "reason": "insufficient_buying_power"})
+
+
+# --- Section 239: the QQQ engine sizes against buying power ------------------
+
+from trading_engine import nodes
+
+
+def test_engine_sizes_down_to_what_the_account_can_pay(monkeypatch):
+    monkeypatch.setattr(t, "LIVE_ORDERS", True)
+    monkeypatch.setattr(t, "buying_power", lambda: 131.68)
+    assert nodes.cap_to_buying_power(5, 60.0) == 2        # $131.68 / $60 = 2
+    assert nodes.cap_to_buying_power(5, 150.0) == 0       # cannot pay for one: no entry
+    assert nodes.cap_to_buying_power(1, 60.0) == 1        # already fits
+
+
+def test_engine_unreadable_buying_power_means_no_entry(monkeypatch):
+    monkeypatch.setattr(t, "LIVE_ORDERS", True)
+    monkeypatch.setattr(t, "buying_power", lambda: None)
+    assert nodes.cap_to_buying_power(3, 60.0) == 0
+
+
+def test_engine_paper_sizing_is_unchanged(monkeypatch):
+    monkeypatch.setattr(t, "LIVE_ORDERS", False)
+    monkeypatch.setattr(t, "buying_power", lambda: 0.0)
+    assert nodes.cap_to_buying_power(5, 60.0) == 5
+
+
+def test_engine_entry_path_calls_the_cap():
+    import inspect
+    src = inspect.getsource(nodes)
+    i = src.index("quantity = cap_to_buying_power(quantity, structural_per_contract)")
+    assert i < src.index("if is_credit_window and 0 < quantity and net_debit < MIN_CREDIT:")

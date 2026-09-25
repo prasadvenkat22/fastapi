@@ -14016,3 +14016,20 @@ The same window had two other causes of "stop not working", both by design:
     peak and the stop's clock start over.
 743/739 x4 then stopped at 16:59 (-17.2% mark, -130.00 booked). Also 16:56:
 the operator moved "Stall starts watching at" back from 15 to 30 in the UI.
+
+
+237. THE 7-DAY WEEKLY BOOK; THE WEEKLY AFTERNOON RUN THAT NEVER RAN  (2026-09-25)
+
+Operator: "add the weekly book 7-day ones". The weekly book bought Monday to
+Wednesday for THIS Friday (2-4 days). New cron schedule, same command with
+`--expiry +5`, 09:50 and 13:50 ET Thursday and Friday -> next Friday (8 and 7
+days). Same symbols, max 3 trades, same bucket switch (STOCK_WEEKLY, OFF) and
+budget setting (TRADING_WEEKLY_MAX_BUDGET) -- one weekly book, two horizons.
+The weekly filters do not assume a horizon (Pwin carries it; the 0DTE
+extrinsic/ATR limits were already off), so nothing else changes. Unmeasured.
+
+Found while adding it: the rotation cutoff (TRADING_DTE0_ROTATE_CUTOFF, 13:30,
+11:30 before) applied to both books, so the weekly 13:50 ET run logged "past
+the rotation cutoff -- no new entries" every day (09-22, 09-23). Its reason is
+0DTE-only (a late same-day entry cannot reach target before the flatten). New
+TRADING_WEEKLY_ROTATE_CUTOFF, default 15:30, in the UI (Entries & budgets).

@@ -29,3 +29,28 @@ def test_defaults_and_literals():
     assert r("", "weekly", date(2026, 9, 21)) == "2026-09-25"
     assert r("+7", "weekly", date(2026, 9, 21)) == "2026-10-02"
     assert r("2026-10-09", "weekly", date(2026, 9, 21)) == "2026-10-09"
+
+
+def test_seven_day_run_picks_next_friday():
+    """Section 237: the Thu/Fri run uses --expiry +5."""
+    r = _resolve()
+    assert r("+5", "weekly", date(2026, 9, 24)) == "2026-10-02"   # Thursday -> 8 days
+    assert r("+5", "weekly", date(2026, 9, 25)) == "2026-10-02"   # Friday -> 7 days
+
+
+def test_weekly_book_has_its_own_rotation_cutoff(monkeypatch):
+    import importlib
+    import pytest
+    pytest.importorskip("yfinance")
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import dte0_trade as m
+    m = importlib.reload(m)
+    monkeypatch.setattr(m, "ROTATE_CUTOFF", "13:30")
+    monkeypatch.setattr(m, "WEEKLY_ROTATE_CUTOFF", "15:30")
+    monkeypatch.setattr(m, "_exits_today", lambda syms, now: {})
+    at_1350 = datetime(2026, 9, 25, 13, 50, tzinfo=ZoneInfo("America/New_York"))
+    monkeypatch.setattr(m, "BOOK", "dte0")
+    assert m._rotation_filter(["MU"], at_1350) == []           # 0DTE: past 13:30
+    monkeypatch.setattr(m, "BOOK", "weekly")
+    assert m._rotation_filter(["MU"], at_1350) == ["MU"]       # weekly: before 15:30

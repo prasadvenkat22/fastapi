@@ -1677,7 +1677,13 @@ contracts; `bearish` mirrors; else `neutral`. `TRADING_DTE0_OPTIONS_FLOW` is
 
 **The weekly book** (section 198) runs through the same script: `dte0_trade.py
 --book weekly --rotate --live --budget 5000 --max-trades 3 --expiry friday`, cron
-**09:50 and 13:50 ET, Monday to Wednesday**, over the 18-name universe. Same
+**09:50 and 13:50 ET, Monday to Wednesday**, over the 18-name universe. A
+second schedule (section 237) buys the **7-day** weekly: the same command with
+`--expiry +5`, **09:50 and 13:50 ET, Thursday and Friday**, which resolves to
+next Friday (8 days on Thursday, 7 on Friday). Both schedules share the
+`TRADING_BUCKET_STOCK_WEEKLY` switch and `TRADING_WEEKLY_MAX_BUDGET`, and the
+weekly book has its own entry cutoff, `TRADING_WEEKLY_ROTATE_CUTOFF` (15:30 ET)
+-- before section 237 it used the 0DTE cutoff and the 13:50 run never entered. Same
 gate chain in the same order (macro veto, news veto, tape veto until 10:30,
 options-flow line, EV/Pwin/edge ranking, rotation cooldown, quote-width
 ceiling, per-slot budget, already-held check on **any** expiry). Four things

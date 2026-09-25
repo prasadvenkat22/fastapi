@@ -270,6 +270,9 @@ REGISTRY: tuple[Setting, ...] = (
             "Minutes between an exit and the next rotation entry.", "min", 0, 240),
     Setting("TRADING_DTE0_ROTATE_CUTOFF", "Rotation cutoff", G_ENTRY, "time", "13:30",
             "No new rotation entries after this time (ET)."),
+    Setting("TRADING_WEEKLY_ROTATE_CUTOFF", "Weekly entry cutoff", G_ENTRY, "time", "15:30",
+            "No new weekly-book entries after this time (ET). The 0DTE rotation cutoff above does "
+            "not apply to weeklies."),
     Setting("TRADING_PICK_MIN_ENTRY_WIDTH", "0DTE min entry (×width)", G_ENTRY, "float", "0.30",
             "Cheapest debit accepted, as a share of width.", "x width", 0, 1),
     Setting("TRADING_PICK_MAX_ENTRY_WIDTH", "0DTE max entry (×width)", G_ENTRY, "float", "0.75",

@@ -184,6 +184,12 @@ MAX_ROTATIONS = int(os.getenv("TRADING_DTE0_MAX_ROTATIONS", "3"))
 # No NEW entry after this. A position opened late cannot reach a +30% target
 # before the flatten takes it at whatever the mark is.
 ROTATE_CUTOFF = os.getenv("TRADING_DTE0_ROTATE_CUTOFF", "13:30")
+# THE WEEKLY BOOK HAS ITS OWN CUTOFF (section 237). The reason above is a 0DTE
+# reason -- a same-day spread opened late cannot reach its target before the
+# flatten -- and it does not hold for a spread held for days. Sharing it meant
+# the weekly book's 13:50 ET run logged "past the rotation cutoff" and entered
+# nothing on every day it ran (09-22 and 09-23 at the 11:30 cutoff then).
+WEEKLY_ROTATE_CUTOFF = os.getenv("TRADING_WEEKLY_ROTATE_CUTOFF", "15:30")
 MIN_EW = float(os.getenv("TRADING_PICK_MIN_ENTRY_WIDTH", "0.30"))
 # 0.75, NOT 0.65. The boundary is arithmetic: max return is (width-entry)/entry,
 # so a +30% target becomes unreachable at exactly e/w = 1/1.30 = 0.769. 0.65 was
@@ -578,9 +584,10 @@ def _exits_today(symbols: set, now: datetime) -> dict:
 
 def _rotation_filter(syms: list, now: datetime) -> list:
     """Which names may take a NEW position right now."""
-    hh, mm = (int(x) for x in ROTATE_CUTOFF.split(":"))
+    cutoff = WEEKLY_ROTATE_CUTOFF if BOOK == "weekly" else ROTATE_CUTOFF
+    hh, mm = (int(x) for x in cutoff.split(":"))
     if now.time() >= dtime(hh, mm):
-        logger.info("past the %s rotation cutoff — no new entries.", ROTATE_CUTOFF)
+        logger.info("past the %s rotation cutoff — no new entries.", cutoff)
         return []
     exits = _exits_today(set(syms), now)
     keep = []

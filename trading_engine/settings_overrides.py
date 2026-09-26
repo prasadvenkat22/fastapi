@@ -129,6 +129,13 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_CREDIT_STALL_ARM", "Credit stall waits for the target", G_ENGINE, "bool", "true",
             "true = the credit stall only watches once the take-profit is reached. "
             "false = it watches from entry, like the morning stall."),
+    Setting("TRADING_WIN_COOLDOWN_MINUTES", "Wait after a win", G_ENGINE, "float", "0",
+            "Minutes before the engine re-enters after a profitable exit, either direction. 0 = the "
+            "next cycle (the state every sweep in sections 27-51 was measured under).", "min", 0, 240),
+    Setting("TRADING_REENTRY_COOLDOWN_MINUTES", "Wait after a loss", G_ENGINE, "float", "30",
+            "Minutes before re-entering the side that just stopped out. Measured (60 sessions): no "
+            "cooldown +51.17/day, 30 min +58.13, 90 min +60.15, and no cooldown widens the worst day.",
+            "min", 0, 240),
     Setting("TRADING_CREDIT_STALL_MINUTES", "Credit stall window", G_ENGINE, "float", "",
             "Its own window for the credit stall. Blank = same as the morning window.",
             "min", 0, 240, allow_blank=True),

@@ -120,6 +120,7 @@ WEEKLY_RR = (float(os.getenv("TRADING_WEEKLY_RR_MIN", "1.0")),
 WEEKLY_MAX_EXTRINSIC = float(os.getenv("TRADING_WEEKLY_MAX_EXTRINSIC", "100.0"))
 WEEKLY_MAX_TARGET_ATR = float(os.getenv("TRADING_WEEKLY_MAX_TARGET_ATR", "9.0"))
 WEEKLY_MIN_PWIN = float(os.getenv("TRADING_WEEKLY_MIN_PWIN", "0.45"))
+RANK_TOP = int(os.getenv("TRADING_DTE0_RANK_TOP", "500") or 500)
 BOOK = "dte0"           # set by --book; read by _passes
 WTYPE = None            # 'w3' / 'w7' for a weekly run (section 245); read by _long_band
 # QQQ IS DELIBERATELY ABSENT. The engine trades QQQ 0DTE itself from 09:45
@@ -1023,7 +1024,12 @@ def main() -> None:
     for side in ("call", "put"):
         try:
             rr_lo, rr_hi = WEEKLY_RR if args.book == "weekly" else (0.0, 0.0)
-            res = rank(syms, side, by=args.by, top=60, structure="debit", expiry=exp,
+            # SECTION 246: EVERY candidate, not the top 60. Ranked by EV the top of
+            # the list is the widest spreads -- MU 1095/1200, 105 wide at 8% of
+            # width -- so a top-60 cut handed the filters nothing a budget or a
+            # short-strike limit could accept, and normal-width spreads never
+            # reached _passes. The filters and the per-slot budget choose.
+            res = rank(syms, side, by=args.by, top=RANK_TOP, structure="debit", expiry=exp,
                        rr_min=rr_lo, rr_max=rr_hi)
         except Exception:
             logger.warning("rank() failed for %s — skipped.", side, exc_info=True)

@@ -14207,3 +14207,33 @@ loss limit 7.80 (6% of the budget): at a $130 budget a QQQ window's one
 contract (~$54 at risk on a 3-wide) still sizes to 0. Every script that reads
 trading_history (sweeps, exit_backtest, the rotation's exits-today) starts from
 the empty table; history before 09-26 is in the archive.
+
+
+243. SETTINGS BY TRADE TYPE: 0DTE, 3-DAY, 7-DAY; A FLATTEN FOR WEEKLIES  (2026-09-26)
+
+Operator: a dropdown by trade type, each showing its own stop, profit booking,
+max-profit close and end-of-day flatten; 3-day vs 7-day decided by length at
+purchase; and a flatten switch for both weekly types "since the next day's
+open can be totally unpredictable".
+
+  - orphans.weekly_type(): a spread not expiring today is 'w7' if it was
+    bought TRADING_WEEKLY_LONG_MIN_DAYS (5) or more calendar days before
+    expiry, else 'w3' -- fixed for its life, from the purchase date the
+    reconstruction already carries (unknown for an inferred pairing: judged by
+    days left). Expiry day uses the 0DTE ladder and 15:45 flatten as before.
+  - TRADING_W3_* / TRADING_W7_*: STOP_PCT, STOP_MINUTES, TARGET_RETURN_PCT,
+    TARGET_WIDTH, STALL_ARM, STALL_MINUTES -- all BLANK by default, falling
+    back to the shared weekly (LATER) values and the global return target,
+    so nothing changed on deploy. A per-type stop/stall applies flat (no
+    sessions-left scaling). later_params() applies them (_typed), and the
+    weekly target and return target read them per structure.
+  - TRADING_W3_FLATTEN / TRADING_W7_FLATTEN (off) + _FLATTEN_AT (15:45): new
+    exit reason WEEKLY_FLATTEN, placed right after FORCE_CLOSE and ahead of
+    profit exits; it acts even if ACT_EXPIRY_DAY_ONLY is ever turned on.
+    Unmeasured: closing a weekly daily gives up the overnight move either way
+    and pays the bid-ask every day.
+  - Desk: "Trade type" dropdown on /desk/settings (All / 0DTE / 3-day /
+    7-day); a type shows its own group first, then the shared weekly group
+    its blanks fall back to.
+tests/test_review_replay.py drives a 7-day spread through review(): holds at
+11:00 ET, WEEKLY_FLATTEN at an 11:30 flatten time, untouched with it off.

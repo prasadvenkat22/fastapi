@@ -56,9 +56,14 @@ def harness(tmp_path, monkeypatch):
     monkeypatch.setattr(orphans, "_atr_for", lambda *_a, **_k: None)
     monkeypatch.setattr(tradier_orders, "working_leg_symbols", lambda *_a, **_k: set())
 
-    def quotes(syms):   # long leg 20c wide around (value + 6.00), short 20c wide around 6.00
-        return {L: {"bid": m["value"] + 5.90, "ask": m["value"] + 6.30},
-                S: {"bid": 5.90, "ask": 6.10}}
+    def quotes(syms):   # long leg (740) around value + 6.00, short leg (735) around 6.00, any expiry
+        out = {}
+        for sym in syms:
+            if sym.endswith("P00740000"):
+                out[sym] = {"bid": m["value"] + 5.90, "ask": m["value"] + 6.30}
+            elif sym.endswith("P00735000"):
+                out[sym] = {"bid": 5.90, "ask": 6.10}
+        return out
     monkeypatch.setattr(tradier_orders, "quotes", quotes)
 
     def close(kind):
@@ -98,3 +103,46 @@ def test_default_settings_cycle_runs_clean(harness, caplog, monkeypatch):
     monkeypatch.setattr(orphans, "PROFIT_EXIT_AT_MID", False)
     for i, v in enumerate((3.56, 3.70, 3.40, 3.60)):
         _cycle(harness, caplog, i, v)
+
+
+# --- Section 243: 3-day / 7-day spreads ------------------------------------
+
+WEEKLY = dict(ST, expiry="261002", long=f"QQQ261002P00740000", short=f"QQQ261002P00735000",
+              key="QQQ261002P00735000|QQQ261002P00740000")
+
+
+def test_weekly_type_is_fixed_at_purchase():
+    from datetime import date
+    assert orphans.weekly_type(dict(WEEKLY, opened="2026-09-25T14:00:00Z"), today=date(2026, 9, 29)) == "w7"
+    assert orphans.weekly_type(dict(WEEKLY, opened="2026-09-28T14:00:00Z"), today=date(2026, 9, 29)) == "w3"
+    assert orphans.weekly_type(dict(ST), today=date(2026, 9, 24)) is None      # same day
+
+
+def test_type_settings_fall_back_until_set(monkeypatch):
+    st = dict(WEEKLY, opened="2026-09-24T14:00:00Z")          # 8 days -> w7
+    monkeypatch.delenv("TRADING_W7_STOP_PCT", raising=False)
+    assert orphans.type_setting(st, "STOP_PCT", -20.0) == -20.0
+    monkeypatch.setenv("TRADING_W7_STOP_PCT", "-12")
+    assert orphans.type_setting(st, "STOP_PCT", -20.0) == -12.0
+    assert orphans.later_params(st)["stop_pct"] == -12.0
+    assert orphans.later_params(st)["type"] == "w7"
+
+
+def test_weekly_flatten_closes_at_its_time(harness, caplog, monkeypatch):
+    monkeypatch.setattr(orphans, "open_structures",
+                        lambda *_a, **_k: [dict(WEEKLY, opened="2026-09-24T14:00:00Z")])
+    monkeypatch.setenv("TRADING_W7_FLATTEN", "true")
+    monkeypatch.setenv("TRADING_W7_FLATTEN_AT", "11:30")
+    _cycle(harness, caplog, 0, 3.60)                          # 11:00 ET: holds
+    assert harness["closes"] == []
+    _cycle(harness, caplog, 31, 3.60)                         # 11:31 ET: flattens
+    assert harness["closes"] and harness["closes"][0][1] == "WEEKLY_FLATTEN"
+    assert harness["books"] == ["WEEKLY_FLATTEN"]
+
+
+def test_weekly_flatten_off_by_default(harness, caplog, monkeypatch):
+    monkeypatch.setattr(orphans, "open_structures",
+                        lambda *_a, **_k: [dict(WEEKLY, opened="2026-09-24T14:00:00Z")])
+    monkeypatch.delenv("TRADING_W7_FLATTEN", raising=False)
+    _cycle(harness, caplog, 60, 3.60)                         # 12:00 ET
+    assert harness["closes"] == []

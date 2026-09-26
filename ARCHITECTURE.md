@@ -1705,7 +1705,15 @@ and the **5-minute pullback trigger** on the single-stock 0DTE book (a call
 needs price below the 20-SMA midline, a put above); and **macro-BAD puts
 only** on both rotation books, reading the engine's verdict from
 `trading_logs`. The QQQ engine already takes only bearish entries on BAD and
-does not get the 5-minute trigger, which contradicts its own trend setups. Same
+does not get the 5-minute trigger, which contradicts its own trend setups.
+
+**3-day and 7-day spreads** (section 243). A weekly is a 7-day spread if it was
+bought 5+ calendar days before expiry, otherwise a 3-day spread, fixed for its
+life. Each type has its own settings group (`TRADING_W3_*`, `TRADING_W7_*`:
+stop, confirmation, return target, width target, stall arm and window) whose
+blanks fall back to the shared weekly ladder, plus an optional **end-of-day
+flatten** (`_FLATTEN`, `_FLATTEN_AT`, exit reason `WEEKLY_FLATTEN`). On expiry
+day both use the 0DTE ladder. `/desk/settings` has a "Trade type" dropdown. Same
 gate chain in the same order (macro veto, news veto, tape veto until 10:30,
 options-flow line, EV/Pwin/edge ranking, rotation cooldown, quote-width
 ceiling, per-slot budget, already-held check on **any** expiry). Four things

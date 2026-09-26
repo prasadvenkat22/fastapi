@@ -1091,6 +1091,65 @@ def _sessions_to_expiry(st: dict, today=None) -> int:
         return ORPHAN_LATER_SCALE_DAYS
 
 
+# 3-DAY AND 7-DAY SPREADS, EACH WITH ITS OWN SETTINGS. Section 243.
+#
+# Operator, 2026-09-26: settings by trade type -- 0DTE, 3-day, 7-day -- and an
+# end-of-day flatten for the weeklies too, "since the next day's open can be
+# totally unpredictable". A weekly's TYPE is fixed by its length AT PURCHASE:
+# bought WEEKLY_LONG_MIN_DAYS (5) or more calendar days before expiry is a
+# 7-day spread for its whole life, 2-4 days is a 3-day spread. On expiry day
+# either one is a same-day position and uses the 0DTE ladder and flatten.
+#
+# Each TRADING_W3_* / TRADING_W7_* setting is BLANK by default and then falls
+# back to the shared weekly (LATER) value, so nothing changes until one is set.
+# A per-type stop or stall value applies flat (no sessions-left scaling).
+WEEKLY_LONG_MIN_DAYS = int(os.getenv("TRADING_WEEKLY_LONG_MIN_DAYS", "5") or 5)
+
+
+def weekly_type(st: dict, today=None) -> "str | None":
+    """'w3' or 'w7' for a spread not expiring today, by its length at purchase; None if same-day."""
+    try:
+        from zoneinfo import ZoneInfo
+        ny = ZoneInfo("America/New_York")
+        exp = datetime.strptime(str(st.get("expiry")), "%y%m%d").date()
+        d = today or datetime.now(ny).date()
+        if exp <= d:
+            return None
+        opened = st.get("opened")
+        if opened:
+            bought = datetime.fromisoformat(str(opened).replace("Z", "+00:00")).astimezone(ny).date()
+        else:
+            bought = d          # unknown purchase date (inferred pairing): judge by what is left
+        return "w7" if (exp - bought).days >= WEEKLY_LONG_MIN_DAYS else "w3"
+    except Exception:
+        return None
+
+
+def type_setting(st: dict, suffix: str, default):
+    """TRADING_W3_<suffix> / TRADING_W7_<suffix> for this spread, else `default`."""
+    t = weekly_type(st)
+    if not t:
+        return default
+    raw = os.getenv(f"TRADING_{t.upper()}_{suffix}", "").strip()
+    if raw == "":
+        return default
+    if isinstance(default, bool):
+        return raw.lower() == "true"
+    if isinstance(default, str):
+        return raw
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _weekly_flatten_due(st: dict) -> bool:
+    """Is this 3-day / 7-day spread's end-of-day flatten switched on and due?"""
+    if not type_setting(st, "FLATTEN", False):
+        return False
+    return _past_clock(type_setting(st, "FLATTEN_AT", "15:45"))
+
+
 def later_params(st: dict, today=None) -> dict:
     """The LATER ladder's numbers for THIS structure, scaled by sessions left."""
     full = {"stop_pct": ORPHAN_LATER_STOP_PCT, "stop_minutes": ORPHAN_LATER_STOP_MINUTES,
@@ -1098,7 +1157,7 @@ def later_params(st: dict, today=None) -> dict:
             "giveback_atr": ORPHAN_LATER_STALL_GIVEBACK_ATR}
     dte = _sessions_to_expiry(st, today)
     if not ORPHAN_LATER_SCALE or ORPHAN_LATER_STOP_PCT >= 0:
-        return dict(full, dte=dte, f=1.0)
+        return _typed(st, dict(full, dte=dte, f=1.0))
     f = min(1.0, max(0.0, (dte - 1) / float(ORPHAN_LATER_SCALE_DAYS - 1)))
     one = {"stop_pct": ORPHAN_LATER_STOP_PCT_1D, "stop_minutes": ORPHAN_LATER_STOP_MINUTES_1D,
            "stall_arm": ORPHAN_LATER_STALL_ARM_1D, "stall_minutes": ORPHAN_LATER_STALL_MINUTES_1D,
@@ -1108,7 +1167,16 @@ def later_params(st: dict, today=None) -> dict:
     if ORPHAN_LATER_STALL_GIVEBACK_ATR <= 0:
         out["giveback_atr"] = 0.0
     out.update(dte=dte, f=round(f, 3))
-    return out
+    return _typed(st, out)
+
+
+def _typed(st: dict, lp: dict) -> dict:
+    """Section 243: a 3-day / 7-day spread's own stop and stall values, where set."""
+    for key, suffix in (("stop_pct", "STOP_PCT"), ("stop_minutes", "STOP_MINUTES"),
+                        ("stall_arm", "STALL_ARM"), ("stall_minutes", "STALL_MINUTES")):
+        lp[key] = type_setting(st, suffix, lp[key])
+    lp["type"] = weekly_type(st)
+    return lp
 ORPHAN_SLOW_STOP_MINUTES = float(
     os.getenv("TRADING_ORPHAN_SLOW_STOP_MINUTES", "30") or 30)
 
@@ -3193,7 +3261,9 @@ def review(engine_symbols: "set | None" = None) -> list:
             # scoped to positions that are NOT expiring today, so it cannot
             # interfere with the 0DTE ladder.
             later_target_hit = False
-            if (ORPHAN_LATER_TARGET_PCT > 0 and not expires_today):
+            _ltp = type_setting(st, "TARGET_WIDTH", ORPHAN_LATER_TARGET_PCT)   # section 243
+            _trp = type_setting(st, "TARGET_RETURN_PCT", ORPHAN_TARGET_RETURN_PCT)
+            if (_ltp > 0 and not expires_today):
                 width = abs(st["short_strike"] - st["long_strike"])
                 if width > 0:
                     # See LATER_TARGET_ON_INTRINSIC. Falls back to the mark
@@ -3204,9 +3274,9 @@ def review(engine_symbols: "set | None" = None) -> list:
                     # For a credit structure the profit is the cost to close
                     # FALLING, so the target is the mirror of the debit case.
                     later_target_hit = (
-                        basis <= width * (1.0 - ORPHAN_LATER_TARGET_PCT)
+                        basis <= width * (1.0 - _ltp)
                         if st["credit"] else
-                        basis >= width * ORPHAN_LATER_TARGET_PCT)
+                        basis >= width * _ltp)
 
             # HOW MUCH INTRINSIC CLOSING RIGHT NOW WOULD THROW AWAY.
             # See ORPHAN_MAX_DRAG_WIDTH.
@@ -3361,8 +3431,12 @@ def review(engine_symbols: "set | None" = None) -> list:
             elif zero_dte and _past_force_close():
                 # Time beats everything. These settle in shares, not cash.
                 reason = "FORCE_CLOSE"
-            elif (ORPHAN_TARGET_RETURN_PCT > 0
-                  and ret_pct >= ORPHAN_TARGET_RETURN_PCT
+            elif (not zero_dte) and _weekly_flatten_due(st):
+                # Section 243: the operator's end-of-day close for a 3-day or
+                # 7-day spread, rather than holding it into the next open.
+                reason = "WEEKLY_FLATTEN"
+            elif (_trp > 0
+                  and ret_pct >= _trp
                   and not drag_blocks and past_hold):
                 # Return on cost, not a fraction of max profit. See the knob.
                 #
@@ -3464,6 +3538,7 @@ def review(engine_symbols: "set | None" = None) -> list:
             manageable = (MANAGE_ORPHANS
                           and not in_flight
                           and (floor_breached or expires_today or later_target_hit
+                               or reason == "WEEKLY_FLATTEN"
                                or not ORPHAN_ACT_EXPIRY_DAY_ONLY)
                           and (not st.get("inferred") or MANAGE_INFERRED)
                           and (not MANAGE_UNDERLYING or st["root"] in MANAGE_UNDERLYING)

@@ -69,6 +69,8 @@ class Setting:
 G_ENGINE = "QQQ engine exits (the engine's own trades)"
 G_0DTE = "0DTE exits"
 G_WEEKLY = "Weekly exits (later expiry)"
+G_W3 = "3-day spreads (bought 2-4 days before expiry)"
+G_W7 = "7-day spreads (bought 5+ days before expiry)"
 G_ACCOUNT = "Account"
 G_ENTRY = "Entries & budgets"
 G_BUCKETS = "Trade buckets (new entries on/off)"
@@ -286,6 +288,47 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_ORPHAN_LATER_HOLD_UNTIL", "No loss-taking before", G_WEEKLY, "time", "",
             "Weekly opening quiet period (ET). Blank = same as the 0DTE setting.",
             allow_blank=True),
+
+    # --- Section 243: 3-day and 7-day spreads, each with its own settings ------
+    Setting("TRADING_WEEKLY_LONG_MIN_DAYS", "7-day means bought this many days out", G_W7, "int", "5",
+            "A weekly bought at least this many calendar days before expiry uses the 7-day settings for "
+            "its whole life; fewer uses the 3-day settings. Expiry day always uses the 0DTE settings.", "days", 3, 10),
+    Setting("TRADING_W3_STOP_PCT", "Stop loss", G_W3, "float", "",
+            "3-day spread: stop on return. Blank = the shared weekly stop (scaled by days left).", "%", -100, 0, allow_blank=True),
+    Setting("TRADING_W3_STOP_MINUTES", "Stop confirmation", G_W3, "float", "",
+            "Minutes the stop level must hold. Blank = shared weekly value.", "min", 0, 240, allow_blank=True),
+    Setting("TRADING_W3_TARGET_RETURN_PCT", "Profit booking (return on cost)", G_W3, "float", "",
+            "Sell at this return on cost. Blank = the 0DTE group's profit target, which also applies to weeklies.",
+            "%", 0, 500, allow_blank=True),
+    Setting("TRADING_W3_TARGET_WIDTH", "Max profit close (share of width)", G_W3, "float", "",
+            "Sell once the spread is worth this share of its width. Blank = shared weekly target.",
+            "x width", 0, 1, allow_blank=True),
+    Setting("TRADING_W3_STALL_ARM", "Stall starts watching at", G_W3, "float", "",
+            "The weekly stall watches once the gain reaches this. Blank = shared weekly value.", "%", 0, 500, allow_blank=True),
+    Setting("TRADING_W3_STALL_MINUTES", "Stall window", G_W3, "float", "",
+            "Minutes without a new peak before the stall fires. Blank = shared weekly value.", "min", 0, 480, allow_blank=True),
+    Setting("TRADING_W3_FLATTEN", "Flatten at end of day", G_W3, "bool", "false",
+            "Close 3-day spreads every day at the flatten time instead of holding them overnight."),
+    Setting("TRADING_W3_FLATTEN_AT", "Flatten time", G_W3, "time", "15:45",
+            "When the end-of-day flatten closes them (ET)."),
+    Setting("TRADING_W7_STOP_PCT", "Stop loss", G_W7, "float", "",
+            "7-day spread: stop on return. Blank = the shared weekly stop (scaled by days left).", "%", -100, 0, allow_blank=True),
+    Setting("TRADING_W7_STOP_MINUTES", "Stop confirmation", G_W7, "float", "",
+            "Minutes the stop level must hold. Blank = shared weekly value.", "min", 0, 240, allow_blank=True),
+    Setting("TRADING_W7_TARGET_RETURN_PCT", "Profit booking (return on cost)", G_W7, "float", "",
+            "Sell at this return on cost. Blank = the 0DTE group's profit target, which also applies to weeklies.",
+            "%", 0, 500, allow_blank=True),
+    Setting("TRADING_W7_TARGET_WIDTH", "Max profit close (share of width)", G_W7, "float", "",
+            "Sell once the spread is worth this share of its width. Blank = shared weekly target.",
+            "x width", 0, 1, allow_blank=True),
+    Setting("TRADING_W7_STALL_ARM", "Stall starts watching at", G_W7, "float", "",
+            "The weekly stall watches once the gain reaches this. Blank = shared weekly value.", "%", 0, 500, allow_blank=True),
+    Setting("TRADING_W7_STALL_MINUTES", "Stall window", G_W7, "float", "",
+            "Minutes without a new peak before the stall fires. Blank = shared weekly value.", "min", 0, 480, allow_blank=True),
+    Setting("TRADING_W7_FLATTEN", "Flatten at end of day", G_W7, "bool", "false",
+            "Close 7-day spreads every day at the flatten time instead of holding them overnight."),
+    Setting("TRADING_W7_FLATTEN_AT", "Flatten time", G_W7, "time", "15:45",
+            "When the end-of-day flatten closes them (ET)."),
 
     # --- Account --------------------------------------------------------------
     Setting("TRADING_ACCOUNT_FLOOR", "Account floor", G_ACCOUNT, "float", "0",

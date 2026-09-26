@@ -57,6 +57,7 @@ that, and nothing here should duplicate it.
 from __future__ import annotations
 
 import argparse
+import re
 import logging
 import os
 import sys
@@ -1037,7 +1038,10 @@ def main() -> None:
         for r in res.get("rows", []):
             why = _passes(r)
             if why:
-                rejects[why.split(",")[0].split(" -- ")[0]] += 1
+                # Grouped by REASON, numbers stripped: "entry 1% of width" and
+                # "entry 2% of width" are one filter, and counting them apart
+                # let a single binding filter fill the top-8 summary (246).
+                rejects[re.sub(r"[-+]?\d+(\.\d+)?%?", "#", why.split(",")[0].split(" -- ")[0])] += 1
                 continue
             # A NEGATIVE EDGE IS NOT A TRADE. Ranking by EV alone happily
             # returned META at Pwin 50.1% against a 54.3% break-even -- the

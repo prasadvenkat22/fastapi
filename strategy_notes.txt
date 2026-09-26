@@ -14346,3 +14346,24 @@ Also exposed in the UI: TRADING_PICK_MAX_EXTRINSIC, _MAX_SHORT_ATR,
 _MAX_TARGET_ATR, TRADING_WEEKLY_MIN/MAX_ENTRY_WIDTH. The band replaces what the
 25% extrinsic cap was doing (keeping the long leg in the money), and a slightly
 OTM long leg is all time value, so the cap must be lifted for MU-type entries.
+
+Addendum to 246 (09-26): values set at the operator's direction --
+  0DTE stocks: long strike -0.25..+1.0 ATR (in the money; ~$11 out on MU),
+    max time value 100% (the band now keeps it in the money), short strike
+    <= 0.8 ATR out (wider spreads), entry 15-85% of width, short leg must pay
+    >= 20% of the long (was 10).
+  3-day: long strike -0.15..+0.25 ATR; 7-day: -0.25..+0.25 ATR.
+Two rotation defects found by dry-running MU/NVDA/TSLA on Monday's chain
+(Friday quotes, weekend):
+  1. rank(..., top=60) sorted by EV: MU's top rows were 105-wide spreads at 8%
+     of width (1095/1200), so no normal-width spread ever reached _passes.
+     Now top=TRADING_DTE0_RANK_TOP (500): every candidate is filtered.
+  2. The rejection summary counted exact messages with their numbers, so one
+     filter ("entry 1% of width", "entry 2% ...") filled the top-8 list. Now
+     grouped by reason.
+With both fixed the binding filters read (target limit 0.60 for that run):
+entry < 15% 447, short leg pays < 20% 336, long > 1 ATR ITM 77, long > 0.25
+ATR OTM 24, stale quote 41, negative edge 29, budget 6, short > 0.8 ATR 4 --
+nothing cleared on weekend quotes. TRADING_PICK_MAX_TARGET_ATR stays 0.30 live:
+at 0.30 the target filter was the first one binding (78+ rejections).
+Monday's 09:00-13:30 ET runs on live 0DTE quotes are the real test.

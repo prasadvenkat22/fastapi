@@ -14198,3 +14198,12 @@ Left for the operator: TRADING_REENTRY_COOLDOWN_MINUTES (after a LOSS, 90
 live). Measured against removing it: no cooldown +51.17/day, 30 min +58.13,
 90 min +60.15 over 60 sessions, and no cooldown widens the worst day.
 Offered: the single-stock 0DTE rotation cron from every 15 to every 5 minutes.
+
+Addendum to 242: the P&L reset ran 09-26 ~15:16 UTC. trading_history_archive_20260926
+holds all 223 rows (-78,337.70, 08-19..09-25); trading_history is empty. The
+paste's final display SELECT was split in transit and errored after COMMIT --
+the archive and delete had already committed. Engine equity now 130.00, daily
+loss limit 7.80 (6% of the budget): at a $130 budget a QQQ window's one
+contract (~$54 at risk on a 3-wide) still sizes to 0. Every script that reads
+trading_history (sweeps, exit_backtest, the rotation's exits-today) starts from
+the empty table; history before 09-26 is in the archive.

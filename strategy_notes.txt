@@ -14300,3 +14300,13 @@ log) -- kept by section 244's writer but no longer in the registry, they made
 every process print "not a tunable setting -- ignored". App restarted 17:24
 UTC, after the 16:35 pull: the UI shows the 3-day / 7-day switches and budgets
 and the API runs the section-244 writer.
+
+Desk, 2026-09-26 (desk 6811088): Sign out was unreachable on phones and on
+most laptop/tablet widths. Measured in headless Chromium (scratch/pw/nav*.js):
+on a 390x700 phone the buttons rendered at y~1,450 inside a fixed menu that
+could not scroll; at 900-1366 px they sat past the right edge because links,
+site session and desk session shared one row; only ~1920 px showed them. Now
+the session actions are one account menu at the right of the bar, the links
+row appears from 1536 px (menu button below that), and the phone menu scrolls
+with sign-in/sign-out first. Verified on-screen at 360, 390, 900, 1280, 1366,
+1536 and 1920 px.

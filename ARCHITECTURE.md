@@ -1714,7 +1714,18 @@ life. Each type has its own settings group (`TRADING_W3_*`, `TRADING_W7_*`:
 stop, confirmation, return target, width target, stall arm and window) whose
 blanks fall back to the shared weekly ladder, plus an optional **end-of-day
 flatten** (`_FLATTEN`, `_FLATTEN_AT`, exit reason `WEEKLY_FLATTEN`). On expiry
-day both use the 0DTE ladder. `/desk/settings` has a "Trade type" dropdown. Same
+day both use the 0DTE ladder. `/desk/settings` has a "Trade type" dropdown.
+
+**Where the long strike sits** (section 246). The rotation places the long leg
+against the stock's daily ATR (positive = in the money, mirrored for puts):
+`TRADING_PICK_LONG_MIN_ATR` / `_MAX_ATR` for 0DTE stocks (live -0.25..+1.0:
+in the money, a little out on an expensive name), `TRADING_W3_` / `TRADING_W7_`
+`LONG_MIN_ATR` / `_MAX_ATR` for weeklies (live near the money). Blank = no
+limit. The 0DTE time-value cap, short-strike and target ATR limits and the
+weekly entry band are UI settings too. The screener's candidates are all
+filtered (`TRADING_DTE0_RANK_TOP`, 500): a top-60 cut by EV kept only 100+-wide
+spreads and starved the filters. The "nothing cleared" summary groups
+rejections by reason. Same
 gate chain in the same order (macro veto, news veto, tape veto until 10:30,
 options-flow line, EV/Pwin/edge ranking, rotation cooldown, quote-width
 ceiling, per-slot budget, already-held check on **any** expiry). Four things

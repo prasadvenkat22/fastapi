@@ -14116,3 +14116,57 @@ Source: the price_alert.py cron line (every 5 min, 09:00-17:55 ET) with rules
 fires on every wiggle around it. The whole job is commented out in the
 crontab (all its rules were SNDK/CRWV levels), not deleted; uncomment to
 restore.
+
+
+241. WEEK-RANGE GUARD, MIDLINE PULLBACK TRIGGERS, MACRO-BAD PUTS ONLY  (2026-09-26)
+
+Operator: for all three buckets, macro BAD -> put spreads; never buy a call
+spread at the week high or a put spread at the week low; plus an outside note's
+multi-timeframe triggers (0DTE: daily boundary + 5-min pullback below the
+Bollinger midline; weekly: weekly boundary + hourly close below the 20-SMA).
+"Logically makes sense, so implement it." Measured first
+(scratch/bp/weekrange.py, out_weekrange.txt; macro from out_macro.txt):
+
+  11 tradeable names (QQQ + 10 stocks), 52 sessions 07-07..09-17, 3,432 hourly
+  decision points, direction only, no premiums:
+                                   same day up   4 days later up   4-day median
+    at the week high (top 10%)          42%            34%            -1.99%
+    mid-range (10-90%)                  44%            53%            +0.34%
+    at the week low (bottom 10%)        54%            62%            +1.60%
+  Both halves agree (week high 4-day up 38% / 28%; low 68% / 56%).
+    hourly close below its 20-SMA       45%            60%
+    hourly close above                  45%            42%
+    5-min price below its 20-SMA        47%            52%
+    5-min price above                   43%            51%
+  Macro (claim 5, 49 sessions): the engine's BAD triggers fired on 3-4
+  sessions with rest-of-day QQQ -0.03% / +0.06% / +0.44%; stored "negative"
+  verdicts +0.07%, up 58%. No directional signal.
+  Instrument note: the first run averaged ^VIX1D/^VIX/^TNX/CL=F in with the
+  stocks (VIX1D day moves to +101%) and read +1.23% mean 0DTE with 49% up --
+  the tell. Excluded; the table is the corrected run.
+
+Verdict: week-range guard SUPPORTED (strongest on a multi-day hold); hourly
+pullback trigger SUPPORTED on direction; 5-min trigger WEAK; macro BAD -> puts
+NOT SUPPORTED. All implemented at the operator's direction, each a switch in
+the new "Entry structure gates (all buckets)" group, all ON from 09-26:
+
+  TRADING_WEEKRANGE_GUARD (+ _CALL_MAX 0.90 / _PUT_MIN 0.10): QQQ engine and
+    both rotation books. Bullish refused at >= 90% of the 5-session range,
+    bearish at <= 10%.
+  TRADING_PULLBACK_GATE_WEEKLY: weekly book; a call needs the last hourly
+    close BELOW its 20-SMA, a put ABOVE (the note's rule, mirrored for puts).
+  TRADING_PULLBACK_GATE_0DTE: single-stock 0DTE; same on the 5-min 20-SMA.
+    NOT applied to the QQQ engine: its bullish setups require price ABOVE its
+    average, so this rule would have blocked every bullish engine entry.
+  TRADING_MACRO_BAD_PUTS_ONLY: the rotation refuses bullish spreads while the
+    engine's own verdict (trading_logs.market_sentiment, <10 min old) is BAD.
+    The engine already did this: bullish setups require GOOD, bearish only
+    "not halted".
+
+trading_engine/structure_gates.py builds the context from Tradier 15-min bars
+(last 5 sessions: range, hourly closes) and 5-min bars (seeded from prior
+sessions so the midline exists at the open), cached 60 s, and FAILS CLOSED.
+Exercised on the droplet as a weekly dry run (09-26, Oct 2 expiry, gates on,
+wider budget and Pwin for that process only): NVDA 45% of range, calls refused
+"hourly above the midline"; AMD 85%; TSLA 23%, puts refused "hourly below".
+The existing edge / Pwin / EV / R:R filters run first and are unchanged.

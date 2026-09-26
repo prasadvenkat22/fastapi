@@ -1695,7 +1695,17 @@ budgets (`TRADING_DTE0_MAX_BUDGET`, `TRADING_WEEKLY_MAX_BUDGET`) are caps on the
 whole bucket: each run spends at most budget minus what that book already has
 open, and never more than buying power. The QQQ engine's sizing ends with the same limit
 (section 239, `nodes.cap_to_buying_power`): it buys at most what buying power
-pays for, and skips the entry if that is zero. Same
+pays for, and skips the entry if that is zero.
+
+**Entry structure gates** (section 241, `trading_engine/structure_gates.py`,
+"Entry structure gates" in `/desk/settings`, all fail closed): a **week-range
+guard** on all three buckets (no bullish entry at >= 90% of the 5-session range,
+no bearish one at <= 10%); the **hourly pullback trigger** on the weekly book
+and the **5-minute pullback trigger** on the single-stock 0DTE book (a call
+needs price below the 20-SMA midline, a put above); and **macro-BAD puts
+only** on both rotation books, reading the engine's verdict from
+`trading_logs`. The QQQ engine already takes only bearish entries on BAD and
+does not get the 5-minute trigger, which contradicts its own trend setups. Same
 gate chain in the same order (macro veto, news veto, tape veto until 10:30,
 options-flow line, EV/Pwin/edge ranking, rotation cooldown, quote-width
 ceiling, per-slot budget, already-held check on **any** expiry). Four things

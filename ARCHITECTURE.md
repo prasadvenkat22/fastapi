@@ -1206,7 +1206,7 @@ anonymous visitors a sign-up prompt, and only a desk admin gets file uploads.
 
 Three entry switches, **off by default**, on `/desk/settings` (first group) or
 `tset`: `TRADING_BUCKET_QQQ_0DTE` (the engine's own QQQ entries; action
-`BUCKET_OFF`), `TRADING_BUCKET_STOCK_0DTE` and `TRADING_BUCKET_STOCK_WEEKLY`
+`BUCKET_OFF`), `TRADING_BUCKET_STOCK_0DTE`, and `TRADING_BUCKET_STOCK_W3` / `_W7` (section 245; one weekly switch before)
 (`dte0_trade.py`, which then runs as a dry run). Off stops NEW entries only;
 open positions keep their exits. `TRADING_DTE0_LIVE` / `TRADING_LIVE_ORDERS`
 still exist beneath them as the account-level live switches.
@@ -1496,7 +1496,7 @@ TRADING_OPTFLOW_CP_RATIO=2.0  TRADING_OPTFLOW_TURNOVER=0.5  TRADING_OPTFLOW_MIN_
 TRADING_INDEX_EVENT_LIVE=false      "would place" until true (§197)
 TRADING_INDEX_EVENT_BUDGET=1000  TRADING_INDEX_EVENT_MIN_PWIN=0.40  TRADING_INDEX_EVENT_MIN_DAYS=1
 TRADING_DTE0_MAX_BUDGET=130         THE single-stock 0DTE bucket budget (UI setting; cap on the whole bucket, §238; 130 since 09-25 to match the account)
-TRADING_WEEKLY_MAX_BUDGET=130       THE weekly bucket budget, same rules; the cron's --budget is ignored (§227)
+TRADING_W3_MAX_BUDGET / TRADING_W7_MAX_BUDGET   the 3-day and 7-day bucket budgets (§245); blank = TRADING_WEEKLY_MAX_BUDGET, the old shared one
 TRADING_POSITION_BUDGET=130         the QQQ engine's budget; its sizing also stops at buying power (§239)
 TRADING_WEEKLY_MIN_ENTRY_WIDTH=0.20 TRADING_WEEKLY_MIN_PWIN=0.45 TRADING_WEEKLY_RR_MIN=1.0 TRADING_WEEKLY_RR_MAX=3.0
 TRADING_MAX_ORDER_CONTRACTS=10      raised from 5 on 2026-09-19 after 5+5 fills on the QQQ close; one order covers the 9-lot MU exit and its ask
@@ -1682,7 +1682,8 @@ contracts; `bearish` mirrors; else `neutral`. `TRADING_DTE0_OPTIONS_FLOW` is
 second schedule (section 237) buys the **7-day** weekly: the same command with
 `--expiry +5`, **09:50 and 13:50 ET, Thursday and Friday**, which resolves to
 next Friday (8 days on Thursday, 7 on Friday). Both schedules share the
-`TRADING_BUCKET_STOCK_WEEKLY` switch and `TRADING_WEEKLY_MAX_BUDGET`, and the
+weekly book but are two buckets (section 245): 3-day (`TRADING_BUCKET_STOCK_W3`,
+`TRADING_W3_MAX_BUDGET`) and 7-day (`_W7`), by the expiry a run buys; and the
 weekly book has its own entry cutoff, `TRADING_WEEKLY_ROTATE_CUTOFF` (15:30 ET)
 -- before section 237 it used the 0DTE cutoff and the 13:50 run never entered. `/desk/settings`
 shows both schedules and the 0DTE rotation read-only as "Entry schedule"
@@ -1691,7 +1692,7 @@ shows both schedules and the 0DTE rotation read-only as "Entry schedule"
 **Money checks** (section 238). Every opening order is checked against the
 account's option buying power in `tradier_orders.submit_vertical` and refused
 before sending if it does not fit (closes are never checked). The rotation's
-budgets (`TRADING_DTE0_MAX_BUDGET`, `TRADING_WEEKLY_MAX_BUDGET`) are caps on the
+budgets (`TRADING_DTE0_MAX_BUDGET`, `TRADING_W3_MAX_BUDGET`, `TRADING_W7_MAX_BUDGET`) are caps on the
 whole bucket: each run spends at most budget minus what that book already has
 open, and never more than buying power. The QQQ engine's sizing ends with the same limit
 (section 239, `nodes.cap_to_buying_power`): it buys at most what buying power
@@ -1718,12 +1719,12 @@ gate chain in the same order (macro veto, news veto, tape veto until 10:30,
 options-flow line, EV/Pwin/edge ranking, rotation cooldown, quote-width
 ceiling, per-slot budget, already-held check on **any** expiry). Four things
 differ and nothing else: the expiry resolves to this Friday from Monday to
-Wednesday and next Friday after; the ceiling is `TRADING_WEEKLY_MAX_BUDGET`;
+Wednesday and next Friday after; the ceiling is the 3-day or 7-day budget;
 the structure band is the plan's, not the day's — entry 20–75% of width, R:R
 1..3 ranked by edge, **Pwin ≥ 0.45**, with the 0DTE extrinsic and ATR-distance
 limits switched off because a five-day spread is mostly time value and a daily
 ATR is the wrong ruler; and the positions land in the LATER ladder. Budgets are
-the `TRADING_DTE0_MAX_BUDGET` / `TRADING_WEEKLY_MAX_BUDGET` settings (in
+the `TRADING_DTE0_MAX_BUDGET` / `TRADING_W3_MAX_BUDGET` / `TRADING_W7_MAX_BUDGET` settings (in
 `/desk/settings`, section 227; the cron's `--budget` is ignored), each a cap on
 its whole bucket and never above buying power (section 238).
 

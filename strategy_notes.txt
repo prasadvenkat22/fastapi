@@ -14273,3 +14273,22 @@ case was an out-of-range value. A stop typed as "10" (meaning a 10% stop) is
 the likely one: stops are negative, so "10" failed "max 0". Desk ee4deaf reads a
 positive number on a stop field (range ending at 0) as that loss, "10" -> -10,
 and the confirm dialog shows the value sent.
+
+
+245. THE WEEKLY BOOK IS TWO BUCKETS: 3-DAY AND 7-DAY  (2026-09-26)
+
+Operator: the Trade buckets group showed QQQ 0DTE and single-stock 0DTE, but
+only one "Single-stock weekly" switch and budget for both weekly horizons.
+Now two buckets, each with its own switch and budget:
+  TRADING_BUCKET_STOCK_W3 + TRADING_W3_MAX_BUDGET   runs buying 2-4 days out
+  TRADING_BUCKET_STOCK_W7 + TRADING_W7_MAX_BUDGET   runs buying 5+ days out
+A weekly RUN's type is the expiry it resolves to (dte0_trade._weekly_type_for:
+TRADING_WEEKLY_LONG_MIN_DAYS=5 or more calendar days out is 7-day) -- in
+practice the Mon-Wed "--expiry friday" line is 3-day and the Thu-Fri "+5" line
+is 7-day. Each budget caps only its own type's open spreads
+(_bucket_exposure filters on orphans.weekly_type, the purchase-length rule the
+exit settings use), never above buying power. Budgets left blank fall back to
+TRADING_WEEKLY_MAX_BUDGET. The Entry schedule panel labels the lines
+"Single-stock 3-day" / "7-day". TRADING_BUCKET_STOCK_WEEKLY and
+TRADING_WEEKLY_MAX_BUDGET leave the UI; at deploy both new switches and
+budgets were set to the old weekly values so nothing changed.

@@ -582,7 +582,23 @@ def _exits_today(symbols: set, now: datetime) -> dict:
     return out
 
 
-def _bucket_exposure(book: str, today: str) -> "float | None":
+def _weekly_type_for(exp_iso: str, today: "date | None" = None) -> str:
+    """'w7' if the expiry is WEEKLY_LONG_MIN_DAYS or more calendar days out, else 'w3'."""
+    days = (date.fromisoformat(exp_iso) - (today or datetime.now(NY).date())).days
+    long_min = int(os.getenv("TRADING_WEEKLY_LONG_MIN_DAYS", "5") or 5)
+    return "w7" if days >= long_min else "w3"
+
+
+def _weekly_budget(wtype: str) -> float:
+    """TRADING_W3_MAX_BUDGET / TRADING_W7_MAX_BUDGET, else the old shared weekly budget."""
+    raw = os.getenv(f"TRADING_{wtype.upper()}_MAX_BUDGET", "").strip()
+    try:
+        return float(raw) if raw else WEEKLY_MAX_BUDGET
+    except ValueError:
+        return WEEKLY_MAX_BUDGET
+
+
+def _bucket_exposure(book: str, today: str, wtype: "str | None" = None) -> "float | None":
     """Dollars already at risk in this book's open spreads; None if unreadable.
 
     Section 238. The budget used to be a per-RUN allowance, so every 15-minute
@@ -601,6 +617,8 @@ def _bucket_exposure(book: str, today: str) -> "float | None":
             same_day = st["expiry"] == today
             if (book == "weekly") == same_day:
                 continue
+            if wtype and orphans.weekly_type(st) != wtype:
+                continue            # section 245: the other weekly bucket's position
             width = abs(st["short_strike"] - st["long_strike"])
             e = abs(float(st["entry"]))
             per = (width - e) if st["credit"] else e
@@ -704,12 +722,17 @@ def main() -> None:
     # THE BUCKET BUDGET IS THE BUDGET (2026-09-24, section 227): set per bucket
     # on /desk/settings. --budget (the cron passes 5000) is ignored when it
     # differs, and said so, so raising the setting in the UI actually raises it.
-    budget = WEEKLY_MAX_BUDGET if args.book == "weekly" else MAX_BUDGET
-    if args.budget != budget:
-        logger.info("Budget $%.0f from the %s bucket setting (--budget %.0f ignored).",
-                    budget, args.book, args.budget)
     syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     exp = _resolve_expiry(args.expiry, args.book)
+    # SECTION 245: the weekly book is two buckets, 3-day and 7-day, each with
+    # its own switch and budget. A run is the type of the expiry it buys --
+    # WEEKLY_LONG_MIN_DAYS (5) or more calendar days out is 7-day -- the same
+    # rule orphans.weekly_type() applies to the positions it then manages.
+    wtype = _weekly_type_for(exp) if args.book == "weekly" else None
+    budget = (_weekly_budget(wtype) if wtype else MAX_BUDGET)
+    if args.budget != budget:
+        logger.info("Budget $%.0f from the %s bucket setting (--budget %.0f ignored).",
+                    budget, wtype or args.book, args.budget)
     if args.book == "weekly":
         global MIN_EW, MAX_EW, MAX_SHORT_ATR, MAX_EXTRINSIC, MAX_TARGET_ATR, BOOK
         BOOK = "weekly"
@@ -790,7 +813,7 @@ def main() -> None:
     # single-stock weekly can be turned off separately. Off = this run places
     # nothing (it still screens and logs, as a dry run); open positions are
     # managed by orphans.py either way.
-    bucket_key = ("TRADING_BUCKET_STOCK_WEEKLY" if args.book == "weekly"
+    bucket_key = (f"TRADING_BUCKET_STOCK_{wtype.upper()}" if wtype
                   else "TRADING_BUCKET_STOCK_0DTE")
     if os.getenv(bucket_key, "false").lower() != "true":
         if live:
@@ -805,7 +828,7 @@ def main() -> None:
     # SECTION 238: THE BUDGET IS A CAP ON THE BUCKET, AND NOTHING IS SENT
     # WITHOUT THE MONEY FOR IT. Available = budget minus what this book already
     # has open, and never more than the account's option buying power.
-    exposure = _bucket_exposure(args.book, now.strftime("%y%m%d"))
+    exposure = _bucket_exposure(args.book, now.strftime("%y%m%d"), wtype)
     bp = tradier_orders.buying_power() if live else None
     if exposure is None:
         if live:

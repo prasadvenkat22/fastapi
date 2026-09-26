@@ -34,3 +34,8 @@ def test_missing_snapshot_is_reported(tmp_path, monkeypatch):
     monkeypatch.setattr(schedule, "CRONTAB_SNAPSHOT", str(tmp_path / "nope"))
     out = schedule.snapshot()
     assert out["jobs"] == [] and "not installed" in out["note"]
+
+
+def test_weekly_lines_are_labelled_3_day_and_7_day():
+    jobs = schedule.parse(CRON, on=date(2026, 9, 25))
+    assert [j["label"] for j in jobs] == ["Single-stock 0DTE", "Single-stock 3-day", "Single-stock 7-day"]

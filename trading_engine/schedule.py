@@ -56,6 +56,16 @@ def _expiry_label(book: str, expiry: Optional[str]) -> str:
     return expiry
 
 
+def _label(book: str, expiry: Optional[str], on: date) -> str:
+    """Section 245: a weekly run is 3-day or 7-day by how far out its expiry rule reaches."""
+    if book != "weekly":
+        return "Single-stock 0DTE"
+    long_min = int(os.getenv("TRADING_WEEKLY_LONG_MIN_DAYS", "5") or 5)
+    if expiry and expiry.startswith("+"):
+        return "Single-stock 7-day" if int(expiry[1:]) >= long_min else "Single-stock 3-day"
+    return "Single-stock 3-day"          # "friday": this Friday, Mon-Wed
+
+
 def parse(crontab: str, on: Optional[date] = None) -> list[dict]:
     """The dte0_trade.py entry runs in a crontab, with run times in ET."""
     on = on or datetime.now(NY).date()
@@ -80,7 +90,7 @@ def parse(crontab: str, on: Optional[date] = None) -> list[dict]:
         symbols = _arg(argv, "--symbols")
         jobs.append({
             "book": book,
-            "label": ("Single-stock weekly" if book == "weekly" else "Single-stock 0DTE"),
+            "label": _label(book, _arg(argv, "--expiry"), on),
             "days": [_DAYS[d] for d in dows],
             "times_et": times,
             "every_minutes": (int(f[0].split("/", 1)[1]) if f[0].startswith("*/") else None),

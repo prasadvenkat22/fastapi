@@ -71,3 +71,37 @@ def test_bucket_exposure_counts_by_book(monkeypatch):
     monkeypatch.setattr(orphans, "open_structures", lambda *a, **k: rows)
     assert m._bucket_exposure("dte0", "260925") == 600.0     # MU same-day only; QQQ is the engine's
     assert m._bucket_exposure("weekly", "260925") == 400.0   # later expiries
+
+
+def test_weekly_run_type_and_budget(monkeypatch):
+    """Section 245: a weekly run is 3-day or 7-day by the expiry it buys."""
+    import importlib
+    import pytest
+    pytest.importorskip("yfinance")
+    import dte0_trade as m
+    m = importlib.reload(m)
+    assert m._weekly_type_for("2026-10-02", date(2026, 9, 28)) == "w3"     # Mon -> Fri, 4 days
+    assert m._weekly_type_for("2026-10-02", date(2026, 9, 25)) == "w7"     # Fri -> next Fri, 7
+    monkeypatch.setattr(m, "WEEKLY_MAX_BUDGET", 400.0)
+    monkeypatch.delenv("TRADING_W7_MAX_BUDGET", raising=False)
+    assert m._weekly_budget("w7") == 400.0
+    monkeypatch.setenv("TRADING_W7_MAX_BUDGET", "250")
+    assert m._weekly_budget("w7") == 250.0
+
+
+def test_bucket_exposure_splits_weekly_by_type(monkeypatch):
+    import importlib
+    import pytest
+    pytest.importorskip("yfinance")
+    import dte0_trade as m
+    from trading_engine import orphans
+    m = importlib.reload(m)
+    rows = [   # both expire 2030-10-04 (future, so still weeklies); bought 7 and 3 days out
+        {"root": "MU", "expiry": "301004", "long_strike": 100, "short_strike": 110, "entry": 4.0,
+         "credit": False, "qty": 1, "opened": "2030-09-27T14:00:00Z"},
+        {"root": "MU", "expiry": "301004", "long_strike": 100, "short_strike": 105, "entry": 2.0,
+         "credit": False, "qty": 1, "opened": "2030-10-01T14:00:00Z"},
+    ]
+    monkeypatch.setattr(orphans, "open_structures", lambda *a, **k: rows)
+    assert m._bucket_exposure("weekly", "301001", "w7") == 400.0
+    assert m._bucket_exposure("weekly", "301001", "w3") == 200.0

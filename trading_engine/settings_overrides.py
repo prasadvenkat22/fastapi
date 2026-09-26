@@ -91,11 +91,18 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_DTE0_MAX_BUDGET", "Single-stock 0DTE budget", G_BUCKETS, "float", "1500",
             "Total the same-day rotation commits per run, split across its max trades.",
             "$", 0, 1_000_000),
-    Setting("TRADING_BUCKET_STOCK_WEEKLY", "Single-stock weekly (rotation)", G_BUCKETS, "bool", "false",
-            "dte0_trade.py --book weekly entries. Off: screens and logs only."),
-    Setting("TRADING_WEEKLY_MAX_BUDGET", "Single-stock weekly budget", G_BUCKETS, "float", "5000",
-            "Total the weekly rotation commits per run, split across its max trades.",
-            "$", 0, 1_000_000),
+    # Section 245: the weekly book is two buckets. A run's type is the expiry it
+    # buys (5+ days out = 7-day); a position keeps the type it was bought as.
+    Setting("TRADING_BUCKET_STOCK_W3", "Single-stock 3-day (rotation)", G_BUCKETS, "bool", "false",
+            "Weekly-book runs buying an expiry 2-4 days out (the Mon-Wed schedule). Off: screens and logs only."),
+    Setting("TRADING_W3_MAX_BUDGET", "Single-stock 3-day budget", G_BUCKETS, "float", "",
+            "Cap on the 3-day bucket (minus its open spreads, never above buying power). "
+            "Blank = the old shared weekly budget.", "$", 0, 1_000_000, allow_blank=True),
+    Setting("TRADING_BUCKET_STOCK_W7", "Single-stock 7-day (rotation)", G_BUCKETS, "bool", "false",
+            "Weekly-book runs buying an expiry 5+ days out (the Thu-Fri schedule). Off: screens and logs only."),
+    Setting("TRADING_W7_MAX_BUDGET", "Single-stock 7-day budget", G_BUCKETS, "float", "",
+            "Cap on the 7-day bucket (minus its open spreads, never above buying power). "
+            "Blank = the old shared weekly budget.", "$", 0, 1_000_000, allow_blank=True),
     # --- Section 241: where in the range / which side of the midline -------
     Setting("TRADING_WEEKRANGE_GUARD", "Week-range guard", G_STRUCT, "bool", "false",
             "All three buckets: no call spread (bullish) near the week's high, no put spread "

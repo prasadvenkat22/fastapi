@@ -87,20 +87,22 @@ def test_fresh_process_trades_on_the_override(tmp_path):
 
 
 def test_bucket_switches_are_tunable_bools():
-    for k in ("TRADING_BUCKET_QQQ_0DTE", "TRADING_BUCKET_STOCK_0DTE", "TRADING_BUCKET_STOCK_WEEKLY"):
+    for k in ("TRADING_BUCKET_QQQ_0DTE", "TRADING_BUCKET_STOCK_0DTE", "TRADING_BUCKET_STOCK_W3",
+              "TRADING_BUCKET_STOCK_W7"):
         assert so.BY_KEY[k].kind == "bool"
         assert so.validate(k, "off") == "false"
 
 
 def test_rotation_honours_its_bucket_switch():
     src = open(os.path.join(REPO, "scripts", "dte0_trade.py"), encoding="utf-8").read()
-    assert 'TRADING_BUCKET_STOCK_WEEKLY" if args.book == "weekly"' in src
+    assert 'f"TRADING_BUCKET_STOCK_{wtype.upper()}" if wtype' in src
     src = open(os.path.join(REPO, "trading_engine", "nodes.py"), encoding="utf-8").read()
     assert 'action = "BUCKET_OFF"' in src
 
 
 def test_buckets_default_off():
-    for k in ("TRADING_BUCKET_QQQ_0DTE", "TRADING_BUCKET_STOCK_0DTE", "TRADING_BUCKET_STOCK_WEEKLY"):
+    for k in ("TRADING_BUCKET_QQQ_0DTE", "TRADING_BUCKET_STOCK_0DTE", "TRADING_BUCKET_STOCK_W3",
+              "TRADING_BUCKET_STOCK_W7"):
         assert so.BY_KEY[k].default == "false"
     for path, needle in (("trading_engine/nodes.py", 'os.getenv("TRADING_BUCKET_QQQ_0DTE", "false")'),
                          ("scripts/dte0_trade.py", 'os.getenv(bucket_key, "false")')):
@@ -108,11 +110,12 @@ def test_buckets_default_off():
 
 
 def test_bucket_budgets_sit_in_the_bucket_group():
-    for k in ("TRADING_POSITION_BUDGET", "TRADING_DTE0_MAX_BUDGET", "TRADING_WEEKLY_MAX_BUDGET"):
+    for k in ("TRADING_POSITION_BUDGET", "TRADING_DTE0_MAX_BUDGET", "TRADING_W3_MAX_BUDGET",
+              "TRADING_W7_MAX_BUDGET"):
         assert so.BY_KEY[k].group == so.G_BUCKETS
     assert "TRADING_BUCKET_INDEX_EVENT" not in so.BY_KEY
     src = open(os.path.join(REPO, "scripts", "dte0_trade.py"), encoding="utf-8").read()
-    assert 'budget = WEEKLY_MAX_BUDGET if args.book == "weekly" else MAX_BUDGET' in src
+    assert 'budget = (_weekly_budget(wtype) if wtype else MAX_BUDGET)' in src
 
 
 ENGINE_STALL_KEYS = ("TRADING_STALL_MINUTES", "TRADING_STALL_GIVEBACK_PCT", "TRADING_STALL_ON_CREDIT",

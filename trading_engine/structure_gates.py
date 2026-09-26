@@ -69,7 +69,7 @@ def _sma(values: list, n: int = 20) -> Optional[float]:
 
 
 def context_from_bars(bars15: list, bars5: list, sessions: int = 5) -> Optional[dict]:
-    """Week range, hourly and 5-minute midlines from 15-min (several days) and 5-min (today) bars.
+    """Week range, hourly and 5-minute midlines from 15-min and 5-min bars (both several days back).
 
     Bars are dicts with time ('YYYY-MM-DDTHH:MM:SS'), high, low, close, oldest first.
     """
@@ -160,9 +160,12 @@ def week_context(symbol: str) -> Optional[dict]:
         now = datetime.now(NY)
         start = (now - timedelta(days=9)).strftime("%Y-%m-%d 09:30")
         end = now.strftime("%Y-%m-%d 16:00")
-        today = now.strftime("%Y-%m-%d")
+        # 5-min from four calendar days back, so the 20-bar midline exists at
+        # the open (20 bars of today alone would take until ~11:10 ET, and the
+        # gate fails closed without it).
+        start5 = (now - timedelta(days=4)).strftime("%Y-%m-%d 09:30")
         ctx = context_from_bars(_timesales(symbol, "15min", start, end),
-                                _timesales(symbol, "5min", f"{today} 09:30", end))
+                                _timesales(symbol, "5min", start5, end))
     except Exception:
         logger.warning("Week context unreadable for %s.", symbol, exc_info=True)
     _CACHE[symbol] = (time.time(), ctx)

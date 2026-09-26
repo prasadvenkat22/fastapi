@@ -72,6 +72,7 @@ G_WEEKLY = "Weekly exits (later expiry)"
 G_ACCOUNT = "Account"
 G_ENTRY = "Entries & budgets"
 G_BUCKETS = "Trade buckets (new entries on/off)"
+G_STRUCT = "Entry structure gates (all buckets)"
 
 REGISTRY: tuple[Setting, ...] = (
     # --- Buckets: new entries only; open positions are always managed --------
@@ -93,6 +94,26 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_WEEKLY_MAX_BUDGET", "Single-stock weekly budget", G_BUCKETS, "float", "5000",
             "Total the weekly rotation commits per run, split across its max trades.",
             "$", 0, 1_000_000),
+    # --- Section 241: where in the range / which side of the midline -------
+    Setting("TRADING_WEEKRANGE_GUARD", "Week-range guard", G_STRUCT, "bool", "false",
+            "All three buckets: no call spread (bullish) near the week's high, no put spread "
+            "(bearish) near its low. Range = last 5 sessions. Measured: at the top 10% the next "
+            "4 days were up 34% of the time vs 53% mid-range."),
+    Setting("TRADING_WEEKRANGE_CALL_MAX", "No calls above (share of week range)", G_STRUCT, "float", "0.90",
+            "Bullish entries refused at or above this position in the week's range.", "x range", 0.5, 1),
+    Setting("TRADING_WEEKRANGE_PUT_MIN", "No puts below (share of week range)", G_STRUCT, "float", "0.10",
+            "Bearish entries refused at or below this position in the week's range.", "x range", 0, 0.5),
+    Setting("TRADING_PULLBACK_GATE_WEEKLY", "Weekly: wait for the hourly pullback", G_STRUCT, "bool", "false",
+            "Weekly book: a call needs the last hourly close BELOW its 20-SMA, a put ABOVE it. "
+            "Measured: below the midline, up 4 days later 60% vs 42%."),
+    Setting("TRADING_PULLBACK_GATE_0DTE", "0DTE stocks: wait for the 5-min pullback", G_STRUCT, "bool", "false",
+            "Single-stock 0DTE: a call needs price BELOW the 5-min 20-SMA, a put ABOVE it. Measured "
+            "weak (47% vs 43% up by the close). Not applied to the QQQ engine, whose bullish setups "
+            "require price above its average."),
+    Setting("TRADING_MACRO_BAD_PUTS_ONLY", "Macro BAD: put spreads only (stocks)", G_STRUCT, "bool", "false",
+            "Single-stock books refuse bullish spreads while the engine's macro verdict is BAD. The "
+            "QQQ engine already does this. NOT supported by the measurement (macro gates showed no "
+            "direction), set at the operator's direction."),
     # --- The engine's own QQQ trades (trading_engine/nodes.py) ---------------
     # Section 228. The 0DTE group below is orphans.py, which manages positions the
     # engine did NOT open; the QQQ bucket's trades exit on these instead.

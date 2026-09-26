@@ -927,6 +927,38 @@ def main() -> None:
             logger.warning("10Y read failed — the yield-spike veto stands down this run.",
                            exc_info=True)
 
+    # SECTION 241: the engine's own macro verdict (GOOD/BAD, written to
+    # trading_logs every minute). BAD means unsafe to be long -- the engine
+    # already takes only bearish entries then; with TRADING_MACRO_BAD_PUTS_ONLY
+    # the rotation does the same. A verdict older than 10 minutes is ignored.
+    from trading_engine import structure_gates
+    engine_macro = None
+    if structure_gates.macro_bad_puts_only():
+        try:
+            with psycopg2.connect(_dsn()) as c, c.cursor() as cur:
+                cur.execute("SELECT market_sentiment FROM trading_logs WHERE timestamp > now() - "
+                            "interval '10 minutes' AND market_sentiment <> '' "
+                            "ORDER BY timestamp DESC LIMIT 1")
+                row = cur.fetchone()
+                engine_macro = row[0] if row else None
+        except Exception:
+            logger.warning("Engine macro verdict unreadable.", exc_info=True)
+        logger.info("engine macro verdict: %s — %s", engine_macro or "none in the last 10 min",
+                    "PUT spreads only" if engine_macro == "BAD" else "both sides allowed")
+    week_ctx: dict = {}
+
+    def _ctx(sym: str):
+        if sym not in week_ctx:
+            week_ctx[sym] = structure_gates.week_context(sym)
+            c = week_ctx[sym]
+            if c:
+                logger.info("%-5s week %.2f-%.2f spot %.2f = %s of range | hourly %s 20-SMA | 5-min %s 20-SMA",
+                            sym, c["week_low"], c["week_high"], c["spot"],
+                            "?" if c["weekpos"] is None else f"{c['weekpos']:.0%}",
+                            {True: "below", False: "above", None: "?"}[c["below_1h"]],
+                            {True: "below", False: "above", None: "?"}[c["below_5m"]])
+        return week_ctx[sym]
+
     # Best surviving candidate per symbol per side.
     best: dict = {}
     flow_logged: set = set()
@@ -982,6 +1014,26 @@ def main() -> None:
                                 "bullish" if bullish else "bearish",
                                 MACRO_SYMBOL, mv)
                     rejects["against the macro tape"] += 1
+                    continue
+            if bullish and engine_macro == "BAD":
+                logger.info("%s %s %.0f/%.0f refused: bullish and the engine's macro is BAD "
+                            "(puts only).", r["sym"], side.upper(), float(r["lo"]), float(r["hi"]))
+                rejects["bullish with engine macro BAD"] += 1
+                continue
+            if structure_gates.weekrange_on():
+                _why = structure_gates.weekrange_refusal(bullish, _ctx(r["sym"]))
+                if _why:
+                    logger.info("%s %s %.0f/%.0f refused: %s.", r["sym"], side.upper(),
+                                float(r["lo"]), float(r["hi"]), _why)
+                    rejects["week-range guard"] += 1
+                    continue
+            _tf = "hourly" if args.book == "weekly" else "5min"
+            if structure_gates.pullback_on(_tf):
+                _why = structure_gates.pullback_refusal(bullish, _ctx(r["sym"]), _tf)
+                if _why:
+                    logger.info("%s %s %.0f/%.0f refused: %s.", r["sym"], side.upper(),
+                                float(r["lo"]), float(r["hi"]), _why)
+                    rejects["pullback trigger not met"] += 1
                     continue
             if MACRO_DELTA_GATE and abs(mdelta) >= MACRO_DELTA_STEPS:
                 # A bullish structure dies on a bearish turn and vice versa.

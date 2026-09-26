@@ -3030,6 +3030,19 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             logger.info("Scheduled macro event — refusing the %s entry.", tier)
             tier, bullish = None, False
 
+        # WHERE IN THE WEEK'S RANGE (section 241): no bullish entry at the week
+        # high, no bearish one at the week low. Measured on 52 sessions: at the
+        # top tenth of the 5-session range the next four days were up 34% of
+        # the time against 53% mid-range. Off unless TRADING_WEEKRANGE_GUARD.
+        if tier is not None:
+            from . import structure_gates
+            if structure_gates.weekrange_on():
+                _why = structure_gates.weekrange_refusal(bullish, structure_gates.week_context("QQQ"))
+                if _why:
+                    logger.info("Week range: refusing the %s %s entry — %s.",
+                                "bullish" if bullish else "bearish", tier, _why)
+                    tier, bullish = None, False
+
         # A session already this far down is not a place to be long, whatever
         # the five-minute averages say about the last twenty minutes.
         if (

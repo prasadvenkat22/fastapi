@@ -149,3 +149,16 @@ def test_fresh_process_engine_stall_follows_the_override(tmp_path):
     assert out.returncode == 0, out.stderr
     # blank credit window falls back to the ride's 7; the env's credit give-back still applies
     assert out.stdout.strip().splitlines()[-1] == "7.0 4.5 True False 7.0 9.0"
+
+
+def test_a_write_keeps_keys_this_process_does_not_know(paths, monkeypatch):
+    """Section 244: an older API process must not erase settings added after it started."""
+    ov, _ = paths
+    ov.write_text("TRADING_ORPHAN_STOP_PCT=-20\nTRADING_FUTURE_GATE=true\nDATABASE_URL=postgres://x\n")
+    so.set_many({"TRADING_ACCOUNT_FLOOR": 300}, who="t")
+    text = ov.read_text()
+    assert "TRADING_FUTURE_GATE=true" in text           # unknown TRADING_ key kept
+    assert "DATABASE_URL" not in text                   # never anything outside TRADING_
+    assert so.read_file()[0] == {"TRADING_ORPHAN_STOP_PCT": "-20", "TRADING_ACCOUNT_FLOOR": "300"}
+    so.unset(["TRADING_ACCOUNT_FLOOR"], who="t")
+    assert "TRADING_FUTURE_GATE=true" in ov.read_text()

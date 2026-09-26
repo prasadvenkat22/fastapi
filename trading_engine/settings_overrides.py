@@ -443,7 +443,36 @@ def base_value(key: str) -> Optional[str]:
     return os.environ.get(key)
 
 
+_KEY_RE = re.compile(r"^TRADING_[A-Z0-9_]+$")
+
+
+def _foreign_lines(path: str) -> list[str]:
+    """TRADING_* lines this process's REGISTRY does not know, kept verbatim.
+
+    Section 244. An API process started before a setting was added re-read the
+    file through its own older whitelist and rewrote it without the new keys:
+    2026-09-26 15:08 a UI save of the account floor deleted the four gate
+    switches set from the CLI a minute earlier. Unknown keys are still never
+    APPLIED by this process (read_file skips them); they are just not erased.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.readlines()
+    except FileNotFoundError:
+        return []
+    out = []
+    for line in raw:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.partition("=")[0].strip()
+        if key not in BY_KEY and _KEY_RE.match(key):
+            out.append(line)
+    return out
+
+
 def _write(overrides: dict[str, str], path: str) -> None:
+    foreign = _foreign_lines(path)
     lines = [
         "# Trading overrides -- written by /trading/settings and scripts/settings.py.",
         "# Beats .env.production; picked up by the next cron cycle (no restart).",
@@ -452,6 +481,9 @@ def _write(overrides: dict[str, str], path: str) -> None:
     for s in REGISTRY:  # registry order keeps the file readable
         if s.key in overrides:
             lines.append(f"{s.key}={overrides[s.key]}")
+    if foreign:
+        lines.append("# kept: settings this process's code does not know (newer or retired)")
+        lines.extend(foreign)
     d = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".trading_overrides.", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:

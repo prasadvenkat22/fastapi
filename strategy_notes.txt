@@ -14248,3 +14248,28 @@ scaling span, ATR/band give-back, max extrinsic drag, weekly hold window).
 dropdown was hiding, with no visible reason (desk f82fba1): the Save bar now
 lists every pending change and names an invalid one with a "drop this change"
 link; blank is valid for blank-allowed numbers; "30%" reads as 30.
+
+
+244. THE SETTINGS FILE LOST KEYS; THE 3-DAY SAVE, REPRODUCED  (2026-09-26)
+
+Settings wipe. The audit log showed the four section-241 gate switches as
+"(unset) -> true" when the operator re-saved them at 15:59-16:01, though the
+CLI had set them at 15:07. Cause: at 15:08 a UI save (account floor) ran in
+an API process started before those keys existed; set_many re-reads the file
+through read_file's whitelist -- that process's REGISTRY -- and _write
+rewrote the file without the keys it did not know. Fix: _write keeps any
+well-formed TRADING_* line its REGISTRY does not know, verbatim, under a
+"kept" comment (nothing outside TRADING_ is ever kept); such keys are still
+never applied by that process. Test in tests/test_settings_overrides.py. Takes
+effect in the API after its next restart; the CLI and cron use it at once.
+
+3-day Save. No 3-day save ever reached the API (every PUT is in the audit log),
+and nginx showed the operator's browser had loaded the fixed page at 15:58. So
+it was reproduced rather than reasoned about: the desk app run locally against
+a mock of /trading/settings (seeded with the droplet's real snapshot), driven
+in headless Chromium (scratch/pw/repro*.js). Every 3-day control saved --
+stop, flatten switch, flatten time, "30%", stall arm -- and the only blocked
+case was an out-of-range value. A stop typed as "10" (meaning a 10% stop) is
+the likely one: stops are negative, so "10" failed "max 0". Desk ee4deaf reads a
+positive number on a stop field (range ending at 0) as that loss, "10" -> -10,
+and the confirm dialog shows the value sent.

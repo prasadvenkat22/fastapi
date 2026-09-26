@@ -14170,3 +14170,31 @@ Exercised on the droplet as a weekly dry run (09-26, Oct 2 expiry, gates on,
 wider budget and Pwin for that process only): NVDA 45% of range, calls refused
 "hourly above the midline"; AMD 85%; TSLA 23%, puts refused "hourly below".
 The existing edge / Pwin / EV / R:R filters run first and are unchanged.
+
+
+242. ROTATE THE MONEY; A FRESH P&L BOOK FOR MONDAY  (2026-09-26)
+
+Operator: "money should be rotated as much -- if one position is sold another
+one is taken the same day; also clear the P&L book, start fresh Monday."
+
+Found while answering: equity.current_equity() is budget + realized P&L over
+ALL of trading_history. With 223 rows (08-19..09-25) summing -78,337.70, the
+engine's equity read -78,207.70 and its daily-loss limit 0.00, so every entry
+sized to zero whatever the tape did -- a second, silent reason the QQQ engine
+could not trade. Archiving the book (operator paste: trading_history copied to
+trading_history_archive_20260926, then emptied) restarts equity at the budget.
+
+Rotation, set live 09-26:
+  TRADING_WIN_COOLDOWN_MINUTES 30 -> 0   engine re-enters the next cycle after
+                                         a win (0 is what every sweep in 27-51
+                                         measured; 30 had no measurement)
+  TRADING_DTE0_ROTATE_COOLDOWN_MIN 30 -> 0   a name may be re-bought on the
+                                         rotation's next run after its exit
+  TRADING_DTE0_MAX_ROTATIONS 5 -> 10     entries per name per day
+  (both engine cooldowns are now UI settings, "QQQ engine exits")
+Freed money is already re-usable: since 238 each run's budget is the bucket cap
+minus what is open, so a closed position's cost returns to the next run.
+Left for the operator: TRADING_REENTRY_COOLDOWN_MINUTES (after a LOSS, 90
+live). Measured against removing it: no cooldown +51.17/day, 30 min +58.13,
+90 min +60.15 over 60 sessions, and no cooldown widens the worst day.
+Offered: the single-stock 0DTE rotation cron from every 15 to every 5 minutes.

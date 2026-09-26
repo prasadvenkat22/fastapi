@@ -68,7 +68,7 @@ class Setting:
 
 G_ENGINE = "QQQ engine exits (the engine's own trades)"
 G_0DTE = "0DTE exits"
-G_WEEKLY = "Weekly exits (later expiry)"
+G_WEEKLY = "Weekly shared defaults (3-day and 7-day)"
 G_W3 = "3-day spreads (bought 2-4 days before expiry)"
 G_W7 = "7-day spreads (bought 5+ days before expiry)"
 G_ACCOUNT = "Account"

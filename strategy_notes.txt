@@ -14237,3 +14237,14 @@ open can be totally unpredictable".
     its blanks fall back to.
 tests/test_review_replay.py drives a 7-day spread through review(): holds at
 11:00 ET, WEEKLY_FLATTEN at an 11:30 flatten time, untouched with it off.
+
+Addendum to 243 (09-26): the "Weekly exits (later expiry)" group is renamed
+"Weekly shared defaults (3-day and 7-day)". It was never a third trade type:
+it is the ladder both weekly types fall back to for any blank per-type setting,
+plus the weekly-only rules with no per-type copy (1-day scaled stop and stall,
+scaling span, ATR/band give-back, max extrinsic drag, weekly hold window).
+"Later expiry" was the engine's name for "not expiring today". Same day:
+/desk/settings Save was disabled by an invalid edit in a group the Trade type
+dropdown was hiding, with no visible reason (desk f82fba1): the Save bar now
+lists every pending change and names an invalid one with a "drop this change"
+link; blank is valid for blank-allowed numbers; "30%" reads as 30.

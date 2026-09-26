@@ -14292,3 +14292,11 @@ TRADING_WEEKLY_MAX_BUDGET. The Entry schedule panel labels the lines
 "Single-stock 3-day" / "7-day". TRADING_BUCKET_STOCK_WEEKLY and
 TRADING_WEEKLY_MAX_BUDGET leave the UI; at deploy both new switches and
 budgets were set to the old weekly values so nothing changed.
+
+Addendum to 245: the retired TRADING_BUCKET_STOCK_WEEKLY and
+TRADING_WEEKLY_MAX_BUDGET lines were removed from trading_overrides.env on the
+droplet (backup trading_overrides.env.bak-20260926, both recorded in the audit
+log) -- kept by section 244's writer but no longer in the registry, they made
+every process print "not a tunable setting -- ignored". App restarted 17:24
+UTC, after the 16:35 pull: the UI shows the 3-day / 7-day switches and budgets
+and the API runs the section-244 writer.

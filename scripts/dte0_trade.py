@@ -121,6 +121,7 @@ WEEKLY_MAX_EXTRINSIC = float(os.getenv("TRADING_WEEKLY_MAX_EXTRINSIC", "100.0"))
 WEEKLY_MAX_TARGET_ATR = float(os.getenv("TRADING_WEEKLY_MAX_TARGET_ATR", "9.0"))
 WEEKLY_MIN_PWIN = float(os.getenv("TRADING_WEEKLY_MIN_PWIN", "0.45"))
 BOOK = "dte0"           # set by --book; read by _passes
+WTYPE = None            # 'w3' / 'w7' for a weekly run (section 245); read by _long_band
 # QQQ IS DELIBERATELY ABSENT. The engine trades QQQ 0DTE itself from 09:45
 # through its own playbook, and a second QQQ position placed here would be an
 # independent bet on the same underlying, sized separately, with the engine
@@ -459,6 +460,23 @@ def _macro_verdict() -> "tuple | None":
         return None
 
 
+def _long_band() -> "tuple[float, float] | None":
+    """Section 246: where the LONG strike may sit, in ATR of the stock (positive = in
+    the money, negative = out), for this run's book; None when not set (off).
+
+    0DTE stocks: TRADING_PICK_LONG_MIN_ATR / _MAX_ATR. Weekly: TRADING_W3_* or
+    TRADING_W7_* LONG_MIN_ATR / LONG_MAX_ATR. Mirrored for puts. Blank = off.
+    """
+    pre = f"TRADING_{WTYPE.upper()}" if (BOOK == "weekly" and WTYPE) else "TRADING_PICK"
+    lo, hi = (os.getenv(f"{pre}_LONG_MIN_ATR", "").strip(), os.getenv(f"{pre}_LONG_MAX_ATR", "").strip())
+    if lo == "" and hi == "":
+        return None
+    try:
+        return (float(lo) if lo else -99.0, float(hi) if hi else 99.0)
+    except ValueError:
+        return None
+
+
 def _passes(r: dict) -> "str | None":
     """None if the row clears all three constraints, else why it did not."""
     cost, w, spot = float(r["cost"]), float(r["w"]), float(r["spot"])
@@ -478,6 +496,21 @@ def _passes(r: dict) -> "str | None":
     extr = cost - intr
     if extr < 0:
         return "negative extrinsic — crossed or stale quote"
+    # SECTION 246: WHERE THE LONG LEG SITS, in the stock's own ATR. Operator: 0DTE
+    # stocks buy in the money (a little out on a four-digit name like MU, with a
+    # wider spread), weeklies near the money. Entry-as-%-of-width cannot say this
+    # -- MU 1090/1110 at 3.80 is 19% of width -- so the long strike is placed
+    # against the stock's daily range directly.
+    band = _long_band()
+    atr_ = float(r.get("atr") or 0)
+    if band is not None:
+        if atr_ <= 0:
+            return "no ATR"
+        m = ((spot - long_k) if bullish else (long_k - spot)) / atr_
+        r["_long_atr"] = m
+        if not (band[0] <= m <= band[1]):
+            where = f"{m:.2f} ATR {'in' if m >= 0 else 'out of'} the money" if m else "at the money"
+            return (f"long strike {where}, outside the {band[0]:+.2f}..{band[1]:+.2f} ATR band")
     ex_pct = extr / cost * 100.0
     if ex_pct > MAX_EXTRINSIC:
         return f"extrinsic {ex_pct:.0f}% of premium, above {MAX_EXTRINSIC:.0f}%"
@@ -729,6 +762,8 @@ def main() -> None:
     # WEEKLY_LONG_MIN_DAYS (5) or more calendar days out is 7-day -- the same
     # rule orphans.weekly_type() applies to the positions it then manages.
     wtype = _weekly_type_for(exp) if args.book == "weekly" else None
+    global WTYPE
+    WTYPE = wtype
     budget = (_weekly_budget(wtype) if wtype else MAX_BUDGET)
     if args.budget != budget:
         logger.info("Budget $%.0f from the %s bucket setting (--budget %.0f ignored).",

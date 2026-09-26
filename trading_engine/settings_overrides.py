@@ -75,6 +75,7 @@ G_ACCOUNT = "Account"
 G_ENTRY = "Entries & budgets"
 G_BUCKETS = "Trade buckets (new entries on/off)"
 G_STRUCT = "Entry structure gates (all buckets)"
+G_PICK0 = "0DTE stocks: strike selection"
 
 REGISTRY: tuple[Setting, ...] = (
     # --- Buckets: new entries only; open positions are always managed --------
@@ -296,10 +297,37 @@ REGISTRY: tuple[Setting, ...] = (
             "Weekly opening quiet period (ET). Blank = same as the 0DTE setting.",
             allow_blank=True),
 
+    # --- Section 246: where the long strike sits (entries) --------------------
+    Setting("TRADING_PICK_LONG_MIN_ATR", "Long strike from (ATR)", G_PICK0, "float", "",
+            "0DTE stocks: the long strike may sit this far out of the money at most, in the stock's daily ATR "
+            "(negative = out of the money, 0 = at the money). On MU (ATR ~$45) -0.25 is ~$11 out. Blank = no limit. Mirrored for puts.",
+            "ATR", -3, 3, allow_blank=True),
+    Setting("TRADING_PICK_LONG_MAX_ATR", "Long strike to (ATR)", G_PICK0, "float", "",
+            "0DTE stocks: the long strike may sit this far IN the money at most, in daily ATR. Blank = no limit.",
+            "ATR", -3, 5, allow_blank=True),
+    Setting("TRADING_PICK_MAX_EXTRINSIC", "Max time value (share of premium)", G_PICK0, "float", "25",
+            "0DTE stocks: refuse a spread whose premium is more than this % time value. 25 forces deep in-the-money "
+            "spreads; with the long-strike band set, 100 lets the band decide.", "%", 0, 100),
+    Setting("TRADING_PICK_MAX_SHORT_ATR", "Short strike at most (ATR out)", G_PICK0, "float", "0.40",
+            "0DTE stocks: the short strike may sit at most this many daily ATR from spot. A wider spread needs more "
+            "(MU 1110 vs 1082 is ~0.6).", "ATR", 0, 3),
+    Setting("TRADING_PICK_MAX_TARGET_ATR", "Target within (ATR)", G_PICK0, "float", "0.30",
+            "0DTE stocks: the +target must be reachable within this many daily ATR of movement.", "ATR", 0, 3),
+    Setting("TRADING_WEEKLY_MIN_ENTRY_WIDTH", "Weekly min entry (x width)", G_ENTRY, "float", "0.20",
+            "3-day and 7-day: cheapest debit accepted, as a share of width.", "x width", 0, 1),
+    Setting("TRADING_WEEKLY_MAX_ENTRY_WIDTH", "Weekly max entry (x width)", G_ENTRY, "float", "0.75",
+            "3-day and 7-day: dearest debit accepted, as a share of width.", "x width", 0, 1),
     # --- Section 243: 3-day and 7-day spreads, each with its own settings ------
     Setting("TRADING_WEEKLY_LONG_MIN_DAYS", "7-day means bought this many days out", G_W7, "int", "5",
             "A weekly bought at least this many calendar days before expiry uses the 7-day settings for "
             "its whole life; fewer uses the 3-day settings. Expiry day always uses the 0DTE settings.", "days", 3, 10),
+    Setting("TRADING_W3_LONG_MIN_ATR", "Long strike from (ATR)", G_W3, "float", "",
+            "3-day entries: the long strike may sit this far out of the money at most, in the stock's daily ATR "
+            "(negative = out of the money, 0 = at the money). -0.15..+0.25 keeps it near the money. Blank = no limit. Mirrored for puts.",
+            "ATR", -3, 3, allow_blank=True),
+    Setting("TRADING_W3_LONG_MAX_ATR", "Long strike to (ATR)", G_W3, "float", "",
+            "3-day entries: the long strike may sit this far IN the money at most, in daily ATR. Blank = no limit.",
+            "ATR", -3, 5, allow_blank=True),
     Setting("TRADING_W3_STOP_PCT", "Stop loss", G_W3, "float", "",
             "3-day spread: stop on return. Blank = the shared weekly stop (scaled by days left).", "%", -100, 0, allow_blank=True),
     Setting("TRADING_W3_STOP_MINUTES", "Stop confirmation", G_W3, "float", "",
@@ -318,6 +346,13 @@ REGISTRY: tuple[Setting, ...] = (
             "Close 3-day spreads every day at the flatten time instead of holding them overnight."),
     Setting("TRADING_W3_FLATTEN_AT", "Flatten time", G_W3, "time", "15:45",
             "When the end-of-day flatten closes them (ET)."),
+    Setting("TRADING_W7_LONG_MIN_ATR", "Long strike from (ATR)", G_W7, "float", "",
+            "7-day entries: the long strike may sit this far out of the money at most, in the stock's daily ATR "
+            "(negative = out of the money, 0 = at the money). -0.25..+0.25 keeps it near the money. Blank = no limit. Mirrored for puts.",
+            "ATR", -3, 3, allow_blank=True),
+    Setting("TRADING_W7_LONG_MAX_ATR", "Long strike to (ATR)", G_W7, "float", "",
+            "7-day entries: the long strike may sit this far IN the money at most, in daily ATR. Blank = no limit.",
+            "ATR", -3, 5, allow_blank=True),
     Setting("TRADING_W7_STOP_PCT", "Stop loss", G_W7, "float", "",
             "7-day spread: stop on return. Blank = the shared weekly stop (scaled by days left).", "%", -100, 0, allow_blank=True),
     Setting("TRADING_W7_STOP_MINUTES", "Stop confirmation", G_W7, "float", "",

@@ -14310,3 +14310,39 @@ the session actions are one account menu at the right of the bar, the links
 row appears from 1536 px (menu button below that), and the phone menu scrolls
 with sign-in/sign-out first. Verified on-screen at 360, 390, 900, 1280, 1366,
 1536 and 1920 px.
+
+
+246. WHERE THE LONG LEG SITS: IN THE MONEY FOR 0DTE STOCKS, NEAR IT FOR WEEKLIES  (2026-09-26)
+
+An outside note argued ATM / slightly-OTM debit spreads sized to a $400
+budget (MU 1090/1110 at 3.80, NVDA 225/227.5, TSLA 372.5/375), width scaled to
+ATR, net delta ~+0.2, "midday gamma". Measured on this account's own closed
+book (trading_history_archive_20260926, scratch/bp/moneyness.py,
+out_moneyness.txt), 205 debit spreads by entry as a share of width:
+                                   n   win   $ per $100 risked   total
+  same-day, stocks  ATM (30-50%)   13  54%        -1.1          -304
+                    ITM (50-75%)   28  32%       -13.6       -12,884
+  same-day, QQQ     ATM            21  14%       -16.9        -1,767
+                    ITM            26  54%        +7.1        +1,039
+  multi-day         ATM            30  67%       +12.9        +7,564
+                    ITM            55  49%        +1.4          +973
+                    deep ITM       16  44%        -6.9        -1,166
+  Midday: ITM same-day -19.3/100 at 09-11 ET vs +0.7 at 11-13 (n=19). Small,
+  uncontrolled (manual + engine), concentrated in a few names and days.
+
+The 0DTE stock filters (extrinsic <= 25%, entry 30-75% of width) forced deep
+in-the-money spreads. Operator decision (knowingly against the stock ITM row):
+0DTE stocks buy IN the money, a little OUT on an expensive name with a wider
+spread (MU ~$10 out), the short leg must pay real premium (no NVDA 225/230 whose
+230 fetches nothing), puts mirrored; 3-day and 7-day near the money; all in UI.
+
+Built: a long-strike band in the stock's daily ATR (positive = in the money),
+checked in _passes for calls and mirrored for puts:
+  TRADING_PICK_LONG_MIN_ATR / _MAX_ATR       0DTE stocks ("0DTE stocks: strike
+                                             selection" group)
+  TRADING_W3_ / TRADING_W7_ LONG_MIN_ATR / _MAX_ATR   in the 3-day / 7-day groups
+  Blank = off (code default), so nothing changed until set.
+Also exposed in the UI: TRADING_PICK_MAX_EXTRINSIC, _MAX_SHORT_ATR,
+_MAX_TARGET_ATR, TRADING_WEEKLY_MIN/MAX_ENTRY_WIDTH. The band replaces what the
+25% extrinsic cap was doing (keeping the long leg in the money), and a slightly
+OTM long leg is all time value, so the cap must be lifted for MU-type entries.

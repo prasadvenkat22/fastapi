@@ -105,3 +105,65 @@ def test_bucket_exposure_splits_weekly_by_type(monkeypatch):
     monkeypatch.setattr(orphans, "open_structures", lambda *a, **k: rows)
     assert m._bucket_exposure("weekly", "301001", "w7") == 400.0
     assert m._bucket_exposure("weekly", "301001", "w3") == 200.0
+
+
+# --- Section 246: where the long strike sits, in ATR ---------------------------
+
+def _mod():
+    import importlib
+    import pytest
+    pytest.importorskip("yfinance")
+    import dte0_trade as m
+    return importlib.reload(m)
+
+
+def _row(lo, hi, spot, cost, atr, direction="bullish", long_ask=6.0, short_bid=2.2):
+    return {"cost": cost, "w": abs(hi - lo), "spot": spot, "lo": lo, "hi": hi, "atr": atr,
+            "direction": direction, "long_ask": long_ask, "short_bid": short_bid, "pwin": 0.6}
+
+
+def test_long_band_0dte_mu_10_otm_passes_and_far_otm_fails(monkeypatch):
+    m = _mod()
+    monkeypatch.setenv("TRADING_PICK_LONG_MIN_ATR", "-0.25")
+    monkeypatch.setenv("TRADING_PICK_LONG_MAX_ATR", "1.0")
+    for k, v in (("MIN_EW", 0.10), ("MAX_EW", 0.85), ("MAX_EXTRINSIC", 100.0), ("MAX_SHORT_ATR", 0.8),
+                 ("MAX_TARGET_ATR", 0.5), ("MIN_SHORT_PAYS_PCT", 10.0), ("TARGET_PCT", 30.0)):
+        monkeypatch.setattr(m, k, v)
+    monkeypatch.setattr(m, "BOOK", "dte0")
+    mu = _row(1090, 1110, 1082.28, 3.80, 45.0)                 # long $8 OTM = -0.17 ATR
+    assert m._passes(mu) is None and round(mu["_long_atr"], 2) == -0.17
+    far = _row(1110, 1130, 1082.28, 2.50, 45.0)                # long $28 OTM = -0.62 ATR
+    assert "outside the -0.25..+1.00 ATR band" in m._passes(far)
+
+
+def test_long_band_mirrors_for_puts(monkeypatch):
+    m = _mod()
+    monkeypatch.setenv("TRADING_PICK_LONG_MIN_ATR", "0")       # in the money only
+    monkeypatch.setenv("TRADING_PICK_LONG_MAX_ATR", "1.0")
+    for k, v in (("MIN_EW", 0.0), ("MAX_EW", 1.0), ("MAX_EXTRINSIC", 100.0), ("MAX_SHORT_ATR", 3.0),
+                 ("MAX_TARGET_ATR", 3.0), ("MIN_SHORT_PAYS_PCT", 0.0), ("TARGET_PCT", 30.0)):
+        monkeypatch.setattr(m, k, v)
+    monkeypatch.setattr(m, "BOOK", "dte0")
+    itm_put = _row(365, 375, 372.0, 5.0, 12.0, direction="bearish")    # long 375 put, $3 ITM
+    otm_put = _row(360, 370, 372.0, 3.0, 12.0, direction="bearish")    # long 370 put, $2 OTM
+    assert m._passes(itm_put) is None
+    assert "out of the money" in m._passes(otm_put)
+
+
+def test_weekly_uses_its_own_band_and_blank_is_off(monkeypatch):
+    m = _mod()
+    for k, v in (("MIN_EW", 0.0), ("MAX_EW", 1.0), ("MAX_EXTRINSIC", 100.0), ("MAX_SHORT_ATR", 9.0),
+                 ("MAX_TARGET_ATR", 9.0), ("MIN_SHORT_PAYS_PCT", 0.0), ("TARGET_PCT", 30.0),
+                 ("WEEKLY_MIN_PWIN", 0.0)):
+        monkeypatch.setattr(m, k, v)
+    monkeypatch.setattr(m, "BOOK", "weekly")
+    monkeypatch.setattr(m, "WTYPE", "w7")
+    for k in ("TRADING_W7_LONG_MIN_ATR", "TRADING_W7_LONG_MAX_ATR"):
+        monkeypatch.delenv(k, raising=False)
+    deep = _row(215, 230, 225.0, 10.5, 6.0)                    # long 1.7 ATR in the money
+    assert m._passes(deep) is None                             # no band set: allowed
+    monkeypatch.setenv("TRADING_W7_LONG_MIN_ATR", "-0.25")
+    monkeypatch.setenv("TRADING_W7_LONG_MAX_ATR", "0.25")
+    assert "outside" in m._passes(deep)
+    atm = _row(225, 230, 225.5, 2.4, 6.0)
+    assert m._passes(atm) is None

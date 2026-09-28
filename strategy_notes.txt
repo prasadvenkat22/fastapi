@@ -14386,3 +14386,19 @@ Found while writing it, NOT fixed:
     kill switch, so it keeps opening trades while it is on.
 The runbook says to stop new entries with the bucket switches (exits keep
 running) and to use the kill switch only when flat.
+
+
+248. THE MACRO PANEL SAID "CLEAR" WHILE THE ENGINE SAID BAD  (2026-09-28)
+
+09-28 from the open: the engine read macro BAD every cycle, "refused by:
+breadth" (NYSE/Nasdaq advance-decline negative), while /desk's Macro panel
+showed "risk gates clear" -- the panel only evaluated the 10Y, VIX and crude
+gates, which were clear. It never showed breadth or the LLM term.
+/trading/macro now adds a Breadth gate from the engine's latest cycle
+(raw_log_payload: breadth_addq / advancers / decliners / collapsing, tripped
+when macro_block_reason names breadth), an LLM gate when that term refused,
+and engine.block_reason / engine.fresh; risk_off follows the engine's verdict
+while its last cycle is under 10 minutes old. The panel banner names the
+reason: "macro BAD (breadth): bullish entries refused, put spreads allowed" --
+which is what BAD does to the engine (bullish setups need GOOD; bearish only
+"not halted").

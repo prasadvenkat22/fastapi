@@ -587,6 +587,29 @@ async def macro_panel(db: db_dependency):
         rotation = None
 
     last = db.query(TradingLog).order_by(TradingLog.timestamp.desc()).first()
+
+    # SECTION 248: THE ENGINE'S OWN VERDICT, NOT A SUBSET OF IT. The price gates
+    # above are only some of the terms: on 2026-09-28 the engine read BAD all
+    # morning on BREADTH while this panel said "risk gates clear". Breadth (and
+    # the LLM term, when armed) come from the engine's latest cycle, which
+    # records which terms refused; the headline follows that verdict while it
+    # is fresh (a cycle in the last 10 minutes).
+    payload = (getattr(last, "raw_log_payload", None) or {}) if last else {}
+    block = str(payload.get("macro_block_reason") or "")
+    fresh = bool(last and last.timestamp and
+                 (datetime.now(timezone.utc) - last.timestamp).total_seconds() < 600)
+    if payload.get("breadth_addq") is not None:
+        adv, dec = payload.get("breadth_advancers"), payload.get("breadth_decliners")
+        gates.append({"name": "Breadth", "value": (
+                          f"ADD {float(payload['breadth_addq']):+.0f}"
+                          + (f" ({adv} up / {dec} down)" if adv is not None and dec is not None else "")
+                          + (", collapsing" if payload.get("breadth_collapsing") else "")),
+                      "limit": "ADD <= 0 or collapsing",
+                      "tripped": "breadth" in block})
+    if "llm" in block:
+        gates.append({"name": "Macro read (LLM)", "value": str(payload.get("macro_risk_factor") or "not GOOD"),
+                      "limit": "not GOOD", "tripped": True})
+    engine_bad = fresh and getattr(last, "market_sentiment", None) == "BAD"
     return _json_safe({
         "readings": {
             "vix": vars(vix) if vix else None,
@@ -594,10 +617,11 @@ async def macro_panel(db: db_dependency):
             "tnx": vars(tnx) if tnx else None,
         },
         "gates": gates,
-        "risk_off": any(x["tripped"] for x in gates),
+        "risk_off": engine_bad or any(x["tripped"] for x in gates),
         "engine": {"sentiment": getattr(last, "market_sentiment", None),
                    "status": getattr(last, "execution_status", None),
-                   "at": getattr(last, "timestamp", None)},
+                   "at": getattr(last, "timestamp", None),
+                   "block_reason": block or None, "fresh": fresh},
         "rotation": rotation,
         "calendar": {"event_day": macro_calendar.is_event_day(),
                      "note": macro_calendar.describe() or None,

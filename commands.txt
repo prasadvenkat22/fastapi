@@ -41,8 +41,10 @@ tset get TRADING_ORPHAN_STOP_PCT     # one knob: bounds, default, env value, ove
 # --- Trade buckets: NEW entries on/off (all OFF by default) ---
 tset set TRADING_BUCKET_QQQ_0DTE=true         # engine's QQQ same-day entries
 tset set TRADING_BUCKET_STOCK_0DTE=true       # single-stock 0DTE rotation
-tset set TRADING_BUCKET_STOCK_WEEKLY=true     # single-stock weekly rotation
-tset set TRADING_POSITION_BUDGET=6500 TRADING_DTE0_MAX_BUDGET=5000 TRADING_WEEKLY_MAX_BUDGET=5000   # per-bucket budgets ($)
+tset set TRADING_BUCKET_STOCK_W3=true         # single-stock 3-day (weekly runs buying 2-4 days out, Mon-Wed)
+tset set TRADING_BUCKET_STOCK_W7=true         # single-stock 7-day (weekly runs buying 5+ days out, Thu-Fri)
+tset set TRADING_POSITION_BUDGET=450 TRADING_DTE0_MAX_BUDGET=450 TRADING_W3_MAX_BUDGET=450 TRADING_W7_MAX_BUDGET=400   # per-bucket budgets ($)
+# (TRADING_BUCKET_STOCK_WEEKLY and TRADING_WEEKLY_MAX_BUDGET were retired 09-26, section 245)
 
 # --- 0DTE stop loss (applies to positions expiring TODAY only) ---
 tset set TRADING_ORPHAN_STOP_PCT=-20                  # stop at -20% of cost   (range -100..0)
@@ -160,3 +162,89 @@ cd /opt/data-ai-solutions && git pull && docker compose -f docker-compose.server
 # check from anywhere
 curl -s -o /dev/null -w "%{http_code}\n" https://dataaisys.com/trading/settings    # 401 = route live, auth enforced
 curl -s -o /dev/null -w "%{http_code}\n" -X POST https://dataaisys.com/api/chat/ask -H 'Content-Type: application/json' -d '{"query":"latest news on MU"}'   # 401 = no AI for anonymous visitors
+
+
+7. THE ENGINE AND THE JOBS: IS IT RUNNING, START, STOP, AFTER A REBOOT
+----------------------------------------------------------------------
+# WHAT RUNS TRADING: the droplet's CRONTAB. `scripts/run_cycle.py` every minute
+# is the engine (QQQ entries AND every exit: stop, stall, flatten, for all
+# positions). The rotations and data jobs are further crontab lines. Nothing
+# needs "starting" on a normal day: cron runs them on schedule, weekdays only,
+# and skips outside market hours / holidays by itself.
+#
+# DO NOT press "Start scheduler" on the desk Controls page. That is an older
+# in-app loop doing the SAME job as the cron line; with both, every cycle runs
+# twice at once (the 09-03 split order). It is refused unless
+# TRADING_ALLOW_APP_SCHEDULER=true, which is only for a box with no cron line.
+
+# --- 7a. Is it running? ---
+systemctl is-active cron                       # active
+crontab -l | grep -c run_cycle.py              # 1 (the engine line)
+tail -n 5 /var/log/qqq-trading.log             # a "cycle ok" or "skipped -- ..." line every minute
+docker ps --format '{{.Names}} {{.Status}}'    # app, postgres_container, nginx, data-ai-web all Up
+# The Entry schedule panel on /desk/settings shows the rotation lines (read-only).
+
+# --- 7b. After a reboot / if something is down ---
+# cron is enabled at boot and every container is restart: always, so a reboot
+# needs nothing. If a check above fails:
+systemctl enable --now cron
+cd /opt/fastapi && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+cd /opt/data-ai-solutions && docker compose -f docker-compose.server.yml up -d
+
+# --- 7c. A job is missing from the crontab: put it back ---
+crontab -l > /root/crontab.bak-$(date +%Y%m%d%H%M)     # ALWAYS back up first
+./scripts/install_cron.sh                              # re-adds the engine line (run_cycle.py) only
+# Any other line: append it, dropping exact duplicates, then check:
+#   ( crontab -l; echo '<the line below>' ) | awk '!seen[$0]++' | crontab -
+#   crontab -l | grep -c '<script name>'
+# The trading lines as installed (times are UTC; ET = UTC-4 until Nov 1, then -5):
+#   * * * * *          run_cycle.py                          engine + all exits      /var/log/qqq-trading.log
+#   */5 13-18 * * 1-5  dte0_trade.py --rotate --live --budget 5000 --max-trades 4
+#                                                            single-stock 0DTE       /var/log/dte0-trade.log
+#   50 13,17 * * 1-3   dte0_trade.py --book weekly --rotate --live --budget 5000 --max-trades 3
+#                      --expiry friday --symbols AMZN,AVGO,CRWV,DELL,GOOGL,META,MRVL,MSFT,MU,NVDA,PANW,SNDK,STX,WDC,INTC,TSLA,AAPL,AMD
+#                                                            3-day weekly            /var/log/weekly-trade.log
+#   50 13,17 * * 4-5   (same, --expiry +5)                   7-day weekly            /var/log/weekly-trade.log
+#   */10 * * * *       crontab -l > /opt/fastapi/crontab.snapshot   feeds the Entry schedule panel
+# Every python line is prefixed with:
+#   cd /opt/fastapi && docker compose -f /opt/fastapi/docker-compose.yml -f /opt/fastapi/docker-compose.prod.yml
+#   --project-directory /opt/fastapi exec -T -w /app -e PYTHONPATH=/app app python scripts/<script> ...
+# (-w /app and PYTHONPATH are required, or the job dies every run on
+#  "No module named 'config'" while cron reports nothing wrong.)
+# Data jobs also in the crontab: capture_chain, news_watch, news_hourly,
+# news_enrich, macro_objective, macro_outcome, verdict_outcome, profit_stall,
+# dte0_shadow (--open/--mark/--settle), issue_cert.sh. price_alert.py is
+# commented out (09-26). `crontab -l` is the authority.
+
+# --- 7d. Stop / pause trading: pick the right tool ---
+# STOP NEW ENTRIES, keep managing open positions  <- the normal choice
+tset set TRADING_BUCKET_QQQ_0DTE=false TRADING_BUCKET_STOCK_0DTE=false TRADING_BUCKET_STOCK_W3=false TRADING_BUCKET_STOCK_W7=false
+#   (or the Trade buckets switches on /desk/settings). Stops, stall and the
+#   15:45 flatten keep running on everything open. Undo: set them back to true.
+#
+# KILL SWITCH -- halts the ENGINE ENTIRELY, INCLUDING EXITS:
+touch /opt/fastapi/KILL_SWITCH.txt            # on   (or Controls page -> kill switch)
+rm /opt/fastapi/KILL_SWITCH.txt               # off
+#   CAUTION (09-28): run_cycle.py then skips the whole cycle, so open
+#   positions get NO stop, stall or flatten while it is on. And the stock
+#   rotation (dte0_trade.py) does NOT check it: it keeps opening trades unless
+#   its bucket switches are off. Use it only when flat, together with the
+#   bucket switches.
+#
+# REMOVE A JOB completely: comment its line (back up first), e.g.
+#   crontab -l | sed '/dte0_trade.py --rotate --live/ s/^/# /' | crontab -
+
+# --- 7e. Run a job once by hand ---
+# Engine cycle now (respects market hours and the kill switch):
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T -w /app -e PYTHONPATH=/app app python scripts/run_cycle.py
+# Rotation DRY RUN (no --live: screens and logs, never sends an order):
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T -w /app -e PYTHONPATH=/app app python scripts/dte0_trade.py --max-trades 3 --symbols MU,NVDA,TSLA
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T -w /app -e PYTHONPATH=/app app python scripts/dte0_trade.py --book weekly --expiry +5 --max-trades 3 --symbols MU,NVDA,TSLA
+#   A dry run ends with the plan, or "Nothing cleared ..." and the rejections
+#   grouped by reason. It is the fastest way to see why a book is not buying.
+
+# --- 7f. Logs ---
+tail -f /var/log/qqq-trading.log        # engine + exits, every minute
+tail -f /var/log/dte0-trade.log         # single-stock 0DTE rotation
+tail -f /var/log/weekly-trade.log       # 3-day / 7-day rotation
+tail -n 20 /opt/fastapi/trading_overrides.log    # settings changes (who, what, when)

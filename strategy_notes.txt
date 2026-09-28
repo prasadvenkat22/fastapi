@@ -14367,3 +14367,22 @@ ATR OTM 24, stale quote 41, negative edge 29, budget 6, short > 0.8 ATR 4 --
 nothing cleared on weekend quotes. TRADING_PICK_MAX_TARGET_ATR stays 0.30 live:
 at 0.30 the target filter was the first one binding (78+ rejections).
 Monday's 09:00-13:30 ET runs on live 0DTE quotes are the real test.
+
+
+247. JOBS RUNBOOK; THE KILL SWITCH STOPS EXITS AND MISSES THE ROTATION  (2026-09-28)
+
+commands.txt section 7 now covers what runs trading (the crontab; the desk's
+"Start scheduler" is the retired in-app loop and must stay off while the cron
+line exists), checking it runs, recovering after a reboot (cron enabled at
+boot, every container restart: always), putting back a missing crontab line,
+pausing, running a job by hand (dry runs), and the log per job. Section 2's
+bucket lines now name the 3-day / 7-day switches and budgets.
+
+Found while writing it, NOT fixed:
+  - KILL_SWITCH.txt makes run_cycle.py skip the WHOLE cycle, so while it is
+    on, open positions get no stop, stall or flatten -- the exits run inside
+    that cycle.
+  - dte0_trade.py (single-stock 0DTE and weekly rotation) never checks the
+    kill switch, so it keeps opening trades while it is on.
+The runbook says to stop new entries with the bucket switches (exits keep
+running) and to use the kill switch only when flat.

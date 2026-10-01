@@ -14402,3 +14402,28 @@ while its last cycle is under 10 minutes old. The panel banner names the
 reason: "macro BAD (breadth): bullish entries refused, put spreads allowed" --
 which is what BAD does to the engine (bullish setups need GOOD; bearish only
 "not halted").
+
+
+249. "THE ENGINE TOOK NO POSITIONS": FOUR REASONS, ONE OF THEM A SILENT BUG  (2026-10-01)
+
+Operator, Thursday 10-01, account funded (buying power $465.38): no position
+all week. Per book:
+  - QQQ engine (on): 45 CLEAN/bull setups today with macro GOOD (e.g. 17:15
+    ITM_GRINDER), every one ending "HOLD" with no reason logged. Cause: each
+    sizing cap is a FRACTION of the $450 budget -- entry 20% = $90, tail cap
+    15% = $67.50, risk share 20% of a $27 daily-loss limit = $5.40 -- and a
+    3-wide ITM spread is ~$190 a contract, so all three round to 0 contracts,
+    and a zero size ended the cycle WITHOUT A LOG LINE. Fixed: a zero size now
+    logs "Sizing: ... sized to 0 contracts ..." with every cap's numbers. New
+    UI switch TRADING_MIN_ONE_CONTRACT (off): when the caps round to 0 but one
+    contract's structural risk fits the budget, size 1 (buying power still
+    caps). Trade-off: one stopped contract (~-$57 at -30%) exceeds the $27
+    daily-loss limit, so a loss halts the engine for the day.
+  - Single-stock 0DTE: off from 09-28 13:21 UTC to 10-01 15:21 UTC; since then
+    every run logs "No 2026-10-01 expiry exists for any of NVDA, TSLA, ...":
+    single names list Mon/Wed/Fri expiries, so Tuesdays and Thursdays have no
+    same-day contract. Not a bug.
+  - 3-day: its schedule is Mon-Wed; the switch was off from Mon 13:21 UTC and
+    came back on Thursday, when it does not run.
+  - 7-day: today's 09:50 / 13:50 ET runs (Oct 9 expiry) were dry runs: switch
+    off.

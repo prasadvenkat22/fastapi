@@ -87,6 +87,10 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_POSITION_BUDGET", "QQQ 0DTE budget", G_BUCKETS, "float", "1000",
             "Capital the engine sizes a QQQ same-day entry against (realised equity, daily-loss "
             "limit and position risk are all scaled from it).", "$", 0, 1_000_000),
+    Setting("TRADING_MIN_ONE_CONTRACT", "QQQ engine: at least 1 contract", G_BUCKETS, "bool", "false",
+            "The engine's caps are fractions of its budget (entry 20%, tail 15%, a 6% daily-loss limit), so on a "
+            "small budget they round every entry to 0. On: buy 1 contract when one fits the budget and buying "
+            "power. One stop-out can exceed the daily-loss limit and halt the day."),
     Setting("TRADING_BUCKET_STOCK_0DTE", "Single-stock 0DTE (rotation)", G_BUCKETS, "bool", "false",
             "dte0_trade.py same-day entries on single names. Off: screens and logs only."),
     Setting("TRADING_DTE0_MAX_BUDGET", "Single-stock 0DTE budget", G_BUCKETS, "float", "1500",

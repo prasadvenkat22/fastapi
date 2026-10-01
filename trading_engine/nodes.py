@@ -63,6 +63,7 @@ KILL_SWITCH_PATH = "KILL_SWITCH.txt"
 
 # Debit-spread strategy config — see execution_risk_agent below.
 POSITION_BUDGET = float(os.getenv("TRADING_POSITION_BUDGET", "1000"))
+MIN_ONE_CONTRACT = os.getenv("TRADING_MIN_ONE_CONTRACT", "false").lower() == "true"   # section 249
 
 
 def cap_to_buying_power(quantity: int, per_contract: float) -> int:
@@ -3503,7 +3504,35 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 # says what the engine MAY deploy; buying power says what it CAN.
                 # On 2026-09-25 the account held $131.68 against a $2,500 budget,
                 # so every budget-sized entry was refused before sending.
+                # SECTION 249: AT LEAST ONE CONTRACT, when the budget covers it.
+                # Every cap above is a FRACTION of the budget (entry 20%, tail
+                # 15%, risk share of a 6% daily limit), so on a small budget all
+                # of them round one contract down to zero -- 2026-10-01, $450:
+                # 45 CLEAN/bull setups, none sized above zero. With the switch on
+                # a zero becomes 1 when one contract's structural risk fits the
+                # budget; buying power still has the last word below.
+                if (quantity <= 0 and MIN_ONE_CONTRACT and structural_per_contract > 0
+                        and structural_per_contract <= POSITION_BUDGET):
+                    logger.info(
+                        "Sizing: the fractional caps round to 0, but one contract ($%.0f at "
+                        "risk) fits the $%.0f budget — sizing 1 (TRADING_MIN_ONE_CONTRACT).",
+                        structural_per_contract, POSITION_BUDGET)
+                    quantity = 1
                 quantity = cap_to_buying_power(quantity, structural_per_contract)
+                if quantity <= 0:
+                    # Section 249: a zero size used to end the cycle in silence, so a
+                    # valid setup left no trace but "HOLD". Say which cap did it.
+                    logger.info(
+                        "Sizing: %s %s sized to 0 contracts at $%.2f — entry %.0f%% of $%.0f "
+                        "equity = $%.0f; risk share $%.2f of the $%.2f daily limit vs $%.0f "
+                        "at the stop per contract; tail cap %.0f%% = $%.0f vs $%.0f per "
+                        "contract. No entry.%s",
+                        window.name, tier, net_debit, entry_fraction * 100, eq.equity,
+                        eq.equity * entry_fraction, risk_budget, eq.daily_loss_limit,
+                        risk_per_contract, MAX_POSITION_RISK_PCT * 100,
+                        MAX_POSITION_RISK_PCT * eq.equity, structural_per_contract,
+                        "" if MIN_ONE_CONTRACT else
+                        " (TRADING_MIN_ONE_CONTRACT would size 1 if one fits the budget.)")
 
                 if is_credit_window and 0 < quantity and net_debit < MIN_CREDIT:
                     logger.info(

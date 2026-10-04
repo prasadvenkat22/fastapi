@@ -45,6 +45,8 @@ would have done rather than what a second implementation of it thinks.
     python scripts/sweep.py breach      # model-free: how often a strike distance holds
     python scripts/sweep.py windows     # every window solo: which earns, which does not
     python scripts/sweep.py orb         # single-leg weekly calls on an opening-range break
+    python scripts/sweep.py stallarm    # engine stall on every debit window, armed at a peak
+    python scripts/sweep.py bandonly    # strict Bollinger-band-only entries vs the live ladder
 
 What it cannot replay, and what that costs:
 
@@ -3662,6 +3664,559 @@ def sweep_stall(sessions: dict):
     STALL_MINUTES, STALL_GIVEBACK_PCT = base_m, base_g
 
 
+def sweep_stallarm(sessions: dict):
+    """STALL_ALL_WINDOWS x STALL_ARM_PCT x stall minutes, then MORNING_PUT close-by.
+
+    Exercises the ENGINE's stall, not this file's copy. The harness's own
+    ride-stall emulation in replay_session ignores STALL_ARM_PCT, so it is
+    switched off here (this module's STALL_MINUTES = 0) and nodes.py's
+    _stalled_peak runs for both the ride branch and the new non-ride branch.
+    The first two rows check that swap: with arm 0 and all-windows off they
+    should agree.
+
+    Note that STALL_ARM_PCT reaches the RIDE stall too -- _stalled_peak is
+    shared -- so an arm row changes MORNING_DRIFT exits as well as the
+    non-riding windows'.
+
+    Run with the live TRADING_* values exported (see the docstring at the top
+    and scripts/run_sweep_prod.py); this sweep sets only the knobs it varies.
+    """
+    global STALL_MINUTES
+    # The news gates (NEWS_TURN_GATE defaults on) read news_verdicts from the
+    # database every cycle; unreachable from a replay, each read waits on a
+    # connect timeout and then returns None. Return None directly -- the same
+    # answer, without the wait. News vetoes are therefore NOT modelled.
+    N._qqq_news_verdict = lambda: None
+    N._qqq_news_open_verdict = lambda: None
+    # Per-day entry cap reads TradeHistory; not modelled (off by default).
+    N.entry_cap_reached = lambda: False
+    if os.getenv("TRADING_BUCKET_QQQ_0DTE", "false").lower() != "true":
+        print("  !! TRADING_BUCKET_QQQ_0DTE is off -- the engine will open nothing.")
+    base_windows = PB.WINDOWS
+    base = (N.STALL_MINUTES, N.STALL_GIVEBACK_PCT, N.STALL_ARM_PCT, N.STALL_ALL_WINDOWS)
+    harness_m = STALL_MINUTES
+    focus = datetime(2026, 10, 2).date()
+
+    print("")
+    print("STALL ON EVERY DEBIT WINDOW, ARMED AT A PEAK -- engine's own _stalled_peak")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}   "
+          f"windows {sorted(PB.ENABLED_WINDOWS)}")
+    print(f"  live stall {base[0]:.0f} min / {base[1]:.1f} pts   "
+          f"MORNING_PUT tiers "
+          f"{sorted(next(w for w in PB.WINDOWS if w.name == 'MORNING_PUT').entry_tiers or [])}")
+    print(f"  {'arm':44s} {'tr':>4s} {'$/day':>8s} {'worst':>8s} {'h1 $/d':>8s} "
+          f"{'h2 $/d':>8s} {'win%':>5s} {'10-02':>8s} {'STALL':>5s}  per-window $")
+
+    def row(label: str, minutes: float, arm: float, all_windows: bool,
+            close_by=None, harness_copy: bool = False):
+        global STALL_MINUTES
+        N.STALL_MINUTES, N.STALL_GIVEBACK_PCT = minutes, base[1]
+        N.STALL_ARM_PCT, N.STALL_ALL_WINDOWS = arm, all_windows
+        STALL_MINUTES = minutes if harness_copy else 0.0
+        PB.WINDOWS = tuple(
+            replace(w, close_by=close_by) if (close_by is not None and w.name == "MORNING_PUT")
+            else w for w in base_windows)
+        # Fresh equity EVERY SESSION, not compounded. A compounding account
+        # that bleeds sizes the later sessions at zero contracts (section 249),
+        # so the second half would measure the first half's losses rather than
+        # the arm.
+        trades, per_day = [], []
+        for day, bars in sessions.items():
+            _Account.equity = EQUITY
+            dt = replay_session(bars, dtime(9, 45), dtime(15, 45))
+            trades += dt
+            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in dt), "trades": len(dt)})
+        days = len(per_day)
+        tot = sum(d["pnl"] for d in per_day)
+        half = days // 2
+        h1 = sum(d["pnl"] for d in per_day[:half]) / max(half, 1)
+        h2 = sum(d["pnl"] for d in per_day[half:]) / max(days - half, 1)
+        wins = len([t for t in trades if t["pnl"] > 0])
+        f = [d["pnl"] for d in per_day if d["day"] == focus]
+        by_w = {}
+        for t in trades:
+            k = {"MORNING_DRIFT": "MD", "MORNING_PUT": "MP", "ITM_GRINDER": "IG",
+                 "AFTERNOON_CREDIT": "AC"}.get((t.get("playbook") or "?").split(":")[0], "?")
+            by_w[k] = by_w.get(k, 0.0) + t["pnl"]
+        stalls = len([t for t in trades if t["reason"] == "STALL"])
+        print(f"  {label:44s} {len(trades):4d} {tot / days:+8.2f} "
+              f"{min(d['pnl'] for d in per_day):+8.2f} {h1:+8.2f} {h2:+8.2f} "
+              f"{(wins / len(trades) * 100) if trades else 0:5.0f} "
+              f"{(f'{f[0]:+8.2f}' if f else '     n/a')} {stalls:5d}  "
+              + " ".join(f"{k}{v:+.0f}" for k, v in sorted(by_w.items())))
+
+    # SWEEP_STALLARM_BEST=<arm> [SWEEP_STALLARM_BEST_MIN=<min>] runs only the
+    # close-by section, with that arm beside the baseline.
+    if os.getenv("SWEEP_STALLARM_BEST") is None:
+        row("baseline, harness ride-stall copy", base[0], 0.0, False, harness_copy=True)
+        row("baseline, engine stall only", base[0], 0.0, False)
+        print("")
+        for minutes in (5.0, 10.0):
+            for arm in (0.0, 10.0, 20.0, 30.0, 50.0):
+                row(f"ALL_WINDOWS  arm +{arm:.0f}%  {minutes:.0f} min", minutes, arm, True)
+            print("")
+    best_arm = float(os.getenv("SWEEP_STALLARM_BEST", "nan"))
+    best_min = float(os.getenv("SWEEP_STALLARM_BEST_MIN", str(base[0])))
+    for cb in (dtime(11, 30), dtime(12, 30), dtime(13, 25)):
+        row(f"baseline       MORNING_PUT close {cb:%H:%M}", base[0], 0.0, False, close_by=cb)
+        if not math.isnan(best_arm):
+            row(f"ALL arm +{best_arm:.0f}% {best_min:.0f}m MORNING_PUT close {cb:%H:%M}",
+                best_min, best_arm, True, close_by=cb)
+
+    PB.WINDOWS = base_windows
+    N.STALL_MINUTES, N.STALL_GIVEBACK_PCT, N.STALL_ARM_PCT, N.STALL_ALL_WINDOWS = base
+    STALL_MINUTES = harness_m
+
+
+def sweep_bandonly(sessions: dict):
+    """Strict Bollinger-band-only entries (TRADING_BAND_ONLY) vs the live ladder.
+
+    Same harness posture as sweep_stallarm: the engine's own stall (this
+    file's ride-stall copy off), news gates and the entry cap stubbed to their
+    failure answers, fresh equity every session. Run with the live TRADING_*
+    values exported.
+    """
+    global STALL_MINUTES
+    N._qqq_news_verdict = lambda: None
+    N._qqq_news_open_verdict = lambda: None
+    N.entry_cap_reached = lambda: False
+    harness_m = STALL_MINUTES
+    STALL_MINUTES = 0.0
+    base = (PB.BAND_ONLY, N.RELAXED_ENTRIES_ENABLED, N.FADE_ENTRIES_ENABLED)
+    focus = datetime(2026, 10, 2).date()
+    ab = {"MORNING_DRIFT": "MD", "MORNING_PUT": "MP", "ITM_GRINDER": "IG",
+          "AFTERNOON_CREDIT": "AC"}
+
+    print("")
+    print("BAND-ONLY ENTRIES -- STRICT/RELAXED/FADE only, every window")
+    print(f"  pricing: {'CHAIN-CALIBRATED' if CHAIN_PRICING else 'MODEL'}   "
+          f"windows {sorted(PB.ENABLED_WINDOWS)}   engine stall "
+          f"{N.STALL_MINUTES:.0f} min / {N.STALL_GIVEBACK_PCT:.1f} pts")
+    print(f"  {'arm':34s} {'tr':>4s} {'$/day':>8s} {'worst':>8s} {'h1 $/d':>8s} "
+          f"{'h2 $/d':>8s} {'win%':>5s} {'10-02':>8s}  per-tier $ (n)  | 10-02 trades")
+
+    for label, band, relaxed, fade in (
+        ("baseline (live ladder)", base[0], base[1], base[2]),
+        ("BAND_ONLY, RELAXED+FADE on", True, True, True),
+        ("BAND_ONLY, RELAXED off", True, False, True),
+        ("BAND_ONLY, FADE off", True, True, False),
+    ):
+        PB.BAND_ONLY = band
+        N.RELAXED_ENTRIES_ENABLED, N.FADE_ENTRIES_ENABLED = relaxed, fade
+        trades, per_day = [], []
+        for day, bars in sessions.items():
+            _Account.equity = EQUITY
+            dt = replay_session(bars, dtime(9, 45), dtime(15, 45))
+            trades += dt
+            per_day.append({"day": day, "pnl": sum(t["pnl"] for t in dt)})
+        days = len(per_day)
+        half = days // 2
+        h1 = sum(d["pnl"] for d in per_day[:half]) / max(half, 1)
+        h2 = sum(d["pnl"] for d in per_day[half:]) / max(days - half, 1)
+        wins = len([t for t in trades if t["pnl"] > 0])
+        f = [d["pnl"] for d in per_day if d["day"] == focus]
+        by_t = {}
+        for t in trades:
+            tier = ((t.get("playbook") or "?:?").split(":") + ["?"])[1]
+            n, v = by_t.get(tier, (0, 0.0))
+            by_t[tier] = (n + 1, v + t["pnl"])
+        f_tr = [f"{ab.get(t['playbook'].split(':')[0], '?')}:{t['playbook'].split(':')[-1]} "
+                f"{t['ts']:%H:%M}-{t['exit_ts']:%H:%M} {t['reason']} {t['pnl']:+.0f}"
+                for t in trades if t["ts"].date() == focus]
+        print(f"  {label:34s} {len(trades):4d} {sum(d['pnl'] for d in per_day) / days:+8.2f} "
+              f"{min(d['pnl'] for d in per_day):+8.2f} {h1:+8.2f} {h2:+8.2f} "
+              f"{(wins / len(trades) * 100) if trades else 0:5.0f} "
+              f"{(f'{f[0]:+8.2f}' if f else '     n/a')}  "
+              + " ".join(f"{k}{v:+.0f}({n})" for k, (n, v) in sorted(by_t.items()))
+              + "  | " + "; ".join(f_tr))
+
+    PB.BAND_ONLY, N.RELAXED_ENTRIES_ENABLED, N.FADE_ENTRIES_ENABLED = base
+    STALL_MINUTES = harness_m
+
+
+# ---------------------------------------------------------------------------
+# PARALLEL CONFIG EVALUATION -- cost check, random entry, defaults search.
+#
+# One evaluator, _eval_cfg, applies a whole configuration onto the engine's
+# module globals, replays a slice of the sessions with fresh equity each
+# session, and returns per-day and per-trade results. Workers are spawned
+# processes; each loads the bars once from a pickle the parent writes, so all
+# arms in a run see identical data. The harness's own ride-stall copy is off
+# (engine's _stalled_peak only), the news gates and the entry cap are stubbed
+# to their failure answers, as in sweep_stallarm.
+# ---------------------------------------------------------------------------
+_CACHE_PATH = os.path.join(os.environ.get("TEMP", "/tmp"), "sweep_cfg_cache.pkl")
+_W = {}          # per-worker state: sessions, originals
+
+
+def _cfg_worker_init():
+    import pickle
+    global _HISTORY, STALL_MINUTES
+    _patch_engine()
+    # Under spawn this module runs as __mp_main__, and sys.modules[__name__]
+    # is NOT the dict these functions read their globals from -- so the
+    # pricing and tick patches above miss this file's own _mark and _close.
+    # Measured: the harness marked at broker.py's model price while the
+    # engine priced from the chain. Copy the patched names in explicitly.
+    g = globals()
+    g["fill_price"] = N.fill_price
+    g["estimate_spread_value"] = N.estimate_spread_value
+    g["estimate_credit_value"] = N.estimate_credit_value
+    with open(_CACHE_PATH, "rb") as fh:
+        hist, vix = pickle.load(fh)
+    _HISTORY = hist
+    _VIX_BY_DAY.clear()
+    _VIX_BY_DAY.update(vix)
+    STALL_MINUTES = 0.0
+    N._qqq_news_verdict = lambda: None
+    N._qqq_news_open_verdict = lambda: None
+    N.entry_cap_reached = lambda: False
+    import logging
+    logging.disable(logging.CRITICAL)
+    _W["sessions"] = sorted(
+        ((d, g) for d, g in hist.groupby(hist.index.date) if len(g) > 40),
+        key=lambda x: x[0])
+    _W["fill"] = N.fill_price                  # ticked bid/ask fill
+    _W["agent"] = N.execution_risk_agent
+    _W["close"] = _close
+    _W["windows"] = PB.ENABLED_WINDOWS
+    _W["globals"] = {k: getattr(N, k) for k in (
+        "CLEAN_ENTRIES_ENABLED", "ZONE_ENTRIES_ENABLED", "RELAXED_ENTRIES_ENABLED",
+        "FADE_ENTRIES_ENABLED", "REJECT_ENTRIES_ENABLED", "STOP_LOSS_PCT",
+        "STALL_ARM_PCT", "STALL_ALL_WINDOWS", "STALL_MINUTES")}
+    _W["band"] = PB.BAND_ONLY
+
+
+def _mid_fill(model_value: float, side: str) -> float:
+    return round(max(model_value, 0.0), 4)
+
+
+def _mid_value(strategy, long_strike, short_strike, spot) -> float:
+    if is_credit(strategy):
+        # estimate_credit_value takes (short, long)
+        return estimate_credit_value(strategy, short_strike, long_strike, spot)
+    return estimate_spread_value(strategy, long_strike, short_strike, spot)
+
+
+def _close_costed(entry: dict, position, spot: float, ts, reason: str) -> dict:
+    """_close, plus the execution cost the trade paid against the mid."""
+    out = _W["close"](entry, position, spot, ts, reason)
+    try:
+        exit_mid = _mid_value(position.strategy, position.long_strike,
+                              position.short_strike, spot)
+        saved = _Clock.now
+        _Clock.now = entry["ts"].to_pydatetime()
+        entry_spot = float(_HISTORY.loc[entry["ts"], "Close"])
+        entry_mid = _mid_value(position.strategy, position.long_strike,
+                               position.short_strike, entry_spot)
+        _Clock.now = saved
+        if is_credit(entry["strategy"]):
+            per = (entry_mid - entry["debit"]) + (out["exit_value"] - exit_mid)
+        else:
+            per = (entry["debit"] - entry_mid) + (exit_mid - out["exit_value"])
+        per += SLIPPAGE_ROUNDTRIP
+        out["exec_cost"] = per * entry["qty"] * 100
+        out["exec_cost_pct"] = per / entry["debit"] * 100 if entry["debit"] else 0.0
+    except Exception:
+        out["exec_cost"] = float("nan")
+        out["exec_cost_pct"] = float("nan")
+    return out
+
+
+_BULL_STATE = {"macd_signal": "BULLISH", "sma_trend": "ABOVE_SMA",
+               "bollinger_zone": "UPPER_BAND", "rsi_zone": "OVERBOUGHT",
+               "bollinger_pierce": None, "market_sentiment": "GOOD"}
+_BEAR_STATE = {"macd_signal": "BEARISH", "sma_trend": "BELOW_SMA",
+               "bollinger_zone": "UPPER_BAND", "rsi_zone": "OVERBOUGHT",
+               "bollinger_pierce": None}
+_FLAT_STATE = {"bollinger_zone": "NORMAL", "bollinger_pierce": None}
+
+
+def _random_agent(p: float, rng):
+    """Replace the tier signal with a coin: STRICT in a random allowed direction.
+
+    Only while flat. BAND_ONLY is forced on so every window accepts STRICT and
+    every other tier is zeroed; the neutral state below kills STRICT, RELAXED
+    and FADE on the bars the coin says no. An open position sees the real
+    state, so exits are untouched.
+    """
+    orig = _W["agent"]
+
+    def agent(state, broker=None):
+        if broker is not None and broker.get_open_position() is None:
+            t = _Clock.now.time()
+            dirs = set()
+            for w in PB.WINDOWS:
+                if w.start <= t < w.end and w.name in PB.ENABLED_WINDOWS:
+                    if not w.bearish_only:
+                        dirs.add(True)
+                    if not w.bullish_only:
+                        dirs.add(False)
+            state = dict(state)
+            if dirs and rng.random() < p:
+                bull = rng.choice(sorted(dirs))
+                state.update(_BULL_STATE if bull else _BEAR_STATE)
+            else:
+                state.update(_FLAT_STATE)
+        return orig(state, broker=broker)
+    return agent
+
+
+def _eval_cfg(cfg: dict) -> dict:
+    """Apply cfg, replay sessions[lo:hi], return metrics. Runs in a worker."""
+    import random as _random
+    global SLIPPAGE_ROUNDTRIP, _close
+    g = dict(_W["globals"])
+    g.update({
+        "CLEAN_ENTRIES_ENABLED": cfg.get("clean", g["CLEAN_ENTRIES_ENABLED"]),
+        "ZONE_ENTRIES_ENABLED": cfg.get("zone", g["ZONE_ENTRIES_ENABLED"]),
+        "RELAXED_ENTRIES_ENABLED": cfg.get("relaxed", g["RELAXED_ENTRIES_ENABLED"]),
+        "FADE_ENTRIES_ENABLED": cfg.get("fade", g["FADE_ENTRIES_ENABLED"]),
+        "REJECT_ENTRIES_ENABLED": cfg.get("reject", g["REJECT_ENTRIES_ENABLED"]),
+        "STOP_LOSS_PCT": cfg.get("stop", g["STOP_LOSS_PCT"]),
+        "STALL_ARM_PCT": cfg.get("arm", g["STALL_ARM_PCT"]),
+        "STALL_ALL_WINDOWS": cfg.get("allwin", g["STALL_ALL_WINDOWS"]),
+    })
+    for k, v in g.items():
+        setattr(N, k, v)
+    PB.ENABLED_WINDOWS = frozenset(cfg.get("windows", _W["windows"]))
+    PB.BAND_ONLY = cfg.get("band", _W["band"])
+
+    mid = cfg.get("mid", False)
+    f = _mid_fill if mid else _W["fill"]
+    broker_mod.fill_price = N.fill_price = f
+    globals()["fill_price"] = f
+    SLIPPAGE_ROUNDTRIP = 0.0 if mid else 0.10
+    _close = _close_costed
+
+    if cfg.get("random_p") is not None:
+        rng = _random.Random(cfg.get("seed", 0))
+        PB.BAND_ONLY = True
+        N.FADE_ENTRIES_ENABLED = False
+        N.execution_risk_agent = _random_agent(cfg["random_p"], rng)
+    else:
+        N.execution_risk_agent = _W["agent"]
+
+    lo, hi = cfg.get("span", (0, 60))
+    trades, per_day = [], []
+    for day, bars in _W["sessions"][lo:hi]:
+        _Account.equity = EQUITY
+        dt = replay_session(bars, dtime(9, 45), dtime(15, 45))
+        trades += dt
+        per_day.append((day, sum(t["pnl"] for t in dt)))
+    N.execution_risk_agent = _W["agent"]
+    _close = _W["close"]
+    if os.getenv("SWEEP_DEBUG_TRADES"):
+        for t in trades:
+            print("DBG", cfg, t["playbook"], t["ts"], t["exit_ts"], t["reason"],
+                  t["pnl"], t["debit"], t["qty"], file=sys.stderr, flush=True)
+    days = max(len(per_day), 1)
+    half = len(per_day) // 2
+    focus = [p for d, p in per_day if str(d) == "2026-10-02"]
+    tiers = {}
+    for t in trades:
+        k = (t.get("playbook") or "?:?").split(":")[-1]
+        n, v = tiers.get(k, (0, 0.0))
+        tiers[k] = (n + 1, v + t["pnl"])
+    costs = [t["exec_cost"] for t in trades if not math.isnan(t.get("exec_cost", float("nan")))]
+    cpct = [t["exec_cost_pct"] for t in trades
+            if not math.isnan(t.get("exec_cost_pct", float("nan")))]
+    return {
+        "cfg": cfg, "trades": len(trades),
+        "per_day": sum(p for _, p in per_day) / days,
+        "worst": min((p for _, p in per_day), default=0.0),
+        "h1": sum(p for _, p in per_day[:half]) / max(half, 1),
+        "h2": sum(p for _, p in per_day[half:]) / max(len(per_day) - half, 1),
+        "win": (len([t for t in trades if t["pnl"] > 0]) / len(trades) * 100) if trades else 0.0,
+        "d1002": focus[0] if focus else None,
+        "tiers": tiers,
+        "cost": (sum(costs) / len(costs)) if costs else 0.0,
+        "cost_pct": (sum(cpct) / len(cpct)) if cpct else 0.0,
+        "first_day": str(per_day[0][0]) if per_day else "", "last_day": str(per_day[-1][0]) if per_day else "",
+    }
+
+
+def _pool_run(cfgs: list) -> list:
+    """Evaluate cfgs across worker processes, preserving order."""
+    import multiprocessing as mp
+    n = int(os.getenv("SWEEP_WORKERS", "10"))
+    with mp.get_context("spawn").Pool(n, initializer=_cfg_worker_init) as pool:
+        return pool.map(_eval_cfg, cfgs, chunksize=1)
+
+
+def _write_cache():
+    import pickle
+    with open(_CACHE_PATH, "wb") as fh:
+        pickle.dump((_HISTORY, dict(_VIX_BY_DAY)), fh)
+
+
+def _fmt(label: str, r: dict) -> str:
+    d = r["d1002"]
+    return (f"  {label:44s} {r['trades']:4d} {r['per_day']:+8.2f} {r['worst']:+8.2f} "
+            f"{r['h1']:+8.2f} {r['h2']:+8.2f} {r['win']:5.0f} "
+            f"{(f'{d:+8.2f}' if d is not None else '     n/a')}")
+
+
+_HDR = (f"  {'arm':44s} {'tr':>4s} {'$/day':>8s} {'worst':>8s} {'h1 $/d':>8s} "
+        f"{'h2 $/d':>8s} {'win%':>5s} {'10-02':>8s}")
+_BAND = {"band": True, "relaxed": True, "fade": True}
+
+
+def sweep_costcheck(sessions: dict):
+    """A. How much of the loss is execution cost? Bid/ask fills vs mid fills."""
+    _write_cache()
+    arms = [("baseline  bid/ask", {}), ("baseline  mid", {"mid": True}),
+            ("band-only bid/ask", dict(_BAND)), ("band-only mid", dict(_BAND, mid=True))]
+    res = _pool_run([c for _, c in arms])
+    print("\nCOST CHECK -- fills at bid/ask (current) vs at the mid, entry and exit")
+    print(_HDR + f" {'cost $/rt':>9s} {'cost %deb':>9s}")
+    for (label, _), r in zip(arms, res):
+        print(_fmt(label, r) + f" {r['cost']:9.2f} {r['cost_pct']:9.1f}")
+
+
+def sweep_randomentry(sessions: dict):
+    """B. Do the entry rules beat a coin? Same everything, random STRICT entries."""
+    _write_cache()
+    ps = [float(x) for x in os.getenv("SWEEP_RANDOM_P", "0.04").split(",")]
+    seeds = int(os.getenv("SWEEP_RANDOM_SEEDS", "20"))
+    cfgs = [{"random_p": p, "seed": s} for p in ps for s in range(seeds)]
+    res = _pool_run(cfgs)
+    print("\nRANDOM ENTRY -- coin-flip STRICT entries, live windows/exits/costs")
+    for p in ps:
+        rs = sorted([r for r in res if r["cfg"]["random_p"] == p], key=lambda r: r["per_day"])
+        vals = [r["per_day"] for r in rs]
+        n = len(vals)
+        q = lambda f: vals[min(int(round(f * (n - 1))), n - 1)]
+        print(f"  p={p:.3f}  seeds {n}  trades mean {sum(r['trades'] for r in rs) / n:6.1f}  "
+              f"$/day mean {sum(vals) / n:+8.2f}  p5 {q(0.05):+8.2f}  p50 {q(0.5):+8.2f}  "
+              f"p95 {q(0.95):+8.2f}  worst-day mean {sum(r['worst'] for r in rs) / n:+8.2f}  "
+              f"h1 {sum(r['h1'] for r in rs) / n:+7.2f} h2 {sum(r['h2'] for r in rs) / n:+7.2f}  "
+              f"win% {sum(r['win'] for r in rs) / n:4.0f}")
+        print("    all seeds $/day: " + " ".join(f"{v:+.0f}" for v in vals))
+
+
+_ALL_WINDOWS = ("MORNING_DRIFT", "MORNING_PUT", "ITM_GRINDER", "AFTERNOON_CREDIT")
+
+
+def _cd_space():
+    """(name, values) for coordinate descent. Window flags are separate coords."""
+    space = [(f"win:{w}", (True, False)) for w in _ALL_WINDOWS]
+    space += [("band", (False, True))]
+    space += [(k, (True, False)) for k in ("clean", "zone", "relaxed", "fade", "reject")]
+    space += [("stop", (-15.0, -20.0, -30.0))]
+    space += [("stall", ((False, 0.0), (False, 10.0), (False, 30.0),
+                         (True, 0.0), (True, 10.0), (True, 30.0)))]
+    return space
+
+
+def _point_to_cfg(pt: dict, span) -> dict:
+    return {"windows": [w for w in _ALL_WINDOWS if pt[f"win:{w}"]],
+            "band": pt["band"], "clean": pt["clean"], "zone": pt["zone"],
+            "relaxed": pt["relaxed"], "fade": pt["fade"], "reject": pt["reject"],
+            "stop": pt["stop"], "allwin": pt["stall"][0], "arm": pt["stall"][1],
+            "span": span}
+
+
+def _pt_key(pt: dict) -> tuple:
+    return tuple(sorted(pt.items()))
+
+
+def sweep_cdsearch(sessions: dict):
+    """C. Steepest-ascent search over defaults, SELECTED ON THE FIRST 30 SESSIONS ONLY.
+
+    From each start, every single-coordinate move is scored at once (one
+    batch across the pool, all starts together), the best improving move is
+    taken, and the step repeats until no move improves or MAX_STEPS. Then the
+    top 3 points seen and the live config are scored ONCE on sessions 31-60.
+    """
+    import multiprocessing as mp
+    _write_cache()
+    live_windows = set(PB.ENABLED_WINDOWS)
+    baseline = {f"win:{w}": w in live_windows for w in _ALL_WINDOWS}
+    baseline.update(band=PB.BAND_ONLY, clean=N.CLEAN_ENTRIES_ENABLED,
+                    zone=N.ZONE_ENTRIES_ENABLED, relaxed=N.RELAXED_ENTRIES_ENABLED,
+                    fade=N.FADE_ENTRIES_ENABLED, reject=N.REJECT_ENTRIES_ENABLED,
+                    stop=N.STOP_LOSS_PCT, stall=(N.STALL_ALL_WINDOWS, N.STALL_ARM_PCT))
+    starts = {"live": dict(baseline),
+              "band-only": dict(baseline, band=True, relaxed=True, fade=True),
+              "no mornings": dict(baseline, **{"win:MORNING_DRIFT": False,
+                                               "win:MORNING_PUT": False})}
+    TRAIN, TEST = (0, 30), (30, 60)
+    max_steps = int(os.getenv("SWEEP_CD_STEPS", "6"))
+    space = _cd_space()
+    seen = {}
+    n = int(os.getenv("SWEEP_WORKERS", "11"))
+    pool = mp.get_context("spawn").Pool(n, initializer=_cfg_worker_init)
+
+    def score(pts):
+        uniq = {}
+        for p in pts:
+            if _pt_key(p) not in seen:
+                uniq[_pt_key(p)] = p
+        if uniq:
+            res = pool.map(_eval_cfg, [_point_to_cfg(p, TRAIN) for p in uniq.values()],
+                           chunksize=1)
+            for k, r in zip(uniq, res):
+                seen[k] = r
+        return [seen[_pt_key(p)] for p in pts]
+
+    cur = {k: dict(v) for k, v in starts.items()}
+    best = dict(zip(cur, (r["per_day"] for r in score(list(cur.values())))))
+    active = set(cur)
+    for step in range(max_steps):
+        if not active:
+            break
+        moves = []
+        for sname in sorted(active):
+            for name, values in space:
+                for v in values:
+                    if cur[sname][name] != v:
+                        moves.append((sname, dict(cur[sname], **{name: v})))
+        res = score([m for _, m in moves])
+        for sname in sorted(active):
+            cand = [(r["per_day"], m) for (sn, m), r in zip(moves, res) if sn == sname]
+            top_v, top_m = max(cand, key=lambda x: x[0])
+            if top_v > best[sname] + 1e-9:
+                best[sname], cur[sname] = top_v, top_m
+            else:
+                active.discard(sname)
+        print(f"  step {step + 1}: " + "  ".join(f"{k} {best[k]:+.2f}" for k in sorted(best))
+              + f"   ({len(seen)} configs scored)", flush=True)
+
+    ranked = sorted(seen.items(), key=lambda kv: kv[1]["per_day"], reverse=True)
+    test_pts = [dict(k) for k, _ in ranked[:3]] + [baseline]
+    test = pool.map(_eval_cfg, [_point_to_cfg(p, TEST) for p in test_pts], chunksize=1)
+    pool.close()
+    pool.join()
+    print(f"\nDEFAULTS SEARCH -- {len(seen)} configs scored on sessions 1-30 "
+          f"({ranked[0][1]['first_day']}..{ranked[0][1]['last_day']}); "
+          f"sessions 31-60 ({test[0]['first_day']}..{test[0]['last_day']}) scored once")
+    print(f"  {'config':8s} {'train tr':>8s} {'train $/d':>9s} {'train worst':>11s} "
+          f"{'test tr':>7s} {'test $/d':>9s} {'test worst':>10s} {'test win%':>9s}")
+    for i, (p, te) in enumerate(zip(test_pts, test)):
+        tr = seen[_pt_key(p)]
+        label = f"top {i + 1}" if i < 3 else "live"
+        print(f"  {label:8s} {tr['trades']:8d} {tr['per_day']:+9.2f} {tr['worst']:+11.2f} "
+              f"{te['trades']:7d} {te['per_day']:+9.2f} {te['worst']:+10.2f} {te['win']:9.0f}")
+        print(f"    {_describe_pt(p)}")
+    print("  trade nothing: +0.00 train, +0.00 test")
+    pos = sum(1 for _, r in ranked if r["per_day"] > 0)
+    print(f"  configs positive on train: {pos} of {len(ranked)}")
+
+
+def _describe_pt(p: dict) -> str:
+    wins = ",".join(w for w in _ALL_WINDOWS if p[f"win:{w}"]) or "(none)"
+    return (f"TRADING_ENABLED_WINDOWS={wins} TRADING_BAND_ONLY={str(p['band']).lower()} "
+            f"TRADING_CLEAN_ENTRIES={str(p['clean']).lower()} "
+            f"TRADING_ZONE_ENTRIES={str(p['zone']).lower()} "
+            f"TRADING_RELAXED_ENTRIES={str(p['relaxed']).lower()} "
+            f"TRADING_FADE_ENTRIES={str(p['fade']).lower()} "
+            f"TRADING_REJECT_ENTRIES={str(p['reject']).lower()} "
+            f"TRADING_STOP_LOSS_PCT={p['stop']:.0f} "
+            f"TRADING_STALL_ALL_WINDOWS={str(p['stall'][0]).lower()} "
+            f"TRADING_STALL_ARM_PCT={p['stall'][1]:.0f}")
+
+
 def sweep_breach(sessions: dict):
     """How often a short strike survives -- from bars alone, no pricing.
 
@@ -4033,6 +4588,16 @@ def main():
         sweep_straddle(sessions)
     if which in ("stall", "all"):
         sweep_stall(sessions)
+    if which == "stallarm":
+        sweep_stallarm(sessions)
+    if which == "bandonly":
+        sweep_bandonly(sessions)
+    if which == "costcheck":
+        sweep_costcheck(sessions)
+    if which == "randomentry":
+        sweep_randomentry(sessions)
+    if which == "cdsearch":
+        sweep_cdsearch(sessions)
     if which in ("breach", "all"):
         sweep_breach(sessions)
     if which in ("credit", "all"):

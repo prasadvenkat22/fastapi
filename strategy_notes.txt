@@ -14467,3 +14467,22 @@ New settings, all default to today's behaviour:
   config): every arm -75..-104 $/day; baseline -78 to -82, arm 10/5m -74.89
   (worst -430), arm 0 clearly worse (-103.50). Close-by later: no reliable
   change. None of these settings changes the sign. Band-only replay pending.
+
+
+251. QQQ ENGINE: NO CONFIGURATION BEATS FLAT OUT OF SAMPLE  (2026-10-04)
+
+60 sessions 07-10..10-02, chain-priced, live config, engine's own stall.
+sweep.py modes: stallarm, bandonly, costcheck, randomentry, cdsearch.
+  COST: harness fills at bid/ask (+$0.10 slippage + commission). Round trip
+  ~$23 = 7.4% of the debit. Baseline -81.88/day at bid/ask, -30.04 at mid;
+  band-only -40.33 vs -13.55. Cost is ~60-65% of the loss; still negative
+  at mid.
+  RANDOM ENTRY (coin-flip, 20 seeds): p=0.16, ~149 trades, mean -69.1
+  (5th..95th -97.9..-26.6). Baseline sits ~30th percentile; band-only
+  (69 trades) sits ~5th-10th percentile of the 60-80 trade random arms.
+  The entry tiers do not beat chance.
+  DEFAULTS SEARCH (164 configs, chosen on sessions 1-30): best was
+  AFTERNOON_CREDIT only, ZONE off, 7 trades, +0.74/day in sample; out of
+  sample -12.57/day, worst -358. Trade nothing = 0. Best default: the QQQ
+  bucket OFF. TRADING_STOP_LOSS_PCT reaches ITM_GRINDER only (MORNING_PUT's
+  -20 is hardcoded; MORNING_DRIFT reads TRADING_MORNING_STOP_PCT).

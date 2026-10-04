@@ -91,11 +91,27 @@ REGISTRY: tuple[Setting, ...] = (
             "The engine's caps are fractions of its budget (entry 20%, tail 15%, a 6% daily-loss limit), so on a "
             "small budget they round every entry to 0. On: buy 1 contract when one fits the budget and buying "
             "power. One stop-out can exceed the daily-loss limit and halt the day."),
+    Setting("TRADING_MAX_ENTRIES_QQQ_0DTE", "QQQ 0DTE: entries per day", G_BUCKETS, "int", "0",
+            "Most entries the engine makes in one session. 0 = no cap.", "", 0, 50),
+    Setting("TRADING_CLEAN_ENTRIES", "QQQ entry rule: CLEAN", G_BUCKETS, "bool", "true",
+            "Trend stack (20-SMA, 9 EMA, VWAP, RSI band). Does not use the Bollinger bands."),
+    Setting("TRADING_ZONE_ENTRIES", "QQQ entry rule: ZONE", G_BUCKETS, "bool", "false",
+            "Pullback of 0.15-0.60% off the session high/low with VWAP agreeing. Does not use the "
+            "Bollinger bands."),
+    Setting("TRADING_REJECT_ENTRIES", "QQQ entry rule: REJECT", G_BUCKETS, "bool", "true",
+            "Puts after a failed test of the 50 EMA. Does not use the Bollinger bands."),
+    Setting("TRADING_RELAXED_ENTRIES", "QQQ entry rule: RELAXED", G_BUCKETS, "bool", "true",
+            "Price outside the 20-SMA Bollinger band with MACD and trend agreeing."),
+    Setting("TRADING_FADE_ENTRIES", "QQQ entry rule: FADE", G_BUCKETS, "bool", "false",
+            "Puts when price pierces the upper Bollinger band. STRICT (band + RSI) is always on."),
     Setting("TRADING_BUCKET_STOCK_0DTE", "Single-stock 0DTE (rotation)", G_BUCKETS, "bool", "false",
             "dte0_trade.py same-day entries on single names. Off: screens and logs only."),
     Setting("TRADING_DTE0_MAX_BUDGET", "Single-stock 0DTE budget", G_BUCKETS, "float", "1500",
             "Total the same-day rotation commits per run, split across its max trades.",
             "$", 0, 1_000_000),
+    Setting("TRADING_MAX_ENTRIES_STOCK_0DTE", "Single-stock 0DTE: entries per day", G_BUCKETS, "int", "0",
+            "Most new spreads this bucket opens in one session (manual spreads on its names count). "
+            "0 = no cap; --max-trades still limits each run.", "", 0, 50),
     # Section 245: the weekly book is two buckets. A run's type is the expiry it
     # buys (5+ days out = 7-day); a position keeps the type it was bought as.
     Setting("TRADING_BUCKET_STOCK_W3", "Single-stock 3-day (rotation)", G_BUCKETS, "bool", "false",
@@ -103,11 +119,17 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_W3_MAX_BUDGET", "Single-stock 3-day budget", G_BUCKETS, "float", "",
             "Cap on the 3-day bucket (minus its open spreads, never above buying power). "
             "Blank = the old shared weekly budget.", "$", 0, 1_000_000, allow_blank=True),
+    Setting("TRADING_MAX_ENTRIES_STOCK_W3", "Single-stock 3-day: entries per day", G_BUCKETS, "int", "0",
+            "Most new spreads this bucket opens in one session (manual spreads on its names count). "
+            "0 = no cap; --max-trades still limits each run.", "", 0, 50),
     Setting("TRADING_BUCKET_STOCK_W7", "Single-stock 7-day (rotation)", G_BUCKETS, "bool", "false",
             "Weekly-book runs buying an expiry 5+ days out (the Thu-Fri schedule). Off: screens and logs only."),
     Setting("TRADING_W7_MAX_BUDGET", "Single-stock 7-day budget", G_BUCKETS, "float", "",
             "Cap on the 7-day bucket (minus its open spreads, never above buying power). "
             "Blank = the old shared weekly budget.", "$", 0, 1_000_000, allow_blank=True),
+    Setting("TRADING_MAX_ENTRIES_STOCK_W7", "Single-stock 7-day: entries per day", G_BUCKETS, "int", "0",
+            "Most new spreads this bucket opens in one session (manual spreads on its names count). "
+            "0 = no cap; --max-trades still limits each run.", "", 0, 50),
     # --- Section 241: where in the range / which side of the midline -------
     Setting("TRADING_WEEKRANGE_GUARD", "Week-range guard", G_STRUCT, "bool", "false",
             "All three buckets: no call spread (bullish) near the week's high, no put spread "
@@ -138,6 +160,15 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_STALL_GIVEBACK_PCT", "Stall give-back (morning debit)", G_ENGINE, "float", "0",
             "Return points below the peak that the stall needs. 0 disables. Also the orphan "
             "give-back when TRADING_ORPHAN_STALL_GIVEBACK_PCT is unset.", "pts", 0, 200),
+    Setting("TRADING_STALL_ARM_PCT", "Stall starts watching at", G_ENGINE, "float", "0",
+            "The engine's stall only watches once the peak gain (on the sale price) reaches this. "
+            "0 = from any gain.", "%", 0, 500),
+    Setting("TRADING_STALL_ALL_WINDOWS", "Stall in every debit window", G_ENGINE, "bool", "false",
+            "Run the stall on every engine debit spread, not only the windows that ride. Covers "
+            "MORNING_PUT and ITM_GRINDER, which otherwise have nothing between the target and the "
+            "close-by clock."),
+    Setting("TRADING_MORNING_PUT_CLOSE_BY", "MORNING_PUT closes at", G_ENGINE, "time", "11:30",
+            "MORNING_PUT sells whatever it shows at this time so the next window can trade."),
     Setting("TRADING_STALL_ON_CREDIT", "Stall on the credit trade", G_ENGINE, "bool", "false",
             "The afternoon credit spread exits on the stall instead of booking at its take-profit."),
     Setting("TRADING_CREDIT_STALL_ARM", "Credit stall waits for the target", G_ENGINE, "bool", "true",

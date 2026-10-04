@@ -1810,6 +1810,14 @@ def open_structures(engine_symbols: "set | None" = None) -> list:
             consumed[sym] = consumed.get(sym, 0) + rec["qty"]
     leftover = {}
     for sym, n in (held or {}).items():
+        # THE ENGINE'S LEGS ARE NOT LEFTOVERS. The two loops above skip them,
+        # which leaves them unconsumed, and this loop then re-paired them as an
+        # inferred orphan and ran the 0DTE ladder on the engine's own position.
+        # Observed 2026-10-02: both QQQ engine trades (756/752, 752/749) were
+        # managed by this ladder alongside the engine's, and the second was
+        # closed by the ORPHAN stop, not the engine's.
+        if sym in engine_symbols:
+            continue
         free = abs(n) - consumed.get(sym, 0)
         if free <= 0:
             continue

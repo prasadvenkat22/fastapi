@@ -24,7 +24,7 @@ from schemas_pgrs.trading_schema import MarketSentimentOutput
 from . import tradier_orders
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import (MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today,
-                     current_equity, win_pause_active)
+                     current_equity, entry_cap_reached, win_pause_active)
 from .macro_calendar import blackout_active as event_blackout_active, describe as describe_event
 from .playbook import (
     CREDIT, close_deadline, credit_strikes_for, final_take_profit_for,
@@ -633,6 +633,30 @@ RIDE_GIVEBACK_LATE = float(os.getenv("TRADING_RIDE_GIVEBACK_LATE", "0"))
 # Zero on either knob disables it.
 STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
 STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
+# The peak gain (on the sale price) the stall waits for before it watches at
+# all. 0 = any gain, the behaviour before this existed.
+STALL_ARM_PCT = float(os.getenv("TRADING_STALL_ARM_PCT", "0") or 0)
+# The stall used to run only in windows that ride. A non-riding debit window
+# (MORNING_PUT, ITM_GRINDER) had nothing between its target and the handoff:
+# on 2026-10-02 the 756/752 put sat between +17% and +28% for twenty minutes
+# under a +30% target and was closed by the 11:30 clock. On = the same stall
+# runs on every debit spread the engine holds. Off by default.
+STALL_ALL_WINDOWS = os.getenv("TRADING_STALL_ALL_WINDOWS", "false").lower() == "true"
+
+
+def _stalled_peak(position, peak_return: float, return_pct: float) -> "float | None":
+    """Minutes since the peak if the stall should book now, else None."""
+    if STALL_MINUTES <= 0 or STALL_GIVEBACK_PCT <= 0:
+        return None
+    if peak_return <= 0 or peak_return < STALL_ARM_PCT:
+        return None
+    peak_at = getattr(position, "peak_at", None)
+    if peak_at is None:
+        return None
+    quiet_min = (datetime.now(timezone.utc) - peak_at).total_seconds() / 60.0
+    if quiet_min >= STALL_MINUTES and return_pct <= peak_return - STALL_GIVEBACK_PCT:
+        return quiet_min
+    return None
 
 # THE SAME STALL, ON THE AFTERNOON CREDIT TRADE.
 #
@@ -2459,19 +2483,14 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 if position.entry_net_debit > 0 else 0.0
             )
             ceiling_pct = RIDE_CEILING_FRACTION * max_return_pct
-            stalled = False
-            if STALL_MINUTES > 0 and STALL_GIVEBACK_PCT > 0:
-                peak_at = getattr(position, "peak_at", None)
-                if peak_at is not None and peak_return > 0:
-                    quiet_min = (datetime.now(timezone.utc) - peak_at).total_seconds() / 60.0
-                    stalled = (quiet_min >= STALL_MINUTES
-                               and return_pct <= peak_return - STALL_GIVEBACK_PCT)
-                    if stalled:
-                        logger.info(
-                            "Stalled peak: %s peaked %+.1f%% and has made no new high "
-                            "for %.0f min, now %+.1f%% — booking.",
-                            position.strategy, peak_return, quiet_min, return_pct,
-                        )
+            quiet_min = _stalled_peak(position, peak_return, return_pct)
+            stalled = quiet_min is not None
+            if stalled:
+                logger.info(
+                    "Stalled peak: %s peaked %+.1f%% and has made no new high "
+                    "for %.0f min, now %+.1f%% — booking.",
+                    position.strategy, peak_return, quiet_min, return_pct,
+                )
             if stalled:
                 broker.sell_all(position.underlying)
                 action, exit_reason = "SELL_ALL", "STALL"
@@ -2532,6 +2551,17 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     "Riding %s at %+.1f%% to the force close (stop %+.0f%%).",
                     position.strategy, return_pct, stop_pct,
                 )
+        # Stall on a window that does not ride. See STALL_ALL_WINDOWS.
+        elif (STALL_ALL_WINDOWS and not is_credit_pos
+              and _stalled_peak(position, peak_return, return_pct) is not None):
+            logger.info(
+                "Stalled peak: %s peaked %+.1f%% (watching from %+.0f%%) and has made no "
+                "new high for %.0f min, now %+.1f%% — booking.",
+                position.strategy, peak_return, STALL_ARM_PCT,
+                _stalled_peak(position, peak_return, return_pct), return_pct,
+            )
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "STALL"
         # Rule A: Take Profit
         elif return_pct >= tp_pct:
             # Target reached. With trailing enabled this arms rather than
@@ -2915,15 +2945,18 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # equity.WIN_COOLDOWN_MINUTES. Checked before the directional cooldown
         # because it subsumes it: if no entry may open at all, which side just
         # lost is not a question worth asking.
-        if win_pause_active():
+        # FADE and REJECT are bear-only tiers and were missing from all three
+        # blocks below, so a win pause, a bearish cooldown or the bearish start
+        # time left them free to open a put spread.
+        if win_pause_active() or entry_cap_reached():
             strict_bull = relaxed_bull = momentum_bull = trend_bull = clean_bull = False
             strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
-            zone_bull = zone_bear = False
+            zone_bull = zone_bear = fade_bear = reject_bear = False
 
         cooling = blocked_direction()
         if cooling == "bearish":
             strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
-            zone_bear = False
+            zone_bear = fade_bear = reject_bear = False
         elif cooling == "bullish":
             strict_bull = relaxed_bull = momentum_bull = trend_bull = clean_bull = False
             zone_bull = False
@@ -2932,7 +2965,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         # the signals say. Long setups are unaffected.
         if _is_before_bearish_start():
             strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
-            zone_bear = False
+            zone_bear = fade_bear = reject_bear = False
 
         if halt:
             tier, bullish = None, False

@@ -14427,3 +14427,31 @@ all week. Per book:
     came back on Thursday, when it does not run.
   - 7-day: today's 09:50 / 13:50 ET runs (Oct 9 expiry) were dry runs: switch
     off.
+
+
+250. FRIDAY 10-02: BOTH ENGINE TRADES WERE RUN BY THE ORPHAN LADDER  (2026-10-04)
+
+QQQ engine, 1 contract each (TRADING_MIN_ONE_CONTRACT on):
+  - 10:55 MORNING_PUT:ZONE 756/752P @ 2.80 -> 11:30 HANDOFF, mid +25%, filled
+    3.41, +$59. The "+42.9% peak" in the log was INTRINSIC (4.00 = full width);
+    the best sale price was ~3.58 (+28%) at 11:25. Little was left behind.
+  - 11:55 ITM_GRINDER:CLEAN 752/749P @ 1.88 -> 12:01 STOP_LOSS -30%, -$57,
+    fired by orphans.py and booked as playbook MANUAL. Entered ~30 min after
+    the day's low (%B 0.27) into the bounce; QQQ closed 749.53, so the spread
+    would have paid ~+$59 at expiry.
+  Neither entry used the Bollinger bands: CLEAN and ZONE are checked first.
+
+BUG: open_structures() skipped the engine's legs in the order and cache
+passes, which left them unconsumed, and the inferred-pairing pass re-paired
+them as an orphan. Both ladders managed the same position; the alternating
+"stop -25% / -10%" lines were the orphan prearm/ordinary stop. Fixed: engine
+legs are never leftovers (test_orphan_engine_legs.py).
+BUG: win pause, bearish cooldown and the bearish start time did not clear
+FADE/REJECT. Fixed.
+
+New settings, all default to today's behaviour:
+  TRADING_STALL_ARM_PCT, TRADING_STALL_ALL_WINDOWS (engine stall on every
+  debit window), TRADING_MORNING_PUT_CLOSE_BY (11:30),
+  TRADING_MAX_ENTRIES_QQQ_0DTE / _STOCK_0DTE / _STOCK_W3 / _STOCK_W7 (0 = no
+  cap), and the QQQ entry-tier switches CLEAN/ZONE/REJECT/RELAXED/FADE on the
+  settings page. Stall-arm and close-by replay pending; set them from it.

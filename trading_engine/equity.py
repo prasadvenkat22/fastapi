@@ -89,6 +89,11 @@ MAX_CONSECUTIVE_LOSSES = int(os.getenv("TRADING_MAX_CONSECUTIVE_LOSSES", "3"))
 
 BULLISH_STRATEGIES = ("BULL_CALL_SPREAD", "PUT_CREDIT_SPREAD")
 
+# Engine (QQQ) entries per session. 0 = no cap. Counts trades the engine
+# opened today and has since closed -- it holds one position at a time, so
+# when it is flat that is every entry it made.
+MAX_ENTRIES_PER_DAY = int(float(os.getenv("TRADING_MAX_ENTRIES_QQQ_0DTE", "0") or 0))
+
 
 @dataclass
 class EquityState:
@@ -198,6 +203,37 @@ def consecutive_losses_today() -> int:
     except Exception:
         logger.exception("Consecutive-loss check failed — reporting zero.")
         return 0
+
+
+def entry_cap_reached() -> bool:
+    """True once the engine has made MAX_ENTRIES_PER_DAY entries today.
+
+    Same failure posture as the guards above: an unreadable history does not
+    block. Orphan bookings (playbook MANUAL) are not the engine's entries.
+    """
+    if MAX_ENTRIES_PER_DAY <= 0:
+        return False
+    try:
+        db = SessionLocal()
+        try:
+            n = (
+                db.query(TradeHistory)
+                .filter(TradeHistory.opened_at >= _today_start(),
+                        TradeHistory.underlying == "QQQ",
+                        TradeHistory.playbook.isnot(None),
+                        TradeHistory.playbook != "MANUAL")
+                .count()
+            )
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Entry-cap check failed — not blocking.")
+        return False
+    if n >= MAX_ENTRIES_PER_DAY:
+        logger.info("Entry cap: %d engine entries today, at the %d cap — no new entries.",
+                    n, MAX_ENTRIES_PER_DAY)
+        return True
+    return False
 
 
 def _today_start() -> datetime:

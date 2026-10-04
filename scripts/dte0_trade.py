@@ -617,6 +617,38 @@ def _exits_today(symbols: set, now: datetime) -> dict:
     return out
 
 
+def _max_entries(bucket: str) -> int:
+    """TRADING_MAX_ENTRIES_STOCK_<bucket> (0DTE, W3, W7). 0 = no cap."""
+    raw = os.getenv(f"TRADING_MAX_ENTRIES_STOCK_{bucket.upper()}", "").strip()
+    try:
+        return max(int(float(raw)), 0) if raw else 0
+    except ValueError:
+        return 0
+
+
+def _entries_today(book: str, today: str, wtype: "str | None" = None) -> int:
+    """Spreads this book opened today, from the session's filled orders.
+
+    Membership is the same as _bucket_exposure: by expiry, QQQ excluded, and
+    manual spreads on those names count too. /orders is session-only, so this
+    is today by construction.
+    """
+    from trading_engine import orphans
+    n = 0
+    for o in tradier_orders.filled_spread_orders():
+        if not o.get("opening") or not o.get("legs"):
+            continue
+        parsed = orphans._parse(o["legs"][0].get("symbol", ""))
+        if parsed is None or parsed[0] == "QQQ":
+            continue
+        if (book == "weekly") == (parsed[1] == today):
+            continue
+        if wtype and orphans.weekly_type({"expiry": parsed[1], "opened": o.get("created")}) != wtype:
+            continue
+        n += 1
+    return n
+
+
 def _weekly_type_for(exp_iso: str, today: "date | None" = None) -> str:
     """'w7' if the expiry is WEEKLY_LONG_MIN_DAYS or more calendar days out, else 'w3'."""
     days = (date.fromisoformat(exp_iso) - (today or datetime.now(NY).date())).days
@@ -883,6 +915,20 @@ def main() -> None:
                 "$%.0f available this run", args.book, budget, exposure,
                 "n/a (dry run)" if bp is None else f"${bp:.0f}", available)
     per_trade_cap = min(per_trade_cap, available)
+
+    # ENTRIES PER DAY, per bucket (TRADING_MAX_ENTRIES_STOCK_*). Separate from
+    # --max-trades, which is per run, and from the rotation cap, which counts
+    # exits per symbol.
+    entry_room = args.max_trades
+    entry_cap = _max_entries(wtype or "0dte")
+    if entry_cap > 0:
+        done = _entries_today(args.book, now.strftime("%y%m%d"), wtype)
+        entry_room = min(entry_room, max(entry_cap - done, 0))
+        logger.info("bucket %s: %d of %d entries used today — room for %d this run.",
+                    wtype or args.book, done, entry_cap, entry_room)
+        if entry_room <= 0:
+            logger.info("daily entry cap reached — no new entries.")
+            return
 
     # WHY NOTHING CLEARED IS AS IMPORTANT AS WHAT DID. Five filters run in
     # series and a silent "nothing cleared" leaves you unable to tell a quiet
@@ -1232,7 +1278,7 @@ def main() -> None:
                         "expiry and that the chain is quoting")
         return
 
-    chosen = sorted(best.values(), key=lambda r: -r["ev_dem"])[:args.max_trades]
+    chosen = sorted(best.values(), key=lambda r: -r["ev_dem"])[:entry_room]
     # SIZE AGAINST THE SLOT, NOT AGAINST WHAT QUALIFIED. Dividing the budget
     # by the number of survivors concentrates the whole allowance into one
     # name on a day when only one clears the filters -- which is precisely the

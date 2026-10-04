@@ -328,7 +328,9 @@ def send_inquiry_notification(*, name: str, email: str, company: str,
         message or "(none)",
         "",
         "Reply to this mail to answer them directly.",
-        f"It is also listed under Demo Registrations at {APP_BASE_URL or '<the application URL>'}/registrations.",
+        # URL alone on its line: a trailing "." gets linkified into it (404).
+        "It is also listed under Demo Registrations at:",
+        f"{APP_BASE_URL or '<the application URL>'}/registrations",
     ]
     subject = f"Inquiry from {name}" + (f" ({company})" if company else "")
     return send(CONTACT_EMAIL, subject, "\n".join(lines) + "\n", reply_to=email)
@@ -385,5 +387,5 @@ def send_subscriber_confirmed(*, email: str, name: str, interest: str,
         f"Subscriber #{subscriber_id} confirmed.\n\n"
         f"Email:    {email}\nName:     {name or '-'}\n"
         f"Interest: {interest or '-'}\nFrom:     {source or '-'}\n\n"
-        f"The list is at {APP_BASE_URL or '<the application URL>'}/subscribers.\n",
+        f"The list is at:\n{APP_BASE_URL or '<the application URL>'}/subscribers\n",
     )

@@ -703,7 +703,7 @@ WINDOWS = (
         # peak and worst rather than only an outcome. Revert with
         # TRADING_MORNING_PUT_TIERS=CLEAN, no deploy.
         entry_tiers=_env_tiers("TRADING_MORNING_PUT_TIERS", frozenset({"CLEAN"})),
-        close_by=time(11, 30),
+        close_by=_env_time("TRADING_MORNING_PUT_CLOSE_BY", "11:30"),
         note="Put debit spread for a morning the macro news read calls "
              "bearish. Closes at 11:30, not 13:25: the continuation it trades "
              "measured 45 minutes long and gone by lunch.",

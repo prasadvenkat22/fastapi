@@ -85,6 +85,14 @@ def _env_bool(var: str, default: bool) -> bool:
     return default if raw is None else raw.strip().lower() == "true"
 
 
+# STRICT BAND-ONLY (operator, 2026-10-04). On: only the tiers that need a
+# 20-SMA Bollinger band pierce may open a position -- STRICT, RELAXED, FADE --
+# in every window, overriding each window's own tier list. The other tiers
+# are zeroed in nodes.execution_risk_agent before the ladder picks one.
+BAND_TIERS = frozenset({"STRICT", "RELAXED", "FADE"})
+BAND_ONLY = _env_bool("TRADING_BAND_ONLY", False)
+
+
 # How the long leg sits relative to the ATM short strike.
 ITM = "ITM"       # debit, long leg in the money  — high win rate, capped upside
 ATM = "ATM"       # debit, long leg at the money  — lower win rate, larger upside
@@ -375,6 +383,8 @@ class PlaybookWindow:
     note: str = ""
 
     def allows_tier(self, tier: str) -> bool:
+        if BAND_ONLY:
+            return tier in BAND_TIERS
         return self.entry_tiers is None or tier in self.entry_tiers
 
     def allows_direction(self, bullish: bool) -> bool:

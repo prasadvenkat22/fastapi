@@ -72,3 +72,22 @@ def test_max_entries_reads_the_bucket_setting(monkeypatch):
     monkeypatch.delenv("TRADING_MAX_ENTRIES_STOCK_W7", raising=False)
     assert d._max_entries("0dte") == 2
     assert d._max_entries("w7") == 0
+
+
+def test_band_only_overrides_window_tier_lists(monkeypatch):
+    from trading_engine import playbook as PB
+    w = PB.window_by_playbook("MORNING_DRIFT")
+    monkeypatch.setattr(PB, "BAND_ONLY", False)
+    assert w.allows_tier("CLEAN") and not w.allows_tier("RELAXED")
+    monkeypatch.setattr(PB, "BAND_ONLY", True)
+    assert not w.allows_tier("CLEAN") and not w.allows_tier("ZONE")
+    assert all(w.allows_tier(t) for t in ("STRICT", "RELAXED", "FADE"))
+
+
+def test_tiers_setting_validates():
+    import pytest
+    from trading_engine import settings_overrides as so
+    assert so.validate("TRADING_MORNING_PUT_TIERS", " strict, relaxed,strict ") == "STRICT,RELAXED"
+    assert so.validate("TRADING_MORNING_TIERS", "all") == "ALL"
+    with pytest.raises(ValueError):
+        so.validate("TRADING_MORNING_TIERS", "BANDS")

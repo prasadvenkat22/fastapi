@@ -14455,3 +14455,15 @@ New settings, all default to today's behaviour:
   TRADING_MAX_ENTRIES_QQQ_0DTE / _STOCK_0DTE / _STOCK_W3 / _STOCK_W7 (0 = no
   cap), and the QQQ entry-tier switches CLEAN/ZONE/REJECT/RELAXED/FADE on the
   settings page. Stall-arm and close-by replay pending; set them from it.
+
+250b. TRADING_BAND_ONLY and the morning tier lists on the settings page (2026-10-04)
+  TRADING_BAND_ONLY (off): only STRICT/RELAXED/FADE -- the tiers that need a
+  20-SMA Bollinger pierce -- may enter, in every window, overriding window
+  tier lists. TRADING_MORNING_TIERS / TRADING_MORNING_PUT_TIERS are now
+  settings (new "tiers" kind). Also fixed: nodes.py used PB.window_by_playbook
+  in the entry-tranche path without importing playbook as PB -- a NameError on
+  the second tranche of any sliced entry (AFTERNOON_CREDIT slices 3).
+  Replay of the stall arms (60 sessions 07-10..10-02, chain-priced, live
+  config): every arm -75..-104 $/day; baseline -78 to -82, arm 10/5m -74.89
+  (worst -430), arm 0 clearly worse (-103.50). Close-by later: no reliable
+  change. None of these settings changes the sign. Band-only replay pending.

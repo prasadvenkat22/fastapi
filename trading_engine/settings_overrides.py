@@ -41,7 +41,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-Kind = Literal["float", "int", "bool", "time"]
+Kind = Literal["float", "int", "bool", "time", "tiers"]
+
+# Entry tiers a window's tier list may name (nodes.execution_risk_agent).
+TIER_NAMES = ("CLEAN", "ZONE", "STRICT", "RELAXED", "MOMENTUM", "FADE", "REJECT", "TREND")
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OVERRIDES_PATH = os.getenv("TRADING_OVERRIDES_PATH",
@@ -93,6 +96,15 @@ REGISTRY: tuple[Setting, ...] = (
             "power. One stop-out can exceed the daily-loss limit and halt the day."),
     Setting("TRADING_MAX_ENTRIES_QQQ_0DTE", "QQQ 0DTE: entries per day", G_BUCKETS, "int", "0",
             "Most entries the engine makes in one session. 0 = no cap.", "", 0, 50),
+    Setting("TRADING_BAND_ONLY", "QQQ: strictly Bollinger-band entries", G_BUCKETS, "bool", "false",
+            "On: the engine enters ONLY on a 20-SMA Bollinger band pierce (STRICT, RELAXED, FADE), in "
+            "every window, overriding the window tier lists below. CLEAN, ZONE, REJECT, MOMENTUM and "
+            "TREND cannot open a trade. RELAXED and FADE still need their own switches on."),
+    Setting("TRADING_MORNING_TIERS", "MORNING_DRIFT accepts", G_BUCKETS, "tiers", "CLEAN",
+            "Entry rules the bullish morning window takes: comma list of CLEAN, ZONE, STRICT, "
+            "RELAXED, MOMENTUM, FADE, REJECT, TREND, or ALL."),
+    Setting("TRADING_MORNING_PUT_TIERS", "MORNING_PUT accepts", G_BUCKETS, "tiers", "CLEAN",
+            "Entry rules the bearish morning window takes: comma list or ALL."),
     Setting("TRADING_CLEAN_ENTRIES", "QQQ entry rule: CLEAN", G_BUCKETS, "bool", "true",
             "Trend stack (20-SMA, 9 EMA, VWAP, RSI band). Does not use the Bollinger bands."),
     Setting("TRADING_ZONE_ENTRIES", "QQQ entry rule: ZONE", G_BUCKETS, "bool", "false",
@@ -455,6 +467,15 @@ def validate(key: str, raw: str) -> str:
         if low in ("false", "0", "no", "off"):
             return "false"
         raise ValueError(f"{key}: expected true/false, got {raw!r}")
+    if s.kind == "tiers":
+        if v.upper() in ("ALL", "*"):
+            return "ALL"
+        names = [t.strip().upper() for t in v.split(",") if t.strip()]
+        bad = [t for t in names if t not in TIER_NAMES]
+        if not names or bad:
+            raise ValueError(f"{key}: expected a comma list of {', '.join(TIER_NAMES)} or ALL, "
+                             f"got {raw!r}")
+        return ",".join(dict.fromkeys(names))
     if s.kind == "time":
         if not _TIME_RE.match(v):
             raise ValueError(f"{key}: expected HH:MM (24h, ET), got {raw!r}")

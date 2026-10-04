@@ -26,6 +26,7 @@ from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import (MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today,
                      current_equity, entry_cap_reached, win_pause_active)
 from .macro_calendar import blackout_active as event_blackout_active, describe as describe_event
+from . import playbook as PB
 from .playbook import (
     CREDIT, close_deadline, credit_strikes_for, final_take_profit_for,
     ratchet_giveback_for, ride_deadline, rides_to_close, risk_share_for,
@@ -2966,6 +2967,13 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         if _is_before_bearish_start():
             strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
             zone_bear = fade_bear = reject_bear = False
+
+        # Strict band-only: nothing without a Bollinger band pierce may enter.
+        # FADE still needs its own switch (FADE_ENTRIES_ENABLED), RELAXED too.
+        if PB.BAND_ONLY:
+            clean_bull = clean_bear = zone_bull = zone_bear = False
+            momentum_bull = momentum_bear = trend_bull = trend_bear = False
+            reject_bear = False
 
         if halt:
             tier, bullish = None, False

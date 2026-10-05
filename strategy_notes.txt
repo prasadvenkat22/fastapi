@@ -14790,3 +14790,13 @@ because TRADING_MIN_ONE_CONTRACT sizes one contract that fits.
   deployed 0bb332d19, 12:59 ET). It cannot stop a trade that never reaches the
   20-SMA; it can keep a winner open, which (one position at a time) may block a
   later entry. Day: +8 +21 +13 0 -26 = +$16.
+
+
+267. STRIKE PLACEMENT ON THE QQQ CARD  (2026-10-05)
+
+TRADING_BAND_TOUCH_ATM ("Strike placement: at the money", default off = the
+in-the-money placement every band-touch trade has used): off = long one width
+in the money, short at the money (10-05 trades: 751/753 call with QQQ ~753,
+756/754 put with QQQ ~754, ~$1.43-1.51 for 2 wide); on = long at the money,
+short one width out (cheaper, more upside, needs a move). Untested either way
+on this rule; the in-the-money default suits a small snap back to the 20-SMA.

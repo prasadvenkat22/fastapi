@@ -179,6 +179,11 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_STOP_CONFIRM_MINUTES", "QQQ engine stop confirmation", G_ENGINE, "float", "5",
             "Minutes the engine's stop level must hold before it sells. 0 = the first reading "
             "past the stop.", "min", 0, 30),
+    Setting("TRADING_BAND_TOUCH_ATM", "Strike placement: at the money", G_ENGINE, "bool", "false",
+            "Off = in the money (now): long leg one width in the money, short at the money -- costs "
+            "~70-75% of the width, profits on a small snap back. On = at the money: long at the "
+            "money, short one width out -- cheaper and pays more on a big move, loses value if QQQ "
+            "only drifts."),
     Setting("TRADING_BAND_TOUCH_MIN_PROFIT_PCT", "20-SMA exit: minimum profit", G_ENGINE, "float", "0",
             "The QQQ engine sells when QQQ is back at the 20-SMA only if the spread is up at least "
             "this much. Below it the trade keeps running to the take profit, the stop or 15:45. "
@@ -492,6 +497,7 @@ _EXTRA: dict[str, tuple] = {   # key -> (book, order, label)
     "TRADING_BAND_TOUCH_START": ("qqq", 42, "Bollinger band: from"),
     "TRADING_BAND_TOUCH_END": ("qqq", 43, "Bollinger band: until"),
     "TRADING_BAND_TOUCH_WIDTH": ("qqq", 44, "Spread width"),
+    "TRADING_BAND_TOUCH_ATM": ("qqq", 45, "Strike placement: at the money"),
     "TRADING_BAND_TOUCH_MIN_PROFIT_PCT": ("qqq", 71, "20-SMA exit: minimum profit"),
     "TRADING_MAX_TRADES_STOCK_0DTE": ("s0", 31, "Trades per run"),
     "TRADING_MAX_TRADES_STOCK_W3": ("w3", 31, "Trades per run"),

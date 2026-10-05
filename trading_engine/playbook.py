@@ -98,14 +98,24 @@ def window_for_direction(bullish: bool, now: Optional[datetime] = None) -> Optio
     return window_for(now)
 
 
+# STRIKE PLACEMENT (section 267). Off = in the money: long leg one width in
+# the money, short at the money (cost ~70-75% of the width, pays on a small
+# move). On = at the money: long at the money, short one width out (cheaper,
+# needs QQQ to move the trade's way).
+BAND_TOUCH_ATM = os.getenv("TRADING_BAND_TOUCH_ATM", "false").lower() == "true"
+
+
 def strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool) -> tuple[float, float]:
-    """(long_strike, short_strike): long leg in the money, short at the money.
+    """(long_strike, short_strike): long leg in the money (or at the money with
+    TRADING_BAND_TOUCH_ATM), short one width toward the move.
 
     A bull call spread is long the lower strike and short the higher one; a
     bear put spread is the mirror.
     """
     w = window.width
     d = window.long_depth if window.long_depth is not None else w
+    if BAND_TOUCH_ATM:
+        d = 0.0
     if bullish:
         long_strike = atm_strike - d
         return long_strike, long_strike + w

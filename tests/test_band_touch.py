@@ -116,3 +116,17 @@ def test_min_profit_row_is_on_the_qqq_card():
     from trading_engine import settings_overrides as so
     s = so.BY_KEY["TRADING_BAND_TOUCH_MIN_PROFIT_PCT"]
     assert (s.book, s.order, s.default) == ("qqq", 71, "0")
+
+
+def test_strike_placement_itm_and_atm(monkeypatch):
+    w = PB.window_by_playbook("BAND_TOUCH")
+    width = w.width
+    monkeypatch.setattr(PB, "BAND_TOUCH_ATM", False)
+    assert PB.strikes_for(w, 753.0, True) == (753.0 - width, 753.0)        # call: ITM long, ATM short
+    assert PB.strikes_for(w, 754.0, False) == (754.0 + width, 754.0)       # put: ITM long, ATM short
+    monkeypatch.setattr(PB, "BAND_TOUCH_ATM", True)
+    assert PB.strikes_for(w, 753.0, True) == (753.0, 753.0 + width)        # call: ATM long, OTM short
+    assert PB.strikes_for(w, 754.0, False) == (754.0, 754.0 - width)       # put: ATM long, OTM short
+    from trading_engine import settings_overrides as so
+    s = so.BY_KEY["TRADING_BAND_TOUCH_ATM"]
+    assert (s.book, s.order, s.default, s.kind) == ("qqq", 45, "false", "bool")

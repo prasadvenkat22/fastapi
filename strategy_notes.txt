@@ -14486,3 +14486,25 @@ sweep.py modes: stallarm, bandonly, costcheck, randomentry, cdsearch.
   sample -12.57/day, worst -358. Trade nothing = 0. Best default: the QQQ
   bucket OFF. TRADING_STOP_LOSS_PCT reaches ITM_GRINDER only (MORNING_PUT's
   -20 is hardcoded; MORNING_DRIFT reads TRADING_MORNING_STOP_PCT).
+
+
+252. STOCK BOOKS: EDGE CHECK ON REAL DATA  (2026-10-04)
+
+STOCK 0DTE: not enough data, leans negative. 32 orders on 3 sessions
+(09-14/18/21): 7 filled, 24 rejected, 1 cancelled; nothing since 09-21.
+7 fills ~-$830 (1 win); hold-to-expiry ~-$911. Picks vs random same-day
+shadow debits: 16th pct (19 spreads), 5th (32 orders); direction 47%.
+EV vs realised Spearman -0.12. BUG: trading_days_to() floors same-day to 1
+full day, so weekly_pick.rank() applies a close-to-close move to a
+mid-session entry; P(beyond 0.5 sd) model 26% vs realised 7% at 11:30,
+4% at 13:00 (7,200 obs, both halves). EV/Pwin on 0DTE are artifacts.
+WEEKLY 3-DAY: 4 orders, 3 rejected, 1 fill (TSLA 09-23, -$334 via ladder;
+-$1,333 held; MISSING from trading_history). 1-year backtest (BS pricing,
+IV=RV20*0.97, 16 names, ~1,100 trades): the VWAP gate direction -16.1%/trade,
+2nd-3rd pct vs coin flip; reversed +3.0%, 97th pct out of sample per trade,
+83rd by week-block -- not significant.
+WEEKLY 7-DAY: never traded. Backtest gate direction +0.3%/trade, 98th pct
+per trade out of sample, 85th by week-block -- not significant.
+CREDIT SHADOW (5 expiries): PUT +29.9/row 94% win 5/5 weeks; CONDOR +17.8;
+CALL -10.2. Five rising weeks: direction, not edge.
+Scripts: scripts/edge_stock0dte.py, edge_shadow.py, edge_picks.py, edge_backtest.py.

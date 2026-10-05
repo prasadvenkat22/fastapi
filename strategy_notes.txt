@@ -14541,3 +14541,15 @@ cron process). Real fill-rate measurement from the logs pending.
   orders rejected at the broker within 0.1 s, reason not recorded. Broker
   fills before 09-21 are essentially all manual (18 of 3,370 contracts match
   a logged order).
+  NO-STOP, TARGET-ONLY, MID FILLS (operator's rule; edge_bandscalp.py targets):
+  1-min, 20 sessions (h1 09-04..09-18, h2 09-21..10-02), 48 arms, pick on h1:
+    mid: beyond -> mid+1SD, 15:45 close: h1 +51.3 / h2 +27.9 $/day, win 69%,
+      avg +24/-41, max loss -186, worst day -286.
+    mid, next-bar-through fill: reentry -> opposite band: +56.1 / +52.2, win
+      74%, avg +34/-65, max loss -251, worst day -429, 9.4% stuck to 15:45.
+    bid/ask pick: -86.4 / -84.4.
+  Random-entry null with the same exits wins 61-71% of trades: the win rate
+  is the exit rule's; real entries sit at the 67-97th pct of the null in h2.
+  5-min, 60 sessions: mid h1 -27..+1 on every arm, h2 +9..+47; stuck 15-55%.
+  Positive only at mid fills, on 10 + 10 sessions in one regime; mid is the
+  chain pricer, not a real quote. Candidate for a live 1-lot trial, not proven.

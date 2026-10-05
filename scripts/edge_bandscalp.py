@@ -8,6 +8,8 @@ MACD+trend agreement, FADE is upper-band-only.
     python scripts/edge_bandscalp.py underlying   # layer 1: QQQ only, 1m + 5m, vs matched null
     python scripts/edge_bandscalp.py options      # layer 2: 4/3-wide ITM debit spread, chain-priced
     python scripts/edge_bandscalp.py options1m    # layer 2 on Tradier 1m bars (20 sessions)
+    python scripts/edge_bandscalp.py targets      # target-only exits, no stop; mid/midcons/bidask (1m)
+    python scripts/edge_bandscalp.py targets5m    # same on 5m bars
     python scripts/edge_bandscalp.py all
 
 Data:
@@ -426,6 +428,149 @@ def run_layer2(one_min: bool = False):
           f"win {a2['win']:.0f}%;  at mid: h2 {m2['pday']:+.2f}")
 
 
+# ---------------------------------------------------------------- layer 3: target-only exits
+TARGET_K = {"mid": 0.0, "mid+0.5sd": 0.5, "mid+1sd": 1.0, "oppband": 2.0}
+
+
+def _leg(v: float, side: str, fills: str) -> float:
+    """One side of the round trip. mid / midcons: the model mid. bidask: the
+    harness's natural fill (half-spread + tick) plus half the 0.10 slippage."""
+    if fills in ("mid", "midcons"):
+        return max(v, 0.0)
+    nat = _tick(B.fill_price(v, side), side)
+    return nat + SLIP / 2 if side == "buy" else max(nat - SLIP / 2, 0.0)
+
+
+def _natural(v: float, side: str) -> float:
+    return _leg(v, side, "bidask")
+
+
+def replay_targets(b, vix, variant, target, fills, closeout, step, width=4.0):
+    """No stop, no time limit. Exit only when the bar CLOSE reaches the target
+    (live band at that bar: mid + k*sd toward the opposite side); otherwise
+    15:45 force close at the natural, or (closeout='expiry') 16:00 intrinsic.
+
+    midcons: the entry order rests at the event-bar mid and fills only if the
+    NEXT bar trades through the entry spot by >= $0.01 toward the buyer (low
+    below for a call, high above for a put); unfilled = cancelled. The target
+    exit rests at the target-bar mid and fills on the first later bar that
+    trades through that spot toward the seller; else it rides to the closeout.
+    """
+    k = TARGET_K[target]
+    evset = dict(events(b, variant, step))
+    c, h, l = b["Close"].values, b["High"].values, b["Low"].values
+    sma, sd, day = b["mid"].values, b["sd"].values, b["day"].values
+    idx = b.index
+    n = len(b)
+    close_t = [(t + timedelta(minutes=step)).time() for t in idx]
+    trades, blocked = [], 0
+    busy_until, busy_stuck = -1, False
+    for i in range(n):
+        if i not in evset:
+            continue
+        if i <= busy_until:
+            blocked += busy_stuck
+            continue
+        d = evset[i]
+        call = d > 0
+        s0 = float(c[i])
+        atm = B.round_to_strike(s0)
+        lk = atm - width if call else atm + width
+        vx = vix.get(idx[i].date())
+
+        def val(kk):
+            return CP.vertical_value(float(c[kk]), _mins_left(idx[kk] + timedelta(minutes=step)),
+                                     lk, atm, call, vx)
+        start = i
+        if fills == "midcons":
+            if i + 1 >= n or day[i + 1] != day[i]:
+                continue
+            if not ((l[i + 1] <= s0 - 0.01) if call else (h[i + 1] >= s0 + 0.01)):
+                continue                            # never filled, cancelled
+            start = i + 1
+        debit = _leg(val(i), "buy", fills)
+        if debit <= 0.05:
+            continue
+        j, exit_v, reason, pending = start, None, None, None
+        while True:
+            j += 1
+            if j >= n or day[j] != day[i]:
+                j -= 1
+                break
+            if pending is not None:                 # resting exit at mid (midcons)
+                ps, pv = pending
+                if (h[j] >= ps + 0.01) if call else (l[j] <= ps - 0.01):
+                    exit_v, reason = pv, "TARGET"
+                    break
+            elif d * (c[j] - (sma[j] + d * k * sd[j])) >= 0:
+                if fills == "midcons":
+                    pending = (float(c[j]), val(j))
+                else:
+                    exit_v, reason = _leg(val(j), "sell", fills), "TARGET"
+                    break
+            if closeout == "1545" and close_t[j] >= dtime(15, 45):
+                exit_v, reason = _natural(val(j), "sell"), "FORCE"
+                break
+        if exit_v is None:                          # held to the last bar: expiry intrinsic
+            s_end = float(c[j])
+            exit_v = max(0.0, min((s_end - lk) if call else (lk - s_end), width))
+            reason = "EXPIRY"
+        per = exit_v - debit - COMM
+        trades.append({"day": day[i], "pnl": per * 100, "stuck": reason != "TARGET"})
+        busy_until, busy_stuck = j, reason != "TARGET"
+    return trades, blocked
+
+
+def _tsum(trades, days):
+    pdd = {d: 0.0 for d in days}
+    for t in trades:
+        pdd[t["day"]] += t["pnl"]
+    v = list(pdd.values())
+    w = [t["pnl"] for t in trades if t["pnl"] > 0]
+    lo = [t["pnl"] for t in trades if t["pnl"] <= 0]
+    n = len(trades)
+    return {"tr": n, "win": len(w) / n * 100 if n else 0, "aw": np.mean(w) if w else 0,
+            "al": np.mean(lo) if lo else 0, "maxl": min(lo) if lo else 0,
+            "pday": sum(v) / len(v), "worst": min(v),
+            "stuck": sum(t["stuck"] for t in trades) / n * 100 if n else 0}
+
+
+def run_targets(one_min=True):
+    h5, vix, src = load_5m()
+    step = 5
+    if one_min:
+        h5, src = load_1m([d for d in sorted(set(h5.index.date)) if d >= date(2026, 9, 4)])
+        step = 1
+    b = with_bands(h5)
+    days = sorted(set(b["day"]))
+    H1, H2 = sorted(days[:len(days) // 2]), sorted(days[len(days) // 2:])
+    print(f"\nTARGET-ONLY EXITS, no stop/no time, 4-wide ITM, 1 contract -- {src}, {step}m bars, "
+          f"{len(days)} sessions (h1 {H1[0]}..{H1[-1]} | h2 {H2[0]}..{H2[-1]})")
+    print(f"  {'fills':8s} {'entry':8s} {'target':10s} {'close':6s} {'tr':>4s} {'win%':>5s} "
+          f"{'avgW':>6s} {'avgL':>7s} {'maxL':>7s} {'$/day':>8s} {'worst':>8s} {'h1':>8s} "
+          f"{'h2':>8s} {'stuck%':>6s} {'blkd':>5s}")
+    rows = []
+    for fills in ("mid", "midcons", "bidask"):
+        for variant in ("beyond", "reentry"):
+            for target in TARGET_K:
+                for closeout in ("1545", "expiry"):
+                    tr, blk = replay_targets(b, vix, variant, target, fills, closeout, step)
+                    a = _tsum(tr, days)
+                    a1 = _tsum([t for t in tr if t["day"] in set(H1)], H1)
+                    a2 = _tsum([t for t in tr if t["day"] in set(H2)], H2)
+                    rows.append((fills, variant, target, closeout, a, a1, a2, blk))
+                    print(f"  {fills:8s} {variant:8s} {target:10s} {closeout:6s} {a['tr']:4d} "
+                          f"{a['win']:5.0f} {a['aw']:+6.0f} {a['al']:+7.0f} {a['maxl']:+7.0f} "
+                          f"{a['pday']:+8.2f} {a['worst']:+8.2f} {a1['pday']:+8.2f} "
+                          f"{a2['pday']:+8.2f} {a['stuck']:6.1f} {blk:5d}")
+    for fills in ("mid", "midcons", "bidask"):
+        cand = [r for r in rows if r[0] == fills]
+        f, v, t, co, a, a1, a2, blk = max(cand, key=lambda r: r[5]["pday"])
+        print(f"  PICK on h1 [{fills}]: {v} {t} {co}  h1 {a1['pday']:+.2f}/day -> h2 once "
+              f"{a2['pday']:+.2f}/day, {a2['tr']} tr, win {a2['win']:.0f}%, maxL {a2['maxl']:+.0f}, "
+              f"worst day {a2['worst']:+.0f}, stuck {a2['stuck']:.0f}%")
+
+
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     if which in ("underlying", "all"):
@@ -434,3 +579,7 @@ if __name__ == "__main__":
         run_layer2()
     if which in ("options1m", "all"):
         run_layer2(one_min=True)
+    if which in ("targets", "all"):
+        run_targets(one_min=True)
+    if which in ("targets5m", "all"):
+        run_targets(one_min=False)

@@ -14767,3 +14767,15 @@ the quantity (test_mid_orders). Live row corrected to x1 by hand.
   exits AND stops at the mid (re-posted each minute, never crossing);
   stock-book and manual exits through orphans.py -- profit exits at the mid,
   stops at the natural; the 15:45 force close always at the natural.
+
+
+266. 20-SMA EXIT: MINIMUM PROFIT  (2026-10-05)
+
+12:22 ET: a 751/753 call spread (lower touch, 1.51 at the mid) was sold at the
+20-SMA at +0.3% for $0 -- the band was $0.48 wide (752.76 / 753.24 / 753.72),
+so the snap back to the mean was worth about the bid/ask. New QQQ-card row
+TRADING_BAND_TOUCH_MIN_PROFIT_PCT ("20-SMA exit: minimum profit", default 0 =
+unchanged): the 20-SMA exit books only at or above it; below, the trade keeps
+its take profit, stop and 15:45 force close. Also seen: the engine's running
+equity (budget + all-time engine P&L) read -$18 at 12:25; it still entered
+because TRADING_MIN_ONE_CONTRACT sizes one contract that fits.

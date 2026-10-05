@@ -102,3 +102,17 @@ def test_retired_window_position_still_gets_the_stop(monkeypatch):
 def test_force_close_beats_everything(monkeypatch):
     out = _run_exit(monkeypatch, "BAND_TOUCH:TOUCH", 2.60, band_spot=748.0, tp=25.0, force=True)
     assert out.get("exit_reason") == "FORCE_CLOSE"
+
+
+def test_sma_exit_waits_for_the_minimum_profit(monkeypatch):
+    monkeypatch.setattr(nodes, "BAND_TOUCH_MIN_PROFIT_PCT", 10.0)
+    # +0.5% at the 20-SMA: below the floor, keep holding (the 10-05 12:22 case)
+    assert not _run_exit(monkeypatch, "BAND_TOUCH:TOUCH", 2.01, band_spot=750.2).get("exit_reason")
+    # +15% at the 20-SMA: books
+    assert _run_exit(monkeypatch, "BAND_TOUCH:TOUCH", 2.30, band_spot=750.2).get("exit_reason") == "TAKE_PROFIT"
+
+
+def test_min_profit_row_is_on_the_qqq_card():
+    from trading_engine import settings_overrides as so
+    s = so.BY_KEY["TRADING_BAND_TOUCH_MIN_PROFIT_PCT"]
+    assert (s.book, s.order, s.default) == ("qqq", 71, "0")

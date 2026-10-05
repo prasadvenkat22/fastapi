@@ -127,6 +127,11 @@ except ValueError:
 
 BAND_TOUCH_PERIOD = int(float(os.getenv("TRADING_BAND_TOUCH_PERIOD", "20") or 20))
 BAND_TOUCH_SD = float(os.getenv("TRADING_BAND_TOUCH_SD", "2.0") or 2.0)
+# The 20-SMA exit only books once the spread is up at least this much (section
+# 266). 10-05 12:22 ET: QQQ reached the 20-SMA in a $0.48-wide band and the
+# exit sold a 751/753 call spread at +0.3%, $0. Below the floor the position
+# keeps its take profit, stop and force close. 0 = the old behaviour.
+BAND_TOUCH_MIN_PROFIT_PCT = float(os.getenv("TRADING_BAND_TOUCH_MIN_PROFIT_PCT", "0") or 0)
 
 
 def _band_touch() -> "dict | None":
@@ -1020,7 +1025,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         position.strategy, return_pct, engine_tp)
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
-        elif touch_pos and _touch_target_hit(position, band):
+        elif (touch_pos and _touch_target_hit(position, band)
+              and return_pct >= BAND_TOUCH_MIN_PROFIT_PCT):
             logger.info("Band touch: QQQ %.2f is back at the 20-SMA %.2f — booking %s at %+.1f%%.",
                         band["spot"], band["mid"], position.strategy, return_pct)
             broker.sell_all(position.underlying)

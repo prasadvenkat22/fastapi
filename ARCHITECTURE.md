@@ -50,6 +50,17 @@ macro-BAD gates, the 0DTE stall / underlying stop / resting ask, and the
 card rows decide. Weeklies are held overnight. The QQQ band needs 20 one-minute
 bars, so its first read each day is about 09:50 ET.
 
+**Order pricing with `TRADING_MID_ORDERS` on (section 265):**
+
+| | entry | profit exit | stop | 15:45 force close |
+|---|---|---|---|---|
+| QQQ engine | mid only, 20 s | mid | mid, re-posted each minute | natural |
+| stock 0DTE / 3-day / 7-day | mid only | mid (`ORPHAN_PROFIT_EXIT_AT_MID`) | natural | natural (0DTE) |
+| manual trades | by hand | mid | natural | natural |
+
+Multileg `exec_quantity` from Tradier is summed over the legs; `work_vertical`
+halves it (a 1-lot once recorded as x2 and blocked its own close).
+
 Earlier this weekend, new settings (all default to the old behaviour): entries per day per bucket,
 QQQ entry-rule switches and `TRADING_BAND_ONLY`, morning tier lists (new
 `tiers` kind), QQQ engine stop / stop confirmation / take profit, engine stall

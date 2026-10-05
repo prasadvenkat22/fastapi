@@ -14760,3 +14760,10 @@ for 2 was rejected ("Sell order is for more shares than your current long
 position") from 11:06 ET while the trade sat at +14..+17%. Fixed:
 filled_qty = exec_quantity // 2 when it exceeds the order quantity, capped at
 the quantity (test_mid_orders). Live row corrected to x1 by hand.
+  OUTCOME: after the row was corrected to x1 and the fix deployed, the close
+  filled at the mid 1.44 at 11:15:49 ET (natural 1.40): 756/754 x1, 1.23 ->
+  1.44, +$21 TAKE_PROFIT. Day so far: two band touches, +$8 and +$21.
+  ORDER PRICING NOW: entries at the mid only (all books); QQQ engine profit
+  exits AND stops at the mid (re-posted each minute, never crossing);
+  stock-book and manual exits through orphans.py -- profit exits at the mid,
+  stops at the natural; the 15:45 force close always at the natural.

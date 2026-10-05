@@ -55,7 +55,17 @@ def _work(b, opening, fallback):
                            fallback_natural=fallback, sleep=b.sleep, clock=b.clock)
 
 
+def test_entry_defaults_to_the_mid_only(monkeypatch):
+    monkeypatch.setattr(t, "MID_ENTRY_MAX_STEPS", 0)
+    b = FakeBroker(3.32, monkeypatch)              # would fill one step up
+    r = _work(b, True, False)
+    assert r["status"] == "refused"
+    assert [o["px"] for o in b.orders.values()] == [3.30]
+
+
 def test_entry_fills_on_a_middle_rung(monkeypatch):
+    monkeypatch.setattr(t, "MID_ENTRY_MAX_STEPS", 3)
+    monkeypatch.setattr(t, "MID_ENTRY_WAIT_SECONDS", 6)
     b = FakeBroker(3.32, monkeypatch)
     r = _work(b, True, False)
     assert r["filled"] is True and r["fill_price"] == 3.32 and r["steps"] == 1
@@ -106,3 +116,21 @@ def test_package_quote_credit(monkeypatch):
     assert round(mid, 3) == 0.825 and round(nat, 3) == 0.75     # collect down to the natural
     mid, nat = service._package_quote(pos, opening=False)
     assert round(mid, 3) == 0.825 and round(nat, 3) == 0.90     # buy back up to the natural
+
+
+def test_stock_entry_is_refused_when_not_filled_at_mid(monkeypatch):
+    import importlib, os, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+    d = importlib.import_module("dte0_trade")
+    monkeypatch.setattr(d.tradier_orders, "MID_ORDERS", True)
+    monkeypatch.setattr(d.tradier_orders, "quotes", lambda syms: {
+        syms[0]: {"bid": 5.0, "ask": 5.2}, syms[1]: {"bid": 2.0, "ask": 2.1}})
+    seen = {}
+
+    def work(*a, **k):
+        seen.update(k)
+        return {"status": "refused", "filled": False, "reason": "not_filled_at_mid"}
+    monkeypatch.setattr(d.tradier_orders, "work_vertical", work)
+    r = d._send_entry("MU", "2026-10-09", "call", 100, 105, 1, 3.2)
+    assert r["status"] == "refused"
+    assert round(seen["mid"], 3) == 3.05 and seen["fallback_natural"] is False

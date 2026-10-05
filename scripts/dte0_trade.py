@@ -617,6 +617,39 @@ def _exits_today(symbols: set, now: datetime) -> dict:
     return out
 
 
+def _send_entry(sym: str, exp: str, cp: str, long_k: float, short_k: float,
+                qty: int, cost: float) -> dict:
+    """Open a debit vertical: at the live package mid when TRADING_MID_ORDERS is
+    on (section 253), else at `cost` (the natural) as before.
+
+    Mid-first entries are never chased past the ladder: an entry that does not
+    fill is not taken. With TRADING_MID_MAX_STEPS=0 that means the mid only.
+    """
+    if not tradier_orders.MID_ORDERS:
+        return tradier_orders.submit_vertical(
+            sym, exp, cp, long_strike=long_k, short_strike=short_k, quantity=qty,
+            opening=True, limit_price=cost, is_credit=False)
+    ls = tradier_orders.occ_symbol(sym, exp, cp, long_k)
+    ss = tradier_orders.occ_symbol(sym, exp, cp, short_k)
+    q = tradier_orders.quotes([ls, ss])
+    try:
+        bid = float(q[ls]["bid"]) - float(q[ss]["ask"])
+        ask = float(q[ls]["ask"]) - float(q[ss]["bid"])
+    except (KeyError, TypeError, ValueError):
+        return {"status": "refused", "reason": "no live quote for the mid"}
+    mid = (bid + ask) / 2.0
+    if mid <= 0 or ask < bid:
+        return {"status": "refused", "reason": f"unusable quote {bid:.2f}/{ask:.2f}"}
+    natural = min(ask, cost) if cost > 0 else ask    # never pay more than screened
+    logger.info("   working from the mid %.2f (natural %.2f, screened %.2f).", mid, ask, cost)
+    res = tradier_orders.work_vertical(sym, exp, cp, long_k, short_k, qty, True,
+                                       mid=mid, natural=max(natural, mid),
+                                       is_credit=False, fallback_natural=False)
+    if res.get("filled") is not True:
+        return {"status": "refused", "reason": res.get("reason") or "not filled at the mid"}
+    return res
+
+
 def _max_entries(bucket: str) -> int:
     """TRADING_MAX_ENTRIES_STOCK_<bucket> (0DTE, W3, W7). 0 = no cap."""
     raw = os.getenv(f"TRADING_MAX_ENTRIES_STOCK_{bucket.upper()}", "").strip()
@@ -1325,10 +1358,8 @@ def main() -> None:
             logger.info("   DRY RUN — not sent.")
             continue
         try:
-            res = tradier_orders.submit_vertical(
-                sym, exp, "call" if side == "call" else "put",
-                long_strike=long_k, short_strike=short_k, quantity=qty,
-                opening=True, limit_price=cost, is_credit=False)
+            res = _send_entry(sym, exp, "call" if side == "call" else "put",
+                              long_k, short_k, qty, cost)
             if (res or {}).get("status") == "refused":
                 logger.warning("   NOT SENT — %s.", res.get("reason"))
                 continue

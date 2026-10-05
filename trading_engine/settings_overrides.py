@@ -182,10 +182,15 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_MORNING_PUT_CLOSE_BY", "MORNING_PUT closes at", G_ENGINE, "time", "11:30",
             "MORNING_PUT sells whatever it shows at this time so the next window can trade."),
     Setting("TRADING_MID_ORDERS", "Work orders from the mid", G_ENGINE, "bool", "false",
-            "QQQ engine entries and profit exits (target, ratchet, stall, trail, handoff) post at the "
+            "QQQ engine and stock-book entries, and QQQ profit exits (target, ratchet, stall, trail, handoff) post at the "
             "spread's mid and step toward the bid/ask. An entry that does not fill is not taken; a "
             "profit exit ends at the bid/ask. Stops, the force close and risk-off always sell at the "
             "bid/ask at once."),
+    Setting("TRADING_MID_ENTRY_MAX_STEPS", "Mid order: entry re-prices", G_ENGINE, "int", "0",
+            "Entries (QQQ engine and the stock books): re-prices toward the ask after the mid. "
+            "0 = the mid only; an entry that does not fill there is not taken.", "", 0, 10),
+    Setting("TRADING_MID_ENTRY_WAIT_SECONDS", "Mid order: entry wait", G_ENGINE, "float", "20",
+            "Seconds an entry rests at each price before it is cancelled.", "s", 2, 30),
     Setting("TRADING_MID_STEP", "Mid order: step", G_ENGINE, "float", "0.02",
             "How much each re-price moves toward the bid/ask, per spread.", "$", 0.01, 0.50),
     Setting("TRADING_MID_STEP_SECONDS", "Mid order: wait per step", G_ENGINE, "float", "6",

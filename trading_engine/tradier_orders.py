@@ -327,6 +327,10 @@ MID_STEP = float(os.getenv("TRADING_MID_STEP", "0.02"))           # $ per step t
 MID_STEP_SECONDS = float(os.getenv("TRADING_MID_STEP_SECONDS", "6"))
 MID_MAX_STEPS = int(os.getenv("TRADING_MID_MAX_STEPS", "3"))      # re-prices after the first post
 MID_BUDGET_SECONDS = float(os.getenv("TRADING_MID_BUDGET_SECONDS", "25"))  # whole ladder, wall clock
+# ENTRIES AT THE MID ONLY (operator, 2026-10-04): an opening order is posted at
+# the mid and left there; 0 re-prices means it is never chased toward the ask.
+MID_ENTRY_MAX_STEPS = int(os.getenv("TRADING_MID_ENTRY_MAX_STEPS", "0"))
+MID_ENTRY_WAIT_SECONDS = float(os.getenv("TRADING_MID_ENTRY_WAIT_SECONDS", "20"))
 
 _FILLED = {"filled"}
 _LIVE = {"open", "pending", "partially_filled", "accepted", "ok"}
@@ -373,7 +377,9 @@ def work_vertical(underlying: str, expiry: "date | str", call_put: str,
     import time as _t
     sleep = sleep or _t.sleep
     clock = clock or _t.monotonic
-    prices = mid_ladder(mid, natural, MID_STEP, MID_MAX_STEPS)
+    steps = MID_ENTRY_MAX_STEPS if opening else MID_MAX_STEPS
+    wait = MID_ENTRY_WAIT_SECONDS if opening else MID_STEP_SECONDS
+    prices = mid_ladder(mid, natural, MID_STEP, steps)
     if fallback_natural and abs(prices[-1] - round(natural, 2)) > 1e-9:
         prices.append(round(natural, 2))
     started = clock()
@@ -394,7 +400,7 @@ def work_vertical(underlying: str, expiry: "date | str", call_put: str,
             # engine always did, and let the existing close handling judge it.
             return dict(last, filled=None, fill_price=px, filled_qty=quantity,
                         steps=i, prices=prices[:i + 1])
-        deadline = clock() + MID_STEP_SECONDS
+        deadline = clock() + wait
         st: dict = {}
         while clock() < deadline:
             sleep(1.5)

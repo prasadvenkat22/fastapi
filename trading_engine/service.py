@@ -671,7 +671,13 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
                         new_position.underlying, today_expiry(), _cp, _strike, _want_long)
                     if _clash:
                         break
-            if _clash:
+            if not _clash and _worked_close and tradier_orders.MID_ORDERS:
+                # Entries go at the mid only, and one worked ladder is all a
+                # cycle has time for. Re-evaluated on the next cycle.
+                logger.info("Entry deferred to the next cycle: this one already worked a "
+                            "close from the mid, and entries are mid-only.")
+                new_position = None
+            elif _clash:
                 logger.error(
                     "ENTRY BLOCKED [%s]: the account already holds %s x%s, which opposes "
                     "this %s %.0f/%.0f. Not sending an order the broker would refuse.",

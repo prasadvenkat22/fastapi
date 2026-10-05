@@ -14553,3 +14553,9 @@ cron process). Real fill-rate measurement from the logs pending.
   5-min, 60 sessions: mid h1 -27..+1 on every arm, h2 +9..+47; stuck 15-55%.
   Positive only at mid fills, on 10 + 10 sessions in one regime; mid is the
   chain pricer, not a real quote. Candidate for a live 1-lot trial, not proven.
+  ENTRIES AT THE MID ONLY (operator): with TRADING_MID_ORDERS on, every opening
+  order -- QQQ engine and the stock rotation books (dte0_trade._send_entry,
+  live Tradier leg quotes) -- rests at the package mid for
+  TRADING_MID_ENTRY_WAIT_SECONDS (20) with TRADING_MID_ENTRY_MAX_STEPS re-prices
+  (0 = never chased); unfilled = not taken. A QQQ cycle that already worked a
+  close defers its entry to the next cycle instead of paying the ask.

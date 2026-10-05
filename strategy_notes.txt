@@ -14631,3 +14631,20 @@ snapshots, 38 MB, since 2026-08-24 (stocks since 08-26). Added INTC, TSLA,
 AAPL, AMD so every weekly-cron name is captured. Live list is
 CHAIN_CAPTURE_SYMBOLS in .env.production. Enough history already exists for
 a first IV-vs-realised (premium selling) test on the 15 original names.
+
+
+258. PREMIUM SELLING ON REAL CHAINS (6 WEEKS)  (2026-10-04)
+
+scripts/edge_vrp.py on data/qqq-chain-snapshots.jsonl (08-24..10-02, 15
+names), settled at real 16:00 closes. Halves split 09-14.
+  VRP: realised move / ATM straddle mid = 0.88 (10:05), 0.91 (15:30). Straddle
+  sold at the bid: 0DTE +80/entry, 1-2d -46, 3-5d -97, 6+d +459; t by expiry
+  week 0.80 at best. Carried by STX/WDC/AMZN/CRWV/MSFT/GOOGL; META, MRVL lose.
+  Weekly credit spreads, natural fill, held to expiry: put 0.20 +1,673
+  (n 113, win 92%, worst week -598, t 1.41), put 0.10 t 2.56; call 0.20
+  -2,238; condor 0.20 +896 (t 0.44, 2nd half -628); condor 0.10 +844 (n 58,
+  worst trade -98). Same-day put spreads lose (t -2.6..-3.2). -2x stop worse.
+  Window: QQQ +6.1%, stocks +10.4% (most in the 2nd half). Put-side wins are
+  mostly the rising market; the direction-neutral condor is not significant.
+  IV-RV20 filter: unreliable. Verdict: a small premium, not demonstrated at
+  the natural independent of direction. Re-run as the capture grows.

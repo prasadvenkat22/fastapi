@@ -50,6 +50,16 @@ macro-BAD gates, the 0DTE stall / underlying stop / resting ask, and the
 card rows decide. Weeklies are held overnight. The QQQ band needs 20 one-minute
 bars, so its first read each day is about 09:50 ET.
 
+**QQQ engine card, band-touch rows (sections 260-268):** band period / SD /
+from / until, spread width, strike placement (`TRADING_BAND_TOUCH_ATM`: off =
+long one width in the money, on = long at the money), trend check
+(`TRADING_BAND_TOUCH_TREND_CHECK` + window + size: no put while the 1-minute
+20-SMA is rising, no call while it is falling), then stop / stop confirmation /
+take profit and "20-SMA exit: minimum profit"
+(`TRADING_BAND_TOUCH_MIN_PROFIT_PCT`). Entry logic is mean reversion: a LOWER
+touch buys a call debit spread, an UPPER touch a put debit spread; the trend
+check only removes touches, never adds or flips them.
+
 **Order pricing with `TRADING_MID_ORDERS` on (section 265):**
 
 | | entry | profit exit | stop | 15:45 force close |

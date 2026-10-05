@@ -14812,3 +14812,9 @@ _TREND_BARS (15 min), _TREND_MIN ($0.25): no put while the 1-minute 20-SMA has
 risen more than the size over the window, no call while it has fallen that
 much. Refusals log "Band touch: trend check: ...". One day's pattern; judge it
 on the logged refusals before trusting it.
+  14:06 ET: first AT-THE-MONEY trade (TRADING_BAND_TOUCH_ATM=true): lower touch,
+  QQQ 754.86 vs band 754.91 / 755.14 / 755.36 (only $0.23 wide), 755/757 call
+  x1 at the 0.50 mid (in the money it would have cost ~1.45). Trend check
+  deployed but not yet switched on. Live QQQ card at 14:06: width 2, ATM on,
+  min profit at the 20-SMA 15%, take profit 30%, stop -10%, confirmation 0,
+  entries/day 15, win cooldown 5 min, loss cooldown 10 min, start 09:40.

@@ -44,6 +44,12 @@ W3/W7`, `structure_gates.bollinger_refusal`). /desk/settings is four identical
 book cards (On/off, Budget, Entries per day, Bollinger band, Stop loss, Stop
 confirmation, Take profit) + an "All books" card + a collapsed Advanced.
 
+**Live settings after section 262:** the stock-book pullback, week-range and
+macro-BAD gates, the 0DTE stall / underlying stop / resting ask, and the
+3-day/7-day stall and end-of-day flatten are all OFF on the droplet, so the
+card rows decide. Weeklies are held overnight. The QQQ band needs 20 one-minute
+bars, so its first read each day is about 09:50 ET.
+
 Earlier this weekend, new settings (all default to the old behaviour): entries per day per bucket,
 QQQ entry-rule switches and `TRADING_BAND_ONLY`, morning tier lists (new
 `tiers` kind), QQQ engine stop / stop confirmation / take profit, engine stall

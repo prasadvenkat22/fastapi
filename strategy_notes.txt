@@ -14707,3 +14707,19 @@ legacy terms and old rules (chosen: delete from code, not hide).
   (TRADING_MAX_DAILY_LOSS_PCT, new row), force close. Everything else under
   Advanced. Removed rows: BAND_TOUCH, BAND_ONLY, *_TIERS (and the tiers kind),
   CLEAN/ZONE/REJECT/RELAXED/FADE, STALL_*, CREDIT_STALL_*, MORNING_PUT_CLOSE_BY.
+
+
+262. ADVANCED GATES AND EXTRA EXITS SWITCHED OFF  (2026-10-05)
+
+Operator: only the card rows should decide. Set via tset on the droplet:
+TRADING_PULLBACK_GATE_0DTE / _WEEKLY, TRADING_WEEKRANGE_GUARD,
+TRADING_MACRO_BAD_PUTS_ONLY = false (the Bollinger gate alone picks the stock
+books' direction); TRADING_ORPHAN_STALL_MINUTES = 0,
+TRADING_ORPHAN_UNDER_STOP = false, TRADING_ORPHAN_ASK = false (also governs
+manual 0DTE trades); TRADING_W3/W7_STALL_MINUTES = 0, TRADING_W3/W7_FLATTEN =
+false (3-day and 7-day spreads are now HELD OVERNIGHT; the switch stays under
+Advanced, "Flatten at end of day"). Exits left: each card's stop with
+confirmation and take profit, the 15:45 force close on same-day positions,
+and the QQQ engine's 20-SMA target. Band touch confirmed live 10-05 09:50 ET
+("Band touch read: QQQ 751.97, 1-min band 750.23 / 751.93 / 753.63"); the
+band needs 20 one-minute bars, so the first read each day is ~09:50.

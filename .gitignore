@@ -40,3 +40,6 @@ orphan_watch_now.json
 
 # host crontab copy for /trading/schedule (section 240)
 crontab.snapshot
+
+# local analysis data (chain copies, caches) -- section 252-258
+scratch/

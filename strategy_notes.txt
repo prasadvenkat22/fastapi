@@ -14559,3 +14559,21 @@ cron process). Real fill-rate measurement from the logs pending.
   TRADING_MID_ENTRY_WAIT_SECONDS (20) with TRADING_MID_ENTRY_MAX_STEPS re-prices
   (0 = never chased); unfilled = not taken. A QQQ cycle that already worked a
   close defers its entry to the next cycle instead of paying the ask.
+
+
+254. WEEKLY PWIN / EDGE CALIBRATION, WALK-FORWARD  (2026-10-04)
+
+scripts/edge_pwin_weekly.py, 18 names, 11,661 symbol-days 2023-11..2026-09,
+split 2025-04-03. Live Pwin = Phist at breakeven (mean demeaned payoff > 0);
+Pimp/Pmc are printed only.
+  HORIZON BUG: trading_days_to() counts sessions after today; a 09:50 entry
+  leaves ~0.9 session out, so the distribution is too narrow (the 0DTE floor
+  bug in reverse). N+1 matches realised tails: P(>= +1 ATR) Phist N .186,
+  N+1 .221, realised .223.
+  Phist is calibrated in the body, overconfident at the top (.93 -> .81-.86).
+  Brier skill vs a per-ATR-distance base rate: -0.02 in both halves for every
+  estimator -- the probabilities add nothing beyond distance in ATR.
+  Edge/ev_dem on book-eligible structures: per-date IC +0.01 (H1), -0.03 (H2),
+  flat deciles at IV = RV20 x 0.9/1.0/1.2. Simulated top-3 book: -10.6% (H1),
+  +0.1% (H2); mean Pwin .47 vs realised .40/.46. Week-VWAP gate sign flips
+  between halves. Verdict: Pwin and edge do not rank outcomes.

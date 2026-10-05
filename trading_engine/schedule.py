@@ -95,12 +95,28 @@ def parse(crontab: str, on: Optional[date] = None) -> list[dict]:
             "times_et": times,
             "every_minutes": (int(f[0].split("/", 1)[1]) if f[0].startswith("*/") else None),
             "expiry": _expiry_label(book, _arg(argv, "--expiry")),
-            "max_trades": int(_arg(argv, "--max-trades", "0") or 0) or None,
+            "max_trades": _max_trades(book, _label(book, _arg(argv, "--expiry"), on),
+                                      int(_arg(argv, "--max-trades", "0") or 0) or None),
             "symbols": symbols.split(",") if symbols else None,
             "live_flag": "--live" in argv,
             "cron": " ".join(f[:5]) + " (UTC)",
         })
     return jobs
+
+
+def _max_trades(book: str, label: str, cron_value):
+    """The trades-per-run in force: the settings page's value when set (section
+    263), else the cron's --max-trades. Read from the overrides file, not this
+    process's environment, which is frozen at API start."""
+    bucket = "0DTE" if book == "dte0" else ("W7" if "7-day" in label else "W3")
+    key = f"TRADING_MAX_TRADES_STOCK_{bucket}"
+    try:
+        from . import settings_overrides
+        raw = (settings_overrides.read_file()[0].get(key) or os.getenv(key) or "").strip()
+        val = int(float(raw)) if raw else 0
+    except Exception:
+        val = 0
+    return val or cron_value
 
 
 def snapshot(on: Optional[date] = None) -> dict:

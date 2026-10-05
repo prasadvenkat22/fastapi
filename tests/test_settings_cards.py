@@ -52,3 +52,18 @@ def test_stock_bollinger_rows_are_the_gate_switches():
                       ("w7", "TRADING_BOLLINGER_GATE_W7")):
         s = so.BY_KEY[key]
         assert (s.book, s.order, s.kind, s.default) == (book, 40, "bool", "false")
+
+
+def test_stock_cards_carry_trades_per_run():
+    for book, key in (("s0", "TRADING_MAX_TRADES_STOCK_0DTE"), ("w3", "TRADING_MAX_TRADES_STOCK_W3"),
+                      ("w7", "TRADING_MAX_TRADES_STOCK_W7")):
+        s = so.BY_KEY[key]
+        assert (s.book, s.order, s.label, s.kind) == (book, 31, "Trades per run", "int")
+
+
+def test_schedule_shows_the_setting_over_the_cron(monkeypatch):
+    from trading_engine import schedule
+    monkeypatch.setattr(so, "read_file", lambda *a: ({"TRADING_MAX_TRADES_STOCK_W7": "5"}, []))
+    assert schedule._max_trades("weekly", "Single-stock 7-day", 3) == 5
+    assert schedule._max_trades("weekly", "Single-stock 3-day", 3) == 3
+    assert schedule._max_trades("dte0", "Single-stock 0DTE", 4) == 4

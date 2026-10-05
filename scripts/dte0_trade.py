@@ -650,6 +650,15 @@ def _send_entry(sym: str, exp: str, cp: str, long_k: float, short_k: float,
     return res
 
 
+def _max_trades_setting(bucket: str) -> int:
+    """TRADING_MAX_TRADES_STOCK_<0DTE|W3|W7>: trades per run; 0 = use --max-trades."""
+    raw = os.getenv(f"TRADING_MAX_TRADES_STOCK_{bucket.upper()}", "").strip()
+    try:
+        return max(int(float(raw)), 0) if raw else 0
+    except ValueError:
+        return 0
+
+
 def _max_entries(bucket: str) -> int:
     """TRADING_MAX_ENTRIES_STOCK_<bucket> (0DTE, W3, W7). 0 = no cap."""
     raw = os.getenv(f"TRADING_MAX_ENTRIES_STOCK_{bucket.upper()}", "").strip()
@@ -831,6 +840,13 @@ def main() -> None:
     wtype = _weekly_type_for(exp) if args.book == "weekly" else None
     global WTYPE
     WTYPE = wtype
+    # TRADES PER RUN from the settings page (section 263); blank = the cron's
+    # --max-trades. Read here, once the bucket is known, before anything uses it.
+    _mt = _max_trades_setting(wtype or "0dte")
+    if _mt and _mt != args.max_trades:
+        logger.info("Trades per run %d from TRADING_MAX_TRADES_STOCK_%s (--max-trades %d ignored).",
+                    _mt, (wtype or "0dte").upper(), args.max_trades)
+        args.max_trades = _mt
     budget = (_weekly_budget(wtype) if wtype else MAX_BUDGET)
     if args.budget != budget:
         logger.info("Budget $%.0f from the %s bucket setting (--budget %.0f ignored).",

@@ -14723,3 +14723,13 @@ confirmation and take profit, the 15:45 force close on same-day positions,
 and the QQQ engine's 20-SMA target. Band touch confirmed live 10-05 09:50 ET
 ("Band touch read: QQQ 751.97, 1-min band 750.23 / 751.93 / 753.63"); the
 band needs 20 one-minute bars, so the first read each day is ~09:50.
+
+
+263. TRADES PER RUN ON THE STOCK CARDS  (2026-10-05)
+
+The Entry schedule panel's "Max trades" was the cron's --max-trades (4 / 3 / 3)
+and not settable. New rows TRADING_MAX_TRADES_STOCK_0DTE / _W3 / _W7 ("Trades
+per run", on each stock card under Entries per day; blank = the cron value).
+dte0_trade uses the setting once the bucket is known (it also divides the
+budget into per-trade slots), and the schedule panel shows the value in force,
+read from trading_overrides.env so the API needs no restart to reflect it.

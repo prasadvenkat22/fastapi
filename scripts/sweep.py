@@ -3885,6 +3885,23 @@ def _cfg_worker_init():
         "FADE_ENTRIES_ENABLED", "REJECT_ENTRIES_ENABLED", "STOP_LOSS_PCT",
         "STALL_ARM_PCT", "STALL_ALL_WINDOWS", "STALL_MINUTES")}
     _W["band"] = PB.BAND_ONLY
+    _W["pbwindows"] = PB.WINDOWS
+    _W["weekrange"] = os.getenv("TRADING_WEEKRANGE_GUARD", "false")
+    # The week-range guard reads Tradier timesales against the REAL clock.
+    # Replay it from the 5-minute history up to the simulated now instead:
+    # the guard only reads weekpos (spot within the last 5 sessions' range).
+    import trading_engine.structure_gates as SG
+
+    def _replay_week_context(symbol: str):
+        seen = _HISTORY.loc[:_Clock.now]
+        days = sorted(set(seen.index.date))[-5:]
+        wk = seen[seen.index.map(lambda t: t.date() in days)]
+        if wk.empty:
+            return None
+        bars = [{"time": t.strftime("%Y-%m-%dT%H:%M:%S"), "high": float(r.High),
+                 "low": float(r.Low), "close": float(r.Close)} for t, r in wk.iterrows()]
+        return SG.context_from_bars(bars, bars[-80:])
+    SG.week_context = _replay_week_context
 
 
 def _mid_fill(model_value: float, side: str) -> float:
@@ -3981,6 +3998,17 @@ def _eval_cfg(cfg: dict) -> dict:
         setattr(N, k, v)
     PB.ENABLED_WINDOWS = frozenset(cfg.get("windows", _W["windows"]))
     PB.BAND_ONLY = cfg.get("band", _W["band"])
+    os.environ["TRADING_WEEKRANGE_GUARD"] = (
+        ("true" if cfg["weekrange"] else "false") if "weekrange" in cfg else _W["weekrange"])
+    wins = _W["pbwindows"]
+    if cfg.get("morning_start") or cfg.get("morning_all"):
+        hh, mm = (int(x) for x in (cfg.get("morning_start") or "10:15").split(":"))
+        wins = tuple(replace(w, start=dtime(hh, mm),
+                             entry_tiers=None if cfg.get("morning_all") else w.entry_tiers)
+                     if w.name == "MORNING_DRIFT" else w for w in wins)
+    PB.WINDOWS = wins
+    if cfg.get("extra_windows"):
+        PB.ENABLED_WINDOWS = PB.ENABLED_WINDOWS | frozenset(cfg["extra_windows"])
 
     mid = cfg.get("mid", False)
     f = _mid_fill if mid else _W["fill"]
@@ -4032,6 +4060,9 @@ def _eval_cfg(cfg: dict) -> dict:
         "tiers": tiers,
         "cost": (sum(costs) / len(costs)) if costs else 0.0,
         "cost_pct": (sum(cpct) / len(cpct)) if cpct else 0.0,
+        "focus_trades": [(t["playbook"], f"{t['ts']:%H:%M}", f"{t['exit_ts']:%H:%M}",
+                          t["reason"], t["pnl"]) for t in trades
+                         if str(t["ts"].date()) == "2026-10-02"],
         "first_day": str(per_day[0][0]) if per_day else "", "last_day": str(per_day[-1][0]) if per_day else "",
     }
 
@@ -4215,6 +4246,34 @@ def _describe_pt(p: dict) -> str:
             f"TRADING_STOP_LOSS_PCT={p['stop']:.0f} "
             f"TRADING_STALL_ALL_WINDOWS={str(p['stall'][0]).lower()} "
             f"TRADING_STALL_ARM_PCT={p['stall'][1]:.0f}")
+
+
+def sweep_earlyentry(sessions: dict):
+    """The 2026-10-02 opening leg: week-range guard, an earlier bullish window.
+
+    Baseline = live, INCLUDING TRADING_WEEKRANGE_GUARD=true, which the repo
+    .env does not set (earlier sweeps ran without it). Breadth cannot be
+    replayed -- sentiment is pinned GOOD -- so every arm here is already
+    "breadth gate off". h1 = sessions 1-30 (choose on it), h2 = 31-60.
+    """
+    _write_cache()
+    G = {"weekrange": True}
+    B = {"B1 MORNING_START 09:45": {"morning_start": "09:45"},
+         "B1 + MORNING_TIERS=ALL": {"morning_start": "09:45", "morning_all": True},
+         "B2 + ATM_MOMENTUM": {"extra_windows": ["ATM_MOMENTUM"]},
+         "MORNING_TIERS=ALL (10:15)": {"morning_all": True}}
+    arms = [("live baseline (guard ON)", dict(G)),
+            ("A  guard OFF", {"weekrange": False})]
+    arms += [(k, dict(G, **v)) for k, v in B.items()]
+    arms += [(f"D  guard OFF + {k}", dict(v, weekrange=False)) for k, v in B.items()]
+    res = _pool_run([c for _, c in arms])
+    print("\nEARLY ENTRY -- week-range guard and an earlier bullish window "
+          "(sentiment pinned GOOD = breadth gate off in every arm)")
+    print(_HDR + "  10-02 trades")
+    for (label, _), r in zip(arms, res):
+        ft = "; ".join(f"{pb.split(':')[0][:8]}:{pb.split(':')[-1]} {a}-{b} {why} {pnl:+.0f}"
+                       for pb, a, b, why, pnl in r["focus_trades"]) or "none"
+        print(_fmt(label, r) + "  " + ft)
 
 
 def sweep_breach(sessions: dict):
@@ -4596,6 +4655,8 @@ def main():
         sweep_costcheck(sessions)
     if which == "randomentry":
         sweep_randomentry(sessions)
+    if which == "earlyentry":
+        sweep_earlyentry(sessions)
     if which == "cdsearch":
         sweep_cdsearch(sessions)
     if which in ("breach", "all"):

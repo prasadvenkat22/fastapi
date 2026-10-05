@@ -14584,3 +14584,19 @@ Pimp/Pmc are printed only.
   horizon. Fixes both the 0DTE over-width (section 252) and the weekly
   under-width. It makes the probabilities honest; it does not create an edge
   (Brier skill vs distance-in-ATR was ~0 for every estimator).
+
+
+255. FRIDAY 10-02 OPENING LEG: THREE GATES REPLAYED  (2026-10-04)
+
+sweep.py earlyentry, 60 sessions, chosen on 1-30. The harness never applied
+TRADING_WEEKRANGE_GUARD; a replay version now does, and the live baseline
+with it is 139 trades, -69.62/day (h1 -65.87, h2 -73.37, worst -475).
+  guard off: -81.88 (the guard pays ~$12/day).
+  MORNING_START 09:45 (B1): -62.05 (h1 -58.51, h2 -65.59, worst -465) --
+    the only arm better than live in both halves, still negative; the guard
+    blocks the 10-02 09:45 entry anyway.
+  B1 + MORNING_TIERS=ALL: -85.17; ATM_MOMENTUM on: -83.04.
+  guard off + B1 + ALL: -113.80; it catches the 10-02 opening (+39 at 09:45)
+    and gives it back the same morning (10:40 ZONE stop -199).
+  Breadth gate: not replayable (sentiment pinned GOOD = gate off in every
+  arm); the per-minute logged-verdict replay needs production DB reads.

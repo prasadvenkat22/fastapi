@@ -219,24 +219,38 @@ REGISTRY: tuple[Setting, ...] = (
             "Its own give-back for the credit stall. Blank = same as the morning give-back.",
             "pts", 0, 200, allow_blank=True),
     # --- 0DTE exit ladder (trading_engine/orphans.py) -----------------------
+    # Stop and profit first: the rows a manual 0DTE trade is managed by.
     Setting("TRADING_ORPHAN_STOP_PCT", "Stop loss", G_0DTE, "float", "-25",
             "Close a debit spread when its return on cost falls to this.",
             "%", -100, 0),
     Setting("TRADING_ORPHAN_STOP_CONFIRM_MINUTES", "Stop confirmation", G_0DTE, "float", "2",
-            "Minutes the stop level must hold before it fires. 0 = immediate.",
+            "Minutes the stop level must hold before it fires. 0 = sell on the first reading past the stop.",
             "min", 0, 30),
+    Setting("TRADING_ORPHAN_TARGET_RETURN_PCT", "Profit target (return on cost)", G_0DTE, "float", "0",
+            "Sell once the spread is worth this % more than you paid (sold at the mid when "
+            "'Profit exits sell at the mid' is on). Held back only while the drag guard (Max drag) "
+            "says the sale would give away too much intrinsic on a deep in-the-money spread. "
+            "0 disables; the 0DTE picker sizes entries against 30 when unset.",
+            "%", 0, 500),
+    Setting("TRADING_ORPHAN_STALL_ARM", "Stall starts watching at", G_0DTE, "float", "0",
+            "The same-day stall only watches once the peak gain reaches this. After that every "
+            "new high resets the watch to that level (a local max) and restarts the stall window. "
+            "0 = watch from any gain.", "%", 0, 500),
+    Setting("TRADING_ORPHAN_STALL_MINUTES", "Stall window", G_0DTE, "float", "0",
+            "Close a winner that has not made a new peak for this long. 0 disables.",
+            "min", 0, 240),
+    Setting("TRADING_ORPHAN_STALL_GIVEBACK_PCT", "Stall give-back (points)", G_0DTE, "float", "0",
+            "Give-back from peak, in return points, that also fires the stall.",
+            "pts", 0, 200),
+    Setting("TRADING_ORPHAN_STALL_MIN_GAIN_PCT", "Stall minimum gain", G_0DTE, "float", "8",
+            "The stall only exits if the mark books at least this much. 0 = any gain.",
+            "%", 0, 100),
     Setting("TRADING_ORPHAN_STOP_RESPECTS_INTRINSIC", "Stop waits while it pays at expiry", G_0DTE, "bool", "true",
             "Hold the stop off while the spread would still pay more than its cost at expiry. "
             "false = a plain stop on the price: at the stop level, it sells."),
     Setting("TRADING_ORPHAN_CREDIT_STOP_PCT", "Credit stop", G_0DTE, "float", "-600",
             "Stop for credit structures, as % of the credit collected.",
             "%", -2000, 0),
-    Setting("TRADING_ORPHAN_TARGET_RETURN_PCT", "Profit target (return on cost)", G_0DTE, "float", "0",
-            "Take profit at this return on cost. 0 disables in the exit ladder; "
-            "the 0DTE picker sizes entries against 30 when unset.",
-            "%", 0, 500),
-    Setting("TRADING_ORPHAN_TAKE_PROFIT", "Take profit (legacy)", G_0DTE, "float", "50",
-            "Older flat take-profit on return.", "%", 0, 500),
     Setting("TRADING_ORPHAN_CEILING", "Ceiling (fraction of width)", G_0DTE, "float", "0.90",
             "Close when the mark reaches this share of the spread width.",
             "x width", 0, 1),
@@ -287,13 +301,6 @@ REGISTRY: tuple[Setting, ...] = (
             "gap). 0 = the ordinary stop.", "%", -100, 0),
     Setting("TRADING_ORPHAN_UNDER_STOP_REQUIRE_TAPE", "Underlying stop needs adverse VWAP", G_0DTE, "bool", "true",
             "Only count minutes when the underlying is also under a VWAP moving against the spread."),
-    Setting("TRADING_ORPHAN_STALL_MINUTES", "Stall window", G_0DTE, "float", "0",
-            "Close a winner that has not made a new peak for this long. 0 disables.",
-            "min", 0, 240),
-    Setting("TRADING_ORPHAN_STALL_ARM", "Stall starts watching at", G_0DTE, "float", "0",
-            "The same-day stall only watches once the peak gain reaches this. After that every "
-            "new high resets the watch to that level (a local max) and restarts the stall window. "
-            "0 = watch from any gain.", "%", 0, 500),
     Setting("TRADING_ORPHAN_PROFIT_EXIT_AT_MID", "Profit exits sell at the mid", G_0DTE, "bool", "false",
             "Stall, profit lock and target exits are priced at the spread mid instead of the "
             "bid/ask natural. An unfilled mid order is cancelled and re-priced next minute, so it "
@@ -303,9 +310,6 @@ REGISTRY: tuple[Setting, ...] = (
             "what the spread would SELL for now, and the extrinsic-drag guard does not hold the exit "
             "back. It still never sells below the stall minimum gain. false = measured on intrinsic "
             "(moves with the underlying; a deep in-the-money spread can show +40% it cannot sell for)."),
-    Setting("TRADING_ORPHAN_STALL_GIVEBACK_PCT", "Stall give-back (points)", G_0DTE, "float", "0",
-            "Give-back from peak, in return points, that also fires the stall.",
-            "pts", 0, 200),
     Setting("TRADING_ORPHAN_STALL_GIVEBACK_BAND", "Stall give-back (share of band)", G_0DTE, "float", "0",
             "Give-back as a fraction of the profit band (width − entry). "
             "Takes priority over the points give-back when above 0.",
@@ -313,9 +317,6 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_ORPHAN_STALL_GIVEBACK_FRACTION", "Stall give-back (share of peak)", G_0DTE, "float", "0",
             "Give-back as a fraction of the peak gain. 0 disables.",
             "x peak", 0, 1),
-    Setting("TRADING_ORPHAN_STALL_MIN_GAIN_PCT", "Stall minimum gain", G_0DTE, "float", "8",
-            "The stall only exits if the mark books at least this much. 0 = any gain.",
-            "%", 0, 100),
     Setting("TRADING_ORPHAN_OTM_STOP", "OTM stop", G_0DTE, "bool", "true",
             "Close a debit spread as soon as it is out of the money (intrinsic 0)."),
     Setting("TRADING_ORPHAN_SLOW_STOP_PCT", "Slow stop", G_0DTE, "float", "0",

@@ -190,7 +190,6 @@ ORPHAN_LATER_TARGET_PCT = float(
 # 0 disables it, which is the default.
 ACCOUNT_FLOOR = float(os.getenv("TRADING_ACCOUNT_FLOOR", "0") or 0)
 
-ORPHAN_TAKE_PROFIT_PCT = float(os.getenv("TRADING_ORPHAN_TAKE_PROFIT", "50"))
 ORPHAN_STOP_PCT = float(os.getenv("TRADING_ORPHAN_STOP_PCT", "-25"))
 # Credit gets its own, for the reason in the docstring: -25% of a collected
 # credit is a few cents and would close everything.

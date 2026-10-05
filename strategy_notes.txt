@@ -14600,3 +14600,16 @@ with it is 139 trades, -69.62/day (h1 -65.87, h2 -73.37, worst -475).
     and gives it back the same morning (10:40 ZONE stop -199).
   Breadth gate: not replayable (sentiment pinned GOOD = gate off in every
   arm); the per-minute logged-verdict replay needs production DB reads.
+
+
+256. MANUAL QQQ 0DTE: STOP AND PROFIT ROWS FIRST ON THE SETTINGS PAGE  (2026-10-04)
+
+The operator trades QQQ 0DTE by hand; the orphan ladder manages the exits
+(WATCH/MANAGE_ORPHANS on, ORPHAN_UNDERLYING set-but-empty = every symbol).
+The 0DTE exits group now starts with: Stop loss, Stop confirmation, Profit
+target (return on cost), Stall starts watching at, Stall window, Stall
+give-back, Stall minimum gain. Removed "Take profit (legacy)"
+(TRADING_ORPHAN_TAKE_PROFIT): ORPHAN_TAKE_PROFIT_PCT was never read (see
+section near line 3732: "there is no orphan take-profit"); the live target is
+TRADING_ORPHAN_TARGET_RETURN_PCT. Live at the time: stop -10% with a 10-min
+confirmation (10-02 sold at -30%), target +70%, stall from +50% / 10 min.

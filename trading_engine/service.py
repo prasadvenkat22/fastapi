@@ -102,8 +102,40 @@ def _broker_holds(underlying: str, long_strike, short_strike) -> bool:
 
 
 
+# Exit reasons that may be WORKED from the mid (section 253). Everything else --
+# stops, the force close, risk-off, breakeven, strike approach -- sells at the
+# natural immediately: a protective exit must never wait on price improvement.
+MID_EXIT_REASONS = {"TAKE_PROFIT", "RATCHET", "STALL", "TRAIL_STOP", "HANDOFF"}
+
+
+def _package_quote(position_like, opening: bool) -> "tuple[float, float] | None":
+    """(mid, natural) of the order's NET price, positive, or None if unquoted.
+
+    v = long leg - short leg. Paying for a debit open or a credit close,
+    collecting for the other two; natural is the side a market order would get.
+    """
+    underlying = getattr(position_like, "underlying", None) or "QQQ"
+    cp = option_type_for(position_like.strategy)
+    ls = tradier_orders.occ_symbol(underlying, today_expiry(), cp, position_like.long_strike)
+    ss = tradier_orders.occ_symbol(underlying, today_expiry(), cp, position_like.short_strike)
+    q = tradier_orders.quotes([ls, ss])
+    try:
+        lb, la = float(q[ls]["bid"]), float(q[ls]["ask"])
+        sb, sa = float(q[ss]["bid"]), float(q[ss]["ask"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if min(lb, la, sb, sa) < 0 or la < lb or sa < sb:
+        return None
+    v_bid, v_ask = lb - sa, la - sb
+    v_mid = (v_bid + v_ask) / 2.0
+    credit = is_credit(position_like.strategy)
+    if opening:
+        return (-v_mid, -v_ask) if credit else (v_mid, v_ask)
+    return (-v_mid, -v_bid) if credit else (v_mid, v_bid)
+
+
 def _route_order(position_like, quantity: int, opening: bool, limit_price: float,
-                 label: str) -> "dict | None":
+                 label: str, work_from_mid: bool = False) -> "dict | None":
     """Send the order the engine's decision implies, and log what came back.
 
     No longer shadow. This began as a logging-only path, with the engine's own
@@ -134,6 +166,30 @@ def _route_order(position_like, quantity: int, opening: bool, limit_price: float
             position_like.short_strike,
         )
         return None
+    if work_from_mid and tradier_orders.MID_ORDERS:
+        try:
+            pq = _package_quote(position_like, opening)
+        except Exception:
+            logger.exception("Order [%s]: quote for the mid failed — sending at the limit.", label)
+            pq = None
+        if pq is not None and pq[0] > 0 and pq[1] > 0:
+            try:
+                result = tradier_orders.work_vertical(
+                    underlying, today_expiry(), option_type_for(position_like.strategy),
+                    long_strike=position_like.long_strike,
+                    short_strike=position_like.short_strike,
+                    quantity=quantity, opening=opening, mid=pq[0], natural=pq[1],
+                    is_credit=is_credit(position_like.strategy),
+                    fallback_natural=not opening,
+                )
+                logger.info("Order [%s] %s worked from mid %.3f (natural %.3f): %s", label,
+                            "OPEN" if opening else "CLOSE", pq[0], pq[1], result)
+                return result
+            except Exception:
+                logger.exception("Order [%s] mid working failed.", label)
+                if opening:
+                    return {"status": "refused", "reason": "exception"}
+                # A close falls through to the ordinary natural order below.
     try:
         result = tradier_orders.submit_vertical(
             underlying,
@@ -489,6 +545,7 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         logger.exception("Weekly shadow failed — the trading cycle is unaffected.")
 
     closed_this_cycle = bool(final_state.get("exit_reason"))
+    _worked_close = False
 
     if open_row is not None and closed_this_cycle:
         # Book the exit at the NATURAL, not at the mark.
@@ -527,9 +584,25 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         # A submitted close is not a completed one -- see _close_rejected.
         # On an explicit refusal the position row STAYS, nothing is recorded,
         # and the next cycle sees a live position again and can act on it.
+        _worked_close = final_state.get("exit_reason") in MID_EXIT_REASONS
         order_result = _route_order(
             open_row, open_row.quantity, opening=False,
-            limit_price=exit_value, label=open_row.playbook or open_row.strategy)
+            limit_price=exit_value, label=open_row.playbook or open_row.strategy,
+            work_from_mid=_worked_close)
+        if order_result and order_result.get("filled") is True:
+            # Book what actually filled, not the natural it was spared.
+            exit_value = float(order_result["fill_price"])
+            per_spread = (
+                (open_row.entry_net_debit - exit_value)
+                if is_credit(open_row.strategy)
+                else (exit_value - open_row.entry_net_debit)
+            )
+            _left = open_row.quantity - int(order_result.get("filled_qty") or open_row.quantity)
+            if _left > 0:
+                logger.warning("Mid close filled %d of %d — sending the rest at the natural.",
+                               open_row.quantity - _left, open_row.quantity)
+                _route_order(open_row, _left, opening=False, limit_price=exit_value,
+                             label=open_row.playbook or open_row.strategy)
 
         if _close_rejected(order_result):
             logger.error(
@@ -612,7 +685,14 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
                 _opened = _route_order(
                     new_position, new_position.quantity, opening=True,
                     limit_price=new_position.entry_net_debit,
-                    label=new_position.playbook or new_position.strategy)
+                    label=new_position.playbook or new_position.strategy,
+                    # One worked ladder per cycle: a close and a re-entry both
+                    # worked from the mid would not fit inside the minute.
+                    work_from_mid=not _worked_close)
+                if _opened and _opened.get("filled") is True:
+                    # The row records the real fill: price and size.
+                    new_position.entry_net_debit = float(_opened["fill_price"])
+                    new_position.quantity = int(_opened.get("filled_qty") or new_position.quantity)
                 if _open_rejected(_opened):
                     # No row. See _open_rejected for the session this cost.
                     logger.error(

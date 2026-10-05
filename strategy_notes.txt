@@ -14508,3 +14508,27 @@ per trade out of sample, 85th by week-block -- not significant.
 CREDIT SHADOW (5 expiries): PUT +29.9/row 94% win 5/5 weeks; CONDOR +17.8;
 CALL -10.2. Five rising weeks: direction, not edge.
 Scripts: scripts/edge_stock0dte.py, edge_shadow.py, edge_picks.py, edge_backtest.py.
+
+
+253. BAND MEAN-REVERSION SCALP, AND MID-FIRST ORDERS  (2026-10-04)
+
+Operator's idea: calls at the lower 20-SMA band, puts at the upper, exit at
+the midline/opposite band within 5-10 min. The engine never traded this
+(STRICT/RELAXED need trend agreement; FADE is upper-band puts only).
+scripts/edge_bandscalp.py: 1-min Tradier bars 09-04..10-02 (20 sessions),
+5-min harness bars (60 sessions).
+  Underlying: band events beat time-matched random bars slightly and not
+  reliably (p56-p96 depending on half and horizon; clustered events).
+  Net delta of the 4-wide ITM spread is ~0.42, not 0.6-0.7, so breakeven is a
+  ~$0.46 QQQ move; 72-80% of events never reach it in 10 min.
+  Options: negative in both halves at every setting. 1-min reentry arms are
+  -$247/-$251 a day at bid/ask and +$21.6/+$14.4 at mid -- the only consistent
+  positive anywhere, and it exists only at mid fills. Round trip ~$18.6.
+MID-FIRST ORDERS: TRADING_MID_ORDERS (off). Entries and profit exits post at
+the package mid, step TRADING_MID_STEP toward the natural every
+TRADING_MID_STEP_SECONDS, cancel/re-price, whole ladder capped by
+TRADING_MID_BUDGET_SECONDS (25). Unfilled entry = no trade; profit exits end
+at the natural; stops/force close/risk-off/breakeven go at the natural at
+once. One worked ladder per cycle. run_cycle's poll budget is now wall clock
+from process start (it summed sleeps, so a long cycle could overlap the next
+cron process). Real fill-rate measurement from the logs pending.

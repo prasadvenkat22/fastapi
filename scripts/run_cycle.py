@@ -59,6 +59,11 @@ EXIT_POLL_SECONDS = float(os.getenv("TRADING_EXIT_POLL_SECONDS", "0"))
 
 # Never poll past this; cron will start the next process at the minute.
 _POLL_BUDGET_SECONDS = 55.0
+# Measured from PROCESS START on the wall clock, not by summing sleeps: a cycle
+# that works an order from the mid (TRADING_MID_ORDERS) can spend 25s+ before
+# the first poll, and cron starts the next process a minute after this one.
+import time as _time
+_T0 = _time.monotonic()
 
 
 def _within_market_hours(now: datetime) -> bool:
@@ -96,10 +101,9 @@ async def _poll_exits(db) -> None:
     if db.query(OpenPosition).first() is None:
         return
 
-    waited = 0.0
-    while waited + EXIT_POLL_SECONDS <= _POLL_BUDGET_SECONDS:
+    while _time.monotonic() - _T0 + EXIT_POLL_SECONDS <= _POLL_BUDGET_SECONDS:
         await asyncio.sleep(EXIT_POLL_SECONDS)
-        waited += EXIT_POLL_SECONDS
+        waited = _time.monotonic() - _T0
         db.expire_all()
         if db.query(OpenPosition).first() is None:
             logger.info("exit poll: position closed after %.0fs — stopping.", waited)

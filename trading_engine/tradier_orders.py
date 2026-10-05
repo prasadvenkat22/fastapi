@@ -314,6 +314,120 @@ def submit_vertical(underlying: str, expiry: "date | str", call_put: str,
     return _post_order(payload, preview)
 
 
+# MID-FIRST ORDERS (2026-10-04, section 253). Off by default.
+#
+# The engine paid the full bid/ask both ways: entries at the natural ask,
+# exits at the natural bid -- about $15 of a ~$23 round trip on a 1-lot
+# vertical quoting 0.15 wide. work_vertical posts at the mid and steps toward
+# the natural, cancelling and re-pricing between steps. BOUNDED IN TIME on
+# purpose: run_cycle has no lock against the next cron process, so the whole
+# loop must finish well inside a minute.
+MID_ORDERS = os.getenv("TRADING_MID_ORDERS", "false").lower() == "true"
+MID_STEP = float(os.getenv("TRADING_MID_STEP", "0.02"))           # $ per step toward the natural
+MID_STEP_SECONDS = float(os.getenv("TRADING_MID_STEP_SECONDS", "6"))
+MID_MAX_STEPS = int(os.getenv("TRADING_MID_MAX_STEPS", "3"))      # re-prices after the first post
+MID_BUDGET_SECONDS = float(os.getenv("TRADING_MID_BUDGET_SECONDS", "25"))  # whole ladder, wall clock
+
+_FILLED = {"filled"}
+_LIVE = {"open", "pending", "partially_filled", "accepted", "ok"}
+
+
+def _round_cent(x: float, up: bool) -> float:
+    import math
+    c = x * 100
+    return (math.ceil(c - 1e-9) if up else math.floor(c + 1e-9)) / 100.0
+
+
+def mid_ladder(mid: float, natural: float, step: float, max_steps: int) -> list:
+    """Prices to try, mid first, each `step` closer to the natural, never past it.
+
+    Paying (natural above mid) rounds the mid UP to the cent, collecting
+    rounds it DOWN, so the first price is never better than a real mid.
+    """
+    paying = natural >= mid
+    p = _round_cent(mid, up=paying)
+    out = []
+    for _ in range(max_steps + 1):
+        q = min(p, natural) if paying else max(p, natural)
+        if not out or abs(q - out[-1]) > 1e-9:
+            out.append(round(q, 2))
+        if abs(q - natural) < 1e-9:
+            break
+        p = p + step if paying else p - step
+    return out
+
+
+def work_vertical(underlying: str, expiry: "date | str", call_put: str,
+                  long_strike: float, short_strike: float, quantity: int,
+                  opening: bool, mid: float, natural: float, is_credit: bool,
+                  fallback_natural: bool, sleep=None, clock=None) -> dict:
+    """Post at the mid, step toward the natural, and report what filled.
+
+    Returns the last broker answer plus: filled (bool), fill_price (net,
+    positive), filled_qty, steps, prices. With fallback_natural the last rung
+    is the natural and is left working like an ordinary order (closes must
+    go out); without it an unfilled ladder is cancelled and comes back
+    {"status": "refused", "reason": "not_filled_at_mid"} (an entry that
+    did not fill is simply not taken).
+    """
+    import time as _t
+    sleep = sleep or _t.sleep
+    clock = clock or _t.monotonic
+    prices = mid_ladder(mid, natural, MID_STEP, MID_MAX_STEPS)
+    if fallback_natural and abs(prices[-1] - round(natural, 2)) > 1e-9:
+        prices.append(round(natural, 2))
+    started = clock()
+    last: dict = {}
+    for i, px in enumerate(prices):
+        if i > 0 and clock() - started > MID_BUDGET_SECONDS:
+            if not fallback_natural:
+                break
+            i, px = len(prices) - 1, prices[-1]   # out of time: straight to the natural
+        final_rung = i == len(prices) - 1
+        last = submit_vertical(underlying, expiry, call_put, long_strike, short_strike,
+                               quantity, opening, px, is_credit)
+        oid = last.get("id")
+        if not oid or str(last.get("status", "")).lower() not in _LIVE:
+            return dict(last, filled=False, steps=i, prices=prices[:i + 1])
+        if final_rung and fallback_natural:
+            # The natural rung is an ordinary order: leave it working, as the
+            # engine always did, and let the existing close handling judge it.
+            return dict(last, filled=None, fill_price=px, filled_qty=quantity,
+                        steps=i, prices=prices[:i + 1])
+        deadline = clock() + MID_STEP_SECONDS
+        st: dict = {}
+        while clock() < deadline:
+            sleep(1.5)
+            try:
+                st = order_status(oid)
+            except Exception:
+                st = {}
+            if str(st.get("status", "")).lower() in _FILLED:
+                break
+        if str(st.get("status", "")).lower() not in _FILLED:
+            try:
+                cancel_order(oid)
+            except Exception:
+                logger.warning("Cancel of %s failed — reading its status.", oid, exc_info=True)
+            try:
+                st = order_status(oid)       # a fill in the same second wins
+            except Exception:
+                st = {}
+        status = str(st.get("status", "")).lower()
+        done = int(float(st.get("exec_quantity") or 0))
+        if status in _FILLED or done > 0:
+            fill = abs(float(st.get("avg_fill_price") or px))
+            logger.info("Mid order %s %s/%s x%d filled %d at %.2f on rung %d of %s (%.1fs).",
+                        underlying, long_strike, short_strike, quantity, done or quantity,
+                        fill, i, prices, clock() - started)
+            return dict(last, status="ok", filled=True, fill_price=fill,
+                        filled_qty=done or quantity, steps=i, prices=prices[:i + 1])
+        logger.info("Mid order %s %s/%s: no fill at %.2f — %s.", underlying, long_strike,
+                    short_strike, px, "re-pricing" if not final_rung else "giving up")
+    return {"status": "refused", "reason": "not_filled_at_mid", "filled": False,
+            "steps": len(prices) - 1, "prices": prices}
+
+
 def order_status(order_id: str) -> dict:
     if not LIVE_ORDERS:
         return {"status": "suppressed"}

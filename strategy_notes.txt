@@ -14532,3 +14532,12 @@ at the natural; stops/force close/risk-off/breakeven go at the natural at
 once. One worked ladder per cycle. run_cycle's poll budget is now wall clock
 from process start (it summed sleeps, so a long cycle could overlap the next
 cron process). Real fill-rate measurement from the logs pending.
+  FILL RATES, REAL ORDERS (scripts/edge_fills.py, n<=10, 09-24/25 and 10-02):
+  orphan mid profit exits: 5/5 episodes filled AT the mid; 3 on the first
+  post (<4 s), 4 within 2 min, slowest 300 s after 4 re-prices. Quoted
+  mid-to-natural on QQQ/SPY 0DTE verticals $1-11 per contract per side:
+  round trip $2-4 near the money, $6-22 on ITM 2-4 wide. Engine (natural)
+  paid ~$11/contract vs mid on its one round trip. Rotation script: 27 of 36
+  orders rejected at the broker within 0.1 s, reason not recorded. Broker
+  fills before 09-21 are essentially all manual (18 of 3,370 contracts match
+  a logged order).

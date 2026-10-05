@@ -63,20 +63,42 @@ def rv20(h):
     return float(np.std(r, ddof=1) * math.sqrt(252)) if len(r) > 2 else float("nan")
 
 
-def trading_days_to(exp: str) -> int:
-    """Sessions from the next trading day to expiry inclusive, holidays aware."""
+def session_horizon(exp: str, now: "datetime | None" = None) -> float:
+    """Sessions left to expiry, FRACTIONAL: what remains of today's session
+    plus every full session after it. Holidays aware.
+
+    Section 254. The integer version counted only the sessions AFTER today and
+    floored at 1, which was wrong both ways: a same-day entry at 11:30 was
+    given a full session of movement (Pwin 2-6x too high, section 252), and a
+    09:50 weekly entry lost the ~0.9 of a session still ahead of it (tails too
+    narrow: P(>= +1 ATR) .186 against .223 realised).
+    """
     try:
         from trading_engine.market_calendar import is_trading_day
     except Exception:
         def is_trading_day(d):
             return d.weekday() < 5
+    from zoneinfo import ZoneInfo
+    now = now or datetime.now(ZoneInfo("America/New_York"))
+    today = now.date()
     y, m, d = (int(x) for x in exp.split("-"))
-    end, cur, n = date(y, m, d), date.today(), 0
+    end = date(y, m, d)
+    t = 0.0
+    if end >= today and is_trading_day(today):
+        mins = (now.hour * 60 + now.minute) - (9 * 60 + 30)
+        t += min(max(1.0 - mins / 390.0, 0.0), 1.0)
+    cur = date.fromordinal(today.toordinal() + 1)
     while cur <= end:
-        if cur > date.today() and is_trading_day(cur):
-            n += 1
+        if is_trading_day(cur):
+            t += 1.0
         cur = date.fromordinal(cur.toordinal() + 1)
-    return max(n, 1)
+    # A floor, not a full day: the last minutes of a session still move.
+    return max(t, 5.0 / 390.0)
+
+
+def trading_days_to(exp: str) -> int:
+    """Whole sessions for daily-bar windows: the fractional horizon rounded up."""
+    return max(int(math.ceil(session_horizon(exp) - 1e-9)), 1)
 
 
 MC_PATHS = int(os.getenv("PICK_MC_PATHS", "10000"))
@@ -242,7 +264,7 @@ def flow_conflict(side: str, flow: dict, structure: str = "debit") -> "str | Non
     return None
 
 
-def monte_carlo_terminal(spot: float, atr: float, days: int, seed: int = 7):
+def monte_carlo_terminal(spot: float, atr: float, days: float, seed: int = 7):
     """Terminal prices from a driftless random walk calibrated to ATR.
 
     A THIRD probability estimate, and it exists for one reason the historical
@@ -261,9 +283,12 @@ def monte_carlo_terminal(spot: float, atr: float, days: int, seed: int = 7):
     """
     if not (spot > 0 and atr > 0 and days > 0):
         return None
-    sigma_d = (atr / 1.596) / spot
+    # `days` may be fractional (session_horizon): n whole steps, each carrying
+    # days/n of a session's variance.
+    n = max(int(math.ceil(days - 1e-9)), 1)
+    sigma_d = (atr / 1.596) / spot * math.sqrt(days / n)
     rng = np.random.default_rng(seed)
-    steps = rng.normal(-0.5 * sigma_d ** 2, sigma_d, size=(MC_PATHS, days))
+    steps = rng.normal(-0.5 * sigma_d ** 2, sigma_d, size=(MC_PATHS, n))
     return spot * np.exp(steps.sum(axis=1))
 
 
@@ -359,9 +384,16 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
         if expiry not in exps:
             raise ValueError(f"{sym} has no {expiry} expiry; has {exps[:5]}")
         exp = expiry
-    fwd_days = trading_days_to(exp)
+    horizon = session_horizon(exp)
+    fwd_days = max(int(math.ceil(horizon - 1e-9)), 1)   # whole daily bars to resample
+    # Daily bars cannot express a fraction of a session, so the N-bar log
+    # returns are rescaled to the true horizon: spread by sqrt(horizon/N),
+    # drift by horizon/N.
+    vol_scale = math.sqrt(horizon / fwd_days)
     c = h["Close"].values
-    fwd = c[fwd_days:] / c[:-fwd_days] - 1.0
+    _lr = np.log(c[fwd_days:] / c[:-fwd_days])
+    _lr = _lr.mean() * (horizon / fwd_days) + (_lr - _lr.mean()) * vol_scale
+    fwd = np.exp(_lr) - 1.0
     # DEMEAN LOG RETURNS, not simple ones. Setting the arithmetic mean of
     # simple returns to zero and applying spot*(1+r) leaves the MEDIAN below
     # spot by about 0.5*sigma^2*t -- volatility drag -- while delta's
@@ -370,7 +402,7 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
     # 2026-09-07 by scripts/delta_calibration.py: the apparent bias against
     # delta was +1.8 points on calls and -2.0 on puts, in OPPOSITE directions,
     # which no market effect produces. Log-demeaning took both inside a point.
-    lr = np.log(c[fwd_days:] / c[:-fwd_days])
+    lr = _lr
     dem_prices_factor = np.exp(lr - lr.mean())
     # A bullish read helps a CALL and hurts a PUT, so the sign flips with side.
     nv = news_verdict(sym)
@@ -387,7 +419,7 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
         news_w = max(-1.0, min(1.0, NEWS_DRIFT_WEIGHT.get(nv[0], 0.0) * nv[1]))
 
     fl = flow_read(sym)
-    mc = monte_carlo_terminal(spot, a14, fwd_days)
+    mc = monte_carlo_terminal(spot, a14, horizon)
     calls = side == "call"
     quotes, source = chain_quotes(tk, sym, exp, calls)
 
@@ -499,7 +531,7 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
                 mc_max = float((mc >= hi).mean())
             else:
                 mc_max = float((mc <= lo).mean())
-            g = spread_greeks(spot, long_k, short_k, fwd_days / 252.0, ivl, ivs_,
+            g = spread_greeks(spot, long_k, short_k, horizon / 252.0, ivl, ivs_,
                               call=calls)
             # DELTA AS PROBABILITY, beside the realised bands. A leg's delta
             # approximates P(that strike finishes in the money), so the SHORT
@@ -514,8 +546,8 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
             # Good on the body, weakest on P(max) -- off by -6.0p and +5.2p --
             # which is exactly where the payoff lives. A sanity check on the
             # empirical numbers, not a replacement for them.
-            dl = abs(leg_greeks(spot, long_k, fwd_days / 252.0, ivl, calls)["delta"])
-            dh = abs(leg_greeks(spot, short_k, fwd_days / 252.0, ivs_, calls)["delta"])
+            dl = abs(leg_greeks(spot, long_k, horizon / 252.0, ivl, calls)["delta"])
+            dh = abs(leg_greeks(spot, short_k, horizon / 252.0, ivs_, calls)["delta"])
             # THE CHAIN'S OWN P(max profit). For a debit that is the short
             # leg's delta -- the structure pays its maximum when that strike
             # finishes in the money. For a CREDIT it is the complement: the
@@ -528,7 +560,7 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
                 # The two prices the debit is made of, so a caller can see
                 # what the short leg actually pays (dte0_trade's short-leg floor).
                 long_ask=leg_long_ask, short_bid=leg_short_bid,
-                iv=atm_iv, exp=exp, days=fwd_days,
+                iv=atm_iv, exp=exp, days=round(horizon, 3),
                 news=(nv[0] if nv else None), news_w=news_w,
                 # The CONFIDENCE, not just the verdict. Callers that gate on
                 # this need to know how strongly it was held: the engine has
@@ -557,7 +589,7 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
                 # comparable between a 258 risk and a 2090 one; this is.
                 ev_pct=(float(dm.mean()) / cost * 100.0),
                 **g))
-    return out, dict(spot=spot, atr=a14, rv=rv, iv=atm_iv, exp=exp, days=fwd_days,
+    return out, dict(spot=spot, atr=a14, rv=rv, iv=atm_iv, exp=exp, days=round(horizon, 3),
                      strikes=len(ks), quotes=source, quoted=len(quotes))
 
 

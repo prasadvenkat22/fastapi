@@ -14577,3 +14577,10 @@ Pimp/Pmc are printed only.
   flat deciles at IV = RV20 x 0.9/1.0/1.2. Simulated top-3 book: -10.6% (H1),
   +0.1% (H2); mean Pwin .47 vs realised .40/.46. Week-VWAP gate sign flips
   between halves. Verdict: Pwin and edge do not rank outcomes.
+  FIXED: weekly_pick.session_horizon() -- fractional sessions to expiry (the
+  rest of today's 390 minutes + full sessions after). Phist resamples
+  ceil(horizon) daily bars and rescales the log returns to the true horizon
+  (spread sqrt(h/N), drift h/N); the Monte Carlo and the greeks take the same
+  horizon. Fixes both the 0DTE over-width (section 252) and the weekly
+  under-width. It makes the probabilities honest; it does not create an edge
+  (Brier skill vs distance-in-ATR was ~0 for every estimator).

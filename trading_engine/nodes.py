@@ -127,6 +127,14 @@ except ValueError:
 
 BAND_TOUCH_PERIOD = int(float(os.getenv("TRADING_BAND_TOUCH_PERIOD", "20") or 20))
 BAND_TOUCH_SD = float(os.getenv("TRADING_BAND_TOUCH_SD", "2.0") or 2.0)
+# TREND CHECK (section 268). On 10-05 QQQ trended up all day (751 -> 755):
+# upper-band puts lost -26 and -24 as price rode the band, lower-band calls
+# won. On: no put while the 1-minute 20-SMA has risen more than
+# TREND_MIN dollars over the last TREND_BARS minutes, no call while it has
+# fallen that much. Off by default.
+BAND_TOUCH_TREND_CHECK = os.getenv("TRADING_BAND_TOUCH_TREND_CHECK", "false").lower() == "true"
+BAND_TOUCH_TREND_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_TREND_BARS", "15") or 15))
+BAND_TOUCH_TREND_MIN = float(os.getenv("TRADING_BAND_TOUCH_TREND_MIN", "0.25") or 0.25)
 # The 20-SMA exit only books once the spread is up at least this much (section
 # 266). 10-05 12:22 ET: QQQ reached the 20-SMA in a $0.48-wide band and the
 # exit sold a 751/753 call spread at +0.3%, $0. Below the floor the position
@@ -160,7 +168,13 @@ def _band_touch() -> "dict | None":
         spot = spot or float(fetch_qqq_spot())
         upper, lower = mid + BAND_TOUCH_SD * sd, mid - BAND_TOUCH_SD * sd
         touch = "LOWER" if spot <= lower else ("UPPER" if spot >= upper else None)
-        return {"spot": spot, "mid": mid, "upper": upper, "lower": lower, "touch": touch}
+        slope = None
+        n = BAND_TOUCH_PERIOD + BAND_TOUCH_TREND_BARS
+        if BAND_TOUCH_TREND_BARS > 0 and len(close) >= n:
+            then = float(close.iloc[-n:-BAND_TOUCH_TREND_BARS].mean())
+            slope = mid - then                    # $ change of the 20-SMA
+        return {"spot": spot, "mid": mid, "upper": upper, "lower": lower, "touch": touch,
+                "slope": slope}
     except Exception:
         logger.exception("Band touch: could not read the 1-minute band.")
         return None
@@ -973,6 +987,20 @@ def is_past_force_close(hour: int = None, minute: int = None) -> bool:
     return (now_est.hour, now_est.minute) >= (hour, minute)
 
 
+def trend_refusal(bullish: bool, band: "dict | None") -> "str | None":
+    """Why the trend check refuses this touch, or None (section 268)."""
+    if not BAND_TOUCH_TREND_CHECK or not band or band.get("slope") is None:
+        return None
+    sl = band["slope"]
+    if not bullish and sl > BAND_TOUCH_TREND_MIN:
+        return (f"trend check: the 20-SMA rose ${sl:.2f} in {BAND_TOUCH_TREND_BARS} min "
+                f"(> ${BAND_TOUCH_TREND_MIN:.2f}) -- no put against a rising market.")
+    if bullish and sl < -BAND_TOUCH_TREND_MIN:
+        return (f"trend check: the 20-SMA fell ${-sl:.2f} in {BAND_TOUCH_TREND_BARS} min "
+                f"(> ${BAND_TOUCH_TREND_MIN:.2f}) -- no call against a falling market.")
+    return None
+
+
 def _touch_target_hit(position, band: "dict | None") -> bool:
     """QQQ back at the 1-minute 20-SMA, on the side the trade was opened for."""
     if not band:
@@ -1056,6 +1084,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 pass
             elif blocked_direction() == ("bullish" if _bull else "bearish"):
                 pass
+            elif trend_refusal(_bull, tb):
+                logger.info("Band touch: %s", trend_refusal(_bull, tb))
             else:
                 tier, bullish = "TOUCH", _bull
         if tb:

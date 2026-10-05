@@ -130,3 +130,23 @@ def test_strike_placement_itm_and_atm(monkeypatch):
     from trading_engine import settings_overrides as so
     s = so.BY_KEY["TRADING_BAND_TOUCH_ATM"]
     assert (s.book, s.order, s.default, s.kind) == ("qqq", 45, "false", "bool")
+
+
+def test_trend_check_blocks_fading_a_trend(monkeypatch):
+    monkeypatch.setattr(nodes, "BAND_TOUCH_TREND_CHECK", True)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_TREND_MIN", 0.25)
+    rising, falling, flat = {"slope": 0.60}, {"slope": -0.60}, {"slope": 0.10}
+    assert nodes.trend_refusal(False, rising)            # put into a rising market: refused
+    assert nodes.trend_refusal(True, rising) is None     # call with the trend: allowed
+    assert nodes.trend_refusal(True, falling)            # call into a falling market: refused
+    assert nodes.trend_refusal(False, falling) is None
+    assert nodes.trend_refusal(False, flat) is None      # no real trend: both allowed
+    monkeypatch.setattr(nodes, "BAND_TOUCH_TREND_CHECK", False)
+    assert nodes.trend_refusal(False, rising) is None    # off: never refuses
+
+
+def test_band_reports_the_sma_slope(monkeypatch):
+    closes = [750.0 + 0.05 * i for i in range(40)]       # steady rise
+    _feed(monkeypatch, closes, closes[-1])
+    b = nodes._band_touch()
+    assert b["slope"] is not None and b["slope"] > 0.5

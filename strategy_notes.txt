@@ -14800,3 +14800,15 @@ in the money, short at the money (10-05 trades: 751/753 call with QQQ ~753,
 756/754 put with QQQ ~754, ~$1.43-1.51 for 2 wide); on = long at the money,
 short one width out (cheaper, more upside, needs a move). Untested either way
 on this rule; the in-the-money default suits a small snap back to the 20-SMA.
+
+
+268. TREND CHECK ON THE QQQ CARD  (2026-10-05)
+
+Afternoon: 13:16 ET 757/755 put (upper touch) stopped 13:44 at -$24 (stop -10%,
+sold at the 1.30 mid); 13:45/13:46 upper touches refused by the 10-minute loss
+cooldown. QQQ trended up all day; upper-band puts went +21, -26, -24, lower-band
+calls +8, +13, 0. New rows (off by default): TRADING_BAND_TOUCH_TREND_CHECK,
+_TREND_BARS (15 min), _TREND_MIN ($0.25): no put while the 1-minute 20-SMA has
+risen more than the size over the window, no call while it has fallen that
+much. Refusals log "Band touch: trend check: ...". One day's pattern; judge it
+on the logged refusals before trusting it.

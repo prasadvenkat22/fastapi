@@ -57,6 +57,10 @@ tset set TRADING_ENGINE_STOP_PCT=-20 TRADING_STOP_CONFIRM_MINUTES=1 TRADING_ENGI
 # Stock books: Bollinger band picks the direction (lower -> calls only,
 # upper -> puts only, inside -> no trade). 0DTE 5-min bars, 3/7-day hourly.
 tset set TRADING_BOLLINGER_GATE_DTE0=true TRADING_BOLLINGER_GATE_W3=true TRADING_BOLLINGER_GATE_W7=true
+# Trades per run (the Entry schedule panel's column; blank = the cron's 4/3/3):
+tset set TRADING_MAX_TRADES_STOCK_0DTE=2 TRADING_MAX_TRADES_STOCK_W3=2 TRADING_MAX_TRADES_STOCK_W7=2
+# QQQ waits after a WIN before the next entry (.env.production sets 30 min):
+tset set TRADING_WIN_COOLDOWN_MINUTES=0
 # All books:
 tset set TRADING_MAX_DAILY_LOSS_PCT=0.06            # QQQ engine stops entering after losing 6% of the day's starting equity
 tset set TRADING_ORPHAN_FORCE_CLOSE=15:45           # also the engine's force close

@@ -14733,3 +14733,19 @@ per run", on each stock card under Entries per day; blank = the cron value).
 dte0_trade uses the setting once the bucket is known (it also divides the
 budget into per-trade slots), and the schedule panel shows the value in force,
 read from trading_overrides.env so the API needs no restart to reflect it.
+
+
+264. FIRST LIVE DAY OF THE BAND TOUCH  (2026-10-05)
+
+Three touches by 10:55 ET. 10:01 LOWER (QQQ 751.05 vs 751.26): 750/751 call
+spread x1 @ 0.60 (TRADING_BAND_TOUCH_WIDTH=1), out 10:09 at the 20-SMA, filled
+0.68 (+$8; booked +7 at the 0.67 limit). 10:16 and 10:17 UPPER touches refused
+by the win cooldown: .env.production sets TRADING_WIN_COOLDOWN_MINUTES=30
+("Wait after a win", Advanced). After 10:17 QQQ climbed 751 -> 753.6 inside a
+rising band: 56 reads, no touch -- the rule trades stretches, not trends.
+Entries are checked once a minute, so a touch lasting seconds between checks
+is missed. Macro BAD (breadth, then yields) does not block touch entries; only
+the VIX halt does. Live at the time: engine stop -20% (operator raised from
+-10%), stop confirmation 0, take profit +40%, mid orders on, entries/day QQQ 7
+and stocks 5, trades per run unset (cron 4/3/3). Mid orders were OFF for the
+10:01 trade (bought the ask, sold near the bid).

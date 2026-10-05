@@ -143,12 +143,10 @@ async def _run() -> int:
     try:
         state = await execute_and_persist_cycle(db)
         logger.info(
-            "cycle ok — action=%s playbook=%s exit=%s macd=%s trend=%s adx=%s/%s bb=%s rsi=%s macro=%s",
+            "cycle ok — action=%s playbook=%s exit=%s macro=%s%s",
             state.get("execution_status"), state.get("playbook") or "-",
-            state.get("exit_reason") or "-", state.get("macd_signal"),
-            state.get("sma_trend"), state.get("adx"), state.get("adx_zone"),
-            state.get("bollinger_zone"),
-            state.get("rsi_zone"), state.get("market_sentiment"),
+            state.get("exit_reason") or "-", state.get("market_sentiment"),
+            " HALT" if state.get("macro_halt") else "",
         )
         await _poll_exits(db)
         return 0

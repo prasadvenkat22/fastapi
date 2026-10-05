@@ -724,10 +724,6 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
                         entry_sma_trend=final_state.get("sma_trend"),
                         entry_bollinger_zone=final_state.get("bollinger_zone"),
                         entry_rsi_zone=final_state.get("rsi_zone"),
-                        # None rather than 0 when unsliced, so the column reads as
-                        # "no plan" instead of "a plan with nothing left in it".
-                        entry_tranche_qty=(final_state.get("entry_tranche_qty") or None),
-                        entry_slices_remaining=(final_state.get("entry_slices_remaining") or None),
                     ))
         else:
             # Still the same position — unchanged (HOLD) or added to
@@ -741,18 +737,6 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
             open_row.entry_net_debit = new_position.entry_net_debit
             open_row.peak_return_pct = max(
                 new_position.peak_return_pct, open_row.peak_return_pct or 0.0
-            )
-            # A tranche filled this cycle changes three things at once --
-            # quantity, blended entry price, and how many slices are left --
-            # and the first two are already carried above. Without the third
-            # the countdown never decrements, so the same tranche is bought
-            # again every cycle until the position is the size of the whole
-            # book.
-            open_row.entry_slices_remaining = (
-                getattr(new_position, "entry_slices_remaining", 0) or None
-            )
-            open_row.entry_tranche_qty = (
-                getattr(new_position, "entry_tranche_qty", 0) or None
             )
 
     db.add(TradingLog(

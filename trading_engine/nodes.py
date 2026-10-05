@@ -1,62 +1,44 @@
-"""The five trading graph agents.
+"""The trading graph's two agents.
 
-macd_agent / sma_agent / bollinger_agent compute technical indicators from the
-yfinance QQQ bar series. market_signals_agent combines Tradier breadth data,
-VIX, scraped headlines, and a Claude structured-output sentiment call.
-execution_risk_agent is the deterministic rule engine that turns all of the
-above into a final trading decision.
+market_signals_agent reads the macro tape (breadth, VIX, yields, crude, and the
+stored headline read) into a verdict and a halt flag. execution_risk_agent is
+the deterministic rule engine: it manages the open position and, when flat,
+enters on a 1-minute Bollinger band touch (section 260) -- the engine's only
+entry since the old tier ladder and its windows were retired (section 261).
 """
 
 import logging
 import os
 import time
-import time as _time          # the module; `time` is datetime.time here
-from dataclasses import replace as _dc_replace
-from datetime import datetime, time as dtime, timezone
+from datetime import datetime, timezone
 from typing import List
 from zoneinfo import ZoneInfo
 
-import pandas as pd
-
 from GENAI.vector_stores import VoyageEmbeddings
-from schemas_pgrs.trading_schema import MarketSentimentOutput
 
 from . import tradier_orders
 from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import (MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today,
                      current_equity, entry_cap_reached, win_pause_active)
-from .macro_calendar import blackout_active as event_blackout_active, describe as describe_event
 from . import playbook as PB
-from .playbook import (
-    CREDIT, close_deadline, credit_strikes_for, final_take_profit_for,
-    ratchet_giveback_for, ride_deadline, rides_to_close, risk_share_for,
-    stop_trend_guard_for,
-    strikes_for, thresholds_for, window_for, window_for_direction,
-)
+from .playbook import strikes_for, thresholds_for, window_for, window_for_direction
 from .broker import (
     BEAR_PUT_SPREAD,
     BULL_CALL_SPREAD,
-    ITM_OFFSET,
     MockBrokerClient,
     default_mock_broker,
     is_credit,
     option_type_for,
-    CALL_CREDIT_SPREAD,
-    PUT_CREDIT_SPREAD,
-    estimate_credit_value,
     estimate_spread_value,
     fill_price,
-    minutes_to_expiry,
     round_to_strike,
 )
 NY = ZoneInfo("America/New_York")
 
-from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_qqq_session_vwap,
-                        fetch_oil, fetch_qqq_spot, fetch_tnx, fetch_vix,
-                        chain_condor_value, chain_vertical, fetch_option_chain,
-                        log_price_divergence, strike_for_delta, _regular_session_open)
+from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_oil, fetch_qqq_spot,
+                        fetch_tnx, fetch_vix, chain_vertical, fetch_option_chain,
+                        log_price_divergence)
 from .state import TradingState
-from . import zones as _zones
 
 logger = logging.getLogger(__name__)
 
@@ -125,524 +107,22 @@ ENTRY_FRACTION = float(os.getenv("TRADING_ENTRY_FRACTION", "0.10"))
 DEFAULT_RISK_SHARE = float(os.getenv("TRADING_DEFAULT_RISK_SHARE", "0.20"))
 REENTRY_RISK_SHARE = float(os.getenv("TRADING_REENTRY_RISK_SHARE", "0.30"))
 
-# Cap on scale-ins per position, unchanged from the original hardcoded 3.
-# 0: scaling into a loser doubles the position on a thesis the market has
-# already disproved. Left configurable, but off by default.
-MAX_SCALE_INS = int(os.getenv("TRADING_MAX_SCALE_INS", "0"))
-
-# Open a position in this many equal tranches, spaced ENTRY_SLICE_MINUTES
-# apart, instead of all at once.
-#
-# NOT the same thing as MAX_SCALE_INS above, which adds to a position the
-# market has already moved against and doubles it when it does. This is a
-# planned entry ladder: the size is decided up front and filled on a clock,
-# regardless of which way the position is going.
-#
-# Measured on the afternoon credit spread over 60 sessions, chain-priced,
-# same total size and same exits in every arm:
-#
-#     all at once                  58% win   -9.00/tr
-#     3 slices: 0, +10, +20 min    51% win   -6.15/tr
-#     3 slices: 0, +15, +30 min    52% win   -3.22/tr
-#
-# and it improved EVERY short-delta bucket, which is what separates it from
-# one lucky cell: -12.37 to -10.25 at 0.10 delta, -11.05 to -6.73 at 0.20,
-# -9.14 to -1.55 at 0.30, -6.28 to +3.53 at 0.40.
-#
-# The morning DEBIT spread measured the OPPOSITE -- every schedule worse than
-# one fill, -6.94 against -13.39 to -20.35. A debit spread is a momentum
-# trade where the trigger is the edge and delay costs the move; a credit
-# spread sells time value, so spreading the fills averages the premium. Set
-# this per book, not globally, when both are running.
-#
-# DEFAULT 1, which is exactly the previous behaviour: one tranche, opened in
-# full, no plan recorded. It is off because making it do anything needs at
-# least ENTRY_SLICES contracts -- a third of a contract does not exist -- and
-# at one contract per position the engine cannot slice at all.
-ENTRY_SLICES = max(int(os.getenv("TRADING_ENTRY_SLICES", "1")), 1)
-ENTRY_SLICE_MINUTES = float(os.getenv("TRADING_ENTRY_SLICE_MINUTES", "15"))
-
-# Whether the RELAXED entry tier trades at all. Set false to fall back to the
-# original strict gate everywhere.
-RELAXED_ENTRIES_ENABLED = os.getenv("TRADING_RELAXED_ENTRIES", "true").lower() == "true"
-
-# Whether the MOMENTUM tier trades: a 20-period midline cross with MACD and
-# trend agreeing, catching moves that never stretch far enough to touch a band.
-MOMENTUM_ENTRIES_ENABLED = os.getenv("TRADING_MOMENTUM_ENTRIES", "false").lower() == "true"
-
-# Whether the TREND tier trades: MACD, trend and an RSI extreme agreeing, with
-# NO Bollinger requirement.
-#
-# It exists because every other debit tier needs a band pierce, and Bollinger
-# bands are computed from a rolling 100-minute mean -- so they drift down with
-# a falling market and a steady decline never gets 2 sigma outside its own
-# average. Bands catch dislocations, not trends.
-#
-# The cost was measured on a live session: QQQ fell $11 and from 10:03 the
-# engine read BEARISH + BELOW_SMA + OVERSOLD -- a complete bearish setup --
-# and refused it for twelve straight cycles because bollinger_zone was NORMAL.
-# It took no trade all day. Over a month this tier fires 4.6 times a day and
-# 77 of its 102 setups are ones no other tier catches.
-TREND_ENTRIES_ENABLED = os.getenv("TRADING_TREND_ENTRIES", "false").lower() == "true"
-
-# CLEAN: all four structural rules aligned -- price above/below the 20 SMA,
-# the 9 EMA on the same side of it, price on the right side of VWAP, and RSI
-# mid-band and still moving. The most selective tier and the only one using
-# VWAP or an RSI band at all.
-#
-# Measured over a month: the state is true 9.3 bars a day, but as a TRIGGER
-# (the first bar all four turn true) it fires 5.8 times, roughly twice what
-# the market supplies. The RSI band does 75% of the filtering; VWAP only 16%.
-CLEAN_ENTRIES_ENABLED = os.getenv("TRADING_CLEAN_ENTRIES", "true").lower() == "true"
-
-# Whether the FADE tier trades: sell premium into a band PIERCE, with no
-# requirement that the trend agree.
-#
-# Every bearish tier in this engine demands macd == BEARISH and sma ==
-# BELOW_SMA, so an upper-band pierce inside an uptrend -- the classic fade --
-# cannot be traded at all. Measured on a crude harness over 60 sessions,
-# selling a call credit spread at an upper-band pierce was the ONLY credit
-# entry all week to beat its unconditional baseline by a wide margin:
-#
-#     at an upper-band pierce, short atm+2   n=23  78% win  +34.10/tr
-#     unconditional entry, same structure    n=60  65% win   +5.00/tr
-#
-# and the mirror does NOT work -- selling puts at a LOWER-band pierce
-# measured -17.08 against +5.00 unconditional. The band is a good ceiling and
-# a bad floor in this instrument, so this tier is BEAR ONLY.
-#
-# Fires on the first bar OUT of the band, not on any bar sitting outside it.
-# On 2026-08-26 QQQ rode the upper band all afternoon and a fade would have
-# lost at every strike; bollinger_zone cannot tell that from a pierce, which
-# is why bollinger_pierce exists.
-FADE_ENTRIES_ENABLED = os.getenv("TRADING_FADE_ENTRIES", "false").lower() == "true"
-
-# REJECT: a failed test of the 50 EMA from below. Bearish only -- the measured
-# edge is one-directional and there is no evidence for a mirrored bullish case.
-REJECT_ENTRIES_ENABLED = os.getenv("TRADING_REJECT_ENTRIES", "true").lower() == "true"
-
-# ZONE: enter because price has BOUNCED OFF A LEVEL AND HELD, not because the
-# moving averages line up. The only tier that reads a fixed price.
-#
-# Every other tier answers "is the trend intact". This one answers "has the
-# session's floor been tested and held", which is a different question and the
-# reason it can fire earlier -- a floor is visible while the averages are still
-# catching up to the reversal that made it.
-#
-# THREE CONDITIONS, and the middle one is the whole idea:
-#   the low is OLD      -- ZONE_HOLD_MINUTES since it was set. Price 0.2% above
-#                          a low made a minute ago is still making that low.
-#   the bounce is REAL  -- at least ZONE_BOUNCE_MIN_PCT off it.
-#   the bounce is FRESH -- no more than ZONE_BOUNCE_MAX_PCT, so this enters
-#                          near the zone rather than chasing a move that is
-#                          already spent. Without the ceiling this degenerates
-#                          into "buy anything above the low", which is most of
-#                          the session on an up day.
-# Plus VWAP on the right side: the level held AND the session anchor agrees.
-#
-# Off by default and unmeasured at the time of writing -- see section 53.
-ZONE_ENTRIES_ENABLED = os.getenv("TRADING_ZONE_ENTRIES", "false").lower() == "true"
-ZONE_HOLD_MINUTES = float(os.getenv("TRADING_ZONE_HOLD_MINUTES", "20"))
-ZONE_BOUNCE_MIN_PCT = float(os.getenv("TRADING_ZONE_BOUNCE_MIN_PCT", "0.15"))
-ZONE_BOUNCE_MAX_PCT = float(os.getenv("TRADING_ZONE_BOUNCE_MAX_PCT", "0.60"))
-# Whether a zone entry still needs the macro verdict, as CLEAN's bullish side
-# does. Keeping it means the tier cannot fire on a BAD-breadth morning, which
-# is most of what it would otherwise catch; dropping it is a real loosening and
-# gets its own arm rather than being assumed either way.
-ZONE_REQUIRE_MACRO = os.getenv("TRADING_ZONE_REQUIRE_MACRO", "true").lower() == "true"
-
 # Opening warmup. Entries wait this many minutes after the bell so the
 # opening auction's whipsaws don't get read as a trend; position management
 # is unaffected and runs from the first cycle.
 MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE = 9, 30
 WARMUP_MINUTES = int(os.getenv("TRADING_WARMUP_MINUTES", "15"))
 
-# Hard flatten time. A policy choice, not an expiry fact -- it trades the last
-# of the day's theta convergence for distance from peak gamma and the widening
-# quotes around the close. Set later to capture more of an ITM spread's
-# convergence, earlier to sit further from the bell.
-# 15:45 leaves half an hour of contract life (expiry is 16:15, see
-# broker.EXPIRY_HOUR) -- enough that the model still prices real time value
-# into the exit rather than marking to intrinsic on the way out.
-_force_close_raw = os.getenv("TRADING_FORCE_CLOSE_TIME", "15:45")
+# Hard flatten time. 15:45 leaves half an hour of contract life (expiry is
+# 16:15, see broker.EXPIRY_HOUR). TRADING_FORCE_CLOSE_TIME wins when set; else
+# the settings page's single force-close row, TRADING_ORPHAN_FORCE_CLOSE, so
+# the engine and the exit ladder flatten at the same minute (section 261).
+_force_close_raw = (os.getenv("TRADING_FORCE_CLOSE_TIME")
+                    or os.getenv("TRADING_ORPHAN_FORCE_CLOSE") or "15:45")
 try:
     FORCE_CLOSE_HOUR, FORCE_CLOSE_MINUTE = (int(p) for p in _force_close_raw.split(":"))
 except ValueError:
     FORCE_CLOSE_HOUR, FORCE_CLOSE_MINUTE = 15, 45
-
-# Bearish entries wait longer than bullish ones, and deliberately so. An
-# opening reversal is not symmetric in cost: a long opened into a fading bounce
-# bleeds, while a short opened into a V-shaped recovery is run over by the
-# whole move. The opening auction produces exactly that shape often enough
-# that the two directions do not deserve the same start time.
-BEARISH_START_HOUR, BEARISH_START_MINUTE = (
-    int(os.getenv("TRADING_BEARISH_START", "09:45").split(":")[0]),
-    int(os.getenv("TRADING_BEARISH_START", "09:45").split(":")[1]),
-)
-
-
-# THE MACRO NEWS READ AS A DIRECTIONAL PERMISSION, NOT A TRADE GENERATOR.
-#
-# It VETOES the side the morning's QQQ read contradicts. It never invents an
-# entry: a tier still has to fire on the technicals, and if none does there is
-# no trade whatever the news says. That distinction is the whole safety of
-# this gate -- the failure mode of every previous attempt at a news- or
-# macro-driven morning was taking a position the tape did not support.
-#
-# WHAT IT IS GATED ON, AND WHY BOTH SWITCHES EXIST.
-#
-#     QQQ macro news read     5/10 on next-session direction, and a standing
-#                             bearish tilt that survived the tape reversing
-#     morning put debit       27% wins, -50.62 a trade
-#     MORNING_CREDIT          38% wins, -57.64 a trade over 60 sessions
-#
-# Every measurement this repository has on trading a bad morning directionally
-# is negative. The corrections that might change that -- the balanced term set
-# and the novelty filter -- landed 2026-09-07 and the QQQ read was only put
-# back in the graded list on 2026-09-12, so there is no post-fix evidence at
-# all yet. news_verdict_outcomes accumulates it nightly.
-#
-# OFF by default for that reason, and MORNING_PUT is off separately, so
-# turning this on alone changes which side may trade without adding a
-# structure to trade it with.
-NEWS_DIRECTION = os.getenv("TRADING_NEWS_DIRECTION", "false").lower() == "true"
-# Only the readings strong enough to be worth a veto. NEUTRAL never gates --
-# it is the verdict for "nothing new since the close", which is most mornings.
-NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
-NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
-# Minimum confidence. The model reports its own, and a 0.5 read should not
-# stand down a setup the tape supports.
-NEWS_DIRECTION_MIN_CONF = float(os.getenv("TRADING_NEWS_DIRECTION_MIN_CONF", "0.70"))
-
-# A SEPARATE FLOOR FOR THIS GATE, BECAUSE ITS INPUT CHANGED INSTRUMENT.
-#
-# 0.70 was set when the QQQ verdict was a Claude confidence score -- a model's
-# stated certainty, where 0.70 is a meaningful bar. Since 2026-09-14 the QQQ
-# verdict comes from crude/10Y/VIX (source='objective') and "confidence" is
-# just |score|, the average of three clamped price channels. Those are not the
-# same quantity and 0.70 does not mean the same thing in both.
-#
-# WHAT THE OLD NUMBER DID TO THIS GATE. Every objective reading on 2026-09-14
-# scored between 0.57 and 0.69: enough to refuse put spreads on all nine single
-# names, and not one of them enough to gate QQQ. The two books were reading the
-# same macro read and acting on it at different strengths, so the day's clearest
-# signal reached one book and not the other.
-#
-# 0.25 is the BULLISH/BEARISH verdict boundary itself, so this gate now fires
-# whenever the verdict is directional at all -- which is what the verdict levels
-# already encode. The strength test lives in the score->verdict mapping, not in
-# a second threshold on top of it.
-MACRO_DIRECTION_MIN_CONF = float(
-    os.getenv("TRADING_MACRO_DIRECTION_MIN_CONF", "0.25"))
-
-# THE TAPE TURNING, as distinct from the tape's level.
-#
-# The gate above is a LEVEL gate and it is symmetric, so it already refuses a
-# bullish 0DTE entry on a BEARISH read. That sounds like enough until you look
-# at what it costs: BEARISH is 9 of the 17 QQQ verdicts on record and all nine
-# clear the 0.70 confidence bar, so this stands down on 53% of sessions -- and
-# novelty_check.py found that tilt suspect, BEARISH on 10 of 14 with 5 of 10 on
-# direction, "unmoved while the tape reversed".
-#
-# A TURN IS THE OTHER EVENT, and a level gate is blind to it. The read opening
-# NEUTRAL and going BEARISH at 14:00 on an Iran headline and a Fed surprise is
-# the case worth refusing a call debit spread for; a read that was BEARISH at
-# 09:30 and is still BEARISH at 14:00 has said nothing new. The level gate
-# cannot tell those apart -- both are simply "BEARISH now".
-#
-# NEW TODAY, AND ONLY POSSIBLE TODAY. The verdict was written once per session
-# until news_watch.py went hourly, so there was one reading a day and no delta
-# to measure. That also means this has never fired on any historical session
-# and cannot be backtested: it is armed on its shape, not on a result.
-NEWS_TURN_GATE = os.getenv("TRADING_NEWS_TURN_GATE", "true").lower() == "true"
-NEWS_TURN_STEPS = float(os.getenv("TRADING_NEWS_TURN_STEPS", "1"))
-NEWS_ORD = {"VERY_BEARISH": -2.0, "BEARISH": -1.0, "NEUTRAL": 0.0,
-            "BULLISH": 1.0, "VERY_BULLISH": 2.0}
-_news_open_cache: dict = {}
-
-
-def _qqq_news_open_verdict():
-    """The QQQ verdict in force AT THE OPEN, for the turn gate, or None.
-
-    Separate from _qqq_news_verdict() on purpose: that one returns the CURRENT
-    read and its tuple shape is relied on by the direction gate. This reads the
-    append-only history through verdict_at(), the same function the measurement
-    scripts use, so "at the open" means one thing across the system.
-    """
-    today = datetime.now(ZoneInfo("America/New_York")).date()
-    hit = _news_open_cache.get(today)
-    if hit is not None and (_time.monotonic() - hit[0]) < NEWS_VERDICT_TTL_S:
-        return hit[1]
-    out = None
-    try:
-        import psycopg2
-
-        from .symbol_news import verdict_at
-
-        dsn = (os.getenv("DATABASE_URL", "")
-               .replace("postgresql+psycopg2://", "postgresql://")
-               .replace("postgresql+asyncpg://", "postgresql://"))
-        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
-            row = verdict_at(cur, "QQQ", today)
-            out = row[0] if row else None
-    except Exception:  # noqa: BLE001 — a read failure must not gate entries
-        logger.warning("Could not read the opening QQQ verdict — the turn gate "
-                       "stands down for this cycle.", exc_info=True)
-        return None
-    _news_open_cache[today] = (_time.monotonic(), out)
-    return out
-
-_news_verdict_cache: dict = {}
-# How long a read is reused before going back to the database.
-#
-# THIS WAS CACHED PER DAY, AND THE REASON IT GAVE STOPPED BEING TRUE.
-# The old docstring said the verdict "is written once at 09:30" and therefore
-# "cannot change", which was correct until news_watch.py went hourly. With a
-# day-long cache the engine would read the morning verdict once, hold it until
-# midnight, and never see a single re-grade -- so a 10:08 catalyst would be
-# graded, written, and invisible to the only gate that consumes it. The gate
-# would look live and be frozen, which is worse than off.
-#
-# The round trip the cache existed to avoid is real -- this sits in the entry
-# path and runs every cycle -- so the fix is a TTL, not removal. Five minutes
-# is well under the hourly re-grade and cuts the queries to ~12 an hour.
-NEWS_VERDICT_TTL_S = float(os.getenv("TRADING_NEWS_VERDICT_TTL_S", "300"))
-
-
-def _qqq_news_verdict():
-    """(verdict, confidence) for the CURRENT QQQ macro read, or None.
-
-    Cached for NEWS_VERDICT_TTL_S, not for the day: news_watch.py re-grades
-    hourly, so an entry at noon must be able to see the noon read. A failure
-    returns None and the gate stands down, which is the safe direction -- a
-    database hiccup must not start refusing entries.
-    """
-    today = datetime.now(ZoneInfo("America/New_York")).date()
-    hit = _news_verdict_cache.get(today)
-    if hit is not None and (_time.monotonic() - hit[0]) < NEWS_VERDICT_TTL_S:
-        return hit[1]
-    out = None
-    try:
-        import psycopg2
-
-        dsn = (os.getenv("DATABASE_URL", "")
-               .replace("postgresql+psycopg2://", "postgresql://")
-               .replace("postgresql+asyncpg://", "postgresql://"))
-        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
-            cur.execute("SELECT verdict, confidence FROM news_verdicts "
-                        "WHERE symbol='QQQ' AND trading_day=%s", (today,))
-            row = cur.fetchone()
-            if row:
-                out = (row[0], float(row[1] or 0.0))
-    except Exception:  # noqa: BLE001 — a read failure must not gate entries
-        logger.warning("Could not read the QQQ news verdict — the direction "
-                       "gate stands down for this cycle.", exc_info=True)
-        return None
-    _news_verdict_cache[today] = (_time.monotonic(), out)
-    return out
-
-
-def _is_before_bearish_start() -> bool:
-    now_est = datetime.now(ZoneInfo("America/New_York"))
-    return (now_est.hour, now_est.minute) < (BEARISH_START_HOUR, BEARISH_START_MINUTE)
-# Once a position reaches its window's target it stops being a sell signal and
-# becomes the point where a trailing exit ARMS. The trade then runs until the
-# 5-minute trend breaks, so a strong move is not capped at the target.
-#
-# This matters because the cap was real: an ATM spread entered near $1.14 tops
-# out around +163%, and booking it at +60% forfeits most of what the structure
-# was chosen for. The tradeoff is that an armed winner can give back, so a
-# floor is the 9 EMA itself.
-TRAILING_EXITS_ENABLED = os.getenv("TRADING_TRAILING_EXITS", "true").lower() == "true"
-
-# Once armed, give back at most this share of the best gain before closing.
-# 0.20 means a position that peaked at +70% exits near +56% rather than
-# riding back to the stop.
-#
-# The 9 EMA alone was not enough. It is a PRICE trail and knows nothing about
-# P&L: spread value moves nonlinearly with price and time decay drains it
-# independently, so a position can hand back most of its gain while price is
-# still on the right side of the 9 EMA. Whichever triggers first wins.
-TRAIL_GIVEBACK = float(os.getenv("TRADING_TRAIL_GIVEBACK", "0.20"))
-
-# Profit level at which the ratchet starts protecting, INDEPENDENT of the
-# take-profit target that arms the trailing exit.
-#
-# Tying the two together was wrong. A position peaking at +17% against a 40%
-# target never armed, so nothing protected it -- observed live giving back
-# +16.9% to +2.2% in three minutes with the ratchet dormant, free to continue
-# to the -10% stop having been up 17%. Protecting a gain and deciding when to
-# let a winner run are different questions and need different thresholds.
-# 32, not 12: the floor this creates (arm minus giveback) has to clear the
-# stop, or the ratchet books losers the stop would have caught anyway. At 32
-# the floor is 22% against a -20% stop. At 12 it was +2%, which is inside the
-# bid-ask and would have exited on quote noise.
-RATCHET_ARM_PCT = float(os.getenv("TRADING_RATCHET_ARM_PCT", "32.0"))
-
-# Smallest giveback that can trigger the ratchet, in points of return.
-#
-# The proportional giveback alone is too tight near the arm point: 15% of a
-# 12% peak is 1.8 points, and the bid-ask round trip is already 2.8-4.2% of
-# position value. The ratchet would fire on the quote oscillating rather than
-# on the position actually turning, booking out of trades that never reversed.
-# Whichever giveback is LARGER applies, so big winners still ratchet
-# proportionally while small ones get room to breathe.
-MIN_GIVEBACK_PCT = float(os.getenv("TRADING_MIN_GIVEBACK_PCT", "10.0"))
-
-# How close spot must come to a credit spread's SHORT strike, in dollars,
-# before the 9 EMA is allowed to end the ride.
-#
-# A debit spread needs direction, so price crossing the 9 EMA the wrong way
-# is a real threat to it. A credit spread does not: it wins if the short
-# strike holds, whichever way price wanders below it. Replayed on the
-# 2026-08-20 trade, the ungated 9 EMA trail closed a short 714 call at +66%
-# at 14:48 on a rally that stalled five dollars below the strike -- the
-# position went on to +75%. Gated at two dollars it stayed open and the
-# ratchet owned the exit, which is the rule that actually measures the
-# position rather than the direction.
-CREDIT_TRAIL_STRIKE_BUFFER = float(os.getenv("TRADING_CREDIT_TRAIL_BUFFER", "2.0"))
-
-# A tighter stop for CREDIT positions in the last part of the session.
-#
-# The stop is a percentage of the credit collected and does not care what
-# time it is, so a spread sold for 0.60 stops at 1.20 whether that happens at
-# 13:45 or 15:30. Those are not the same event. Gamma on a 0DTE short strike
-# peaks into the close, so a late move against it travels further and faster
-# than the same move at midday, and there is no time left afterwards for the
-# position to recover.
-#
-# Zero disables it and the flat stop applies all session.
-LATE_STOP_PCT = float(os.getenv("TRADING_LATE_STOP_PCT", "0"))
-_late_raw = os.getenv("TRADING_LATE_STOP_TIME", "15:00")
-try:
-    _lh, _lm = (int(p) for p in _late_raw.split(":"))
-    LATE_STOP_TIME = dtime(_lh, _lm)
-except ValueError:
-    LATE_STOP_TIME = dtime(15, 0)
-
-# Share of a debit spread's MAXIMUM profit at which a riding position books
-# instead of running to the force close.
-#
-# A ride has no take-profit by design, because an ITM debit spread capped near
-# +60% was giving up half its move to a +30% target. But the cap itself is a
-# real number: a spread cannot be worth more than its width, so once it is
-# within a tenth of that there is no move left to ride -- only the last few
-# cents of convergence, held through the widest quotes of the day.
-#
-# Expressed as a share of max profit rather than a return, because the two
-# differ per entry. A $5 spread bought at $3.23 has $1.77 of profit in it, so
-# the ceiling is +49% of premium paid; bought at $2.50 the same 90% ceiling is
-# +90%. The number that stays constant across entries is the share.
-RIDE_CEILING_FRACTION = float(os.getenv("TRADING_RIDE_CEILING", "0.90"))
-
-# Tighten the ratchet as a position approaches the most it can ever be worth.
-#
-# The giveback is currently flat: 30% of the peak whether the peak is +20% or
-# +90%. Those are not the same situation. A credit spread up 20% of its credit
-# still has 80% of the decay ahead of it and wants room; one up 90% has almost
-# nothing left to gain and everything to protect, yet the flat rule lets it
-# hand back 27 points before booking.
-#
-# progress = peak return / the most this structure can return. The giveback
-# scales from the window's own value at zero progress down to
-# GIVEBACK_TAPER_FLOOR at full progress:
-#
-#     effective = base * (1 - progress) + floor * progress
-#
-# Zero disables it and the flat giveback applies throughout.
-GIVEBACK_TAPER = os.getenv("TRADING_GIVEBACK_TAPER", "false").lower() == "true"
-GIVEBACK_TAPER_FLOOR = float(os.getenv("TRADING_GIVEBACK_FLOOR", "0.10"))
-
-# Profit protection for a RIDING position: arm at this return, then close if
-# it hands back more than the giveback below.
-#
-# A ride deliberately has no take-profit, and until now it had nothing else
-# either -- between the stop and the ceiling there was no rung at all. The
-# engine-wide ratchet lives in a branch a riding position never reaches, and
-# its 32% arm sits above where these trades actually peak.
-#
-# Observed live on 2026-08-21: the morning spread peaked at +26.4% as QQQ hit
-# 715 at 11:52 and closed at the 13:25 handoff for +16.7%, handing back 9.7
-# points with no rule watching. That is the same hole RATCHET_ARM_PCT was
-# written to close for non-riding positions.
-#
-# Separate giveback knobs because the engine-wide MIN_GIVEBACK_PCT of 10
-# points is most of a 26-point peak -- it would have fired at +16.4%, which
-# is where the handoff landed anyway. Zero disables the rung entirely.
-RIDE_RATCHET_ARM_PCT = float(os.getenv("TRADING_RIDE_RATCHET_ARM", "0"))
-RIDE_GIVEBACK = float(os.getenv("TRADING_RIDE_GIVEBACK", "0.20"))
-RIDE_MIN_GIVEBACK_PCT = float(os.getenv("TRADING_RIDE_MIN_GIVEBACK", "5.0"))
-
-# An ABSOLUTE take-profit for a riding position, in percent of premium paid.
-#
-# RIDE_CEILING_FRACTION is a share of MAX return, and max return on the
-# deployed $10-wide bought near $2.93 is +217%, putting the ceiling around
-# +195% -- unreachable before expiry. So the ride's only live rung is its
-# stop, which is how 2026-08-28 peaked at +59% and booked -18%.
-#
-# This is the other candidate rung, and it differs from the ratchet in what
-# it reads: a ratchet needs a peak and a giveback, so it always surrenders
-# part of the move and can fire on noise. An absolute level fires the first
-# time the number is reached and never gives anything back. Section 10
-# rejected fixed targets on rides, but at the old width, the old -20% stop
-# and model pricing; this is measured again at the deployed configuration.
-#
-# Zero disables it, which is the shipped default.
-RIDE_TAKE_PROFIT_PCT = float(os.getenv("TRADING_RIDE_TAKE_PROFIT", "0"))
-
-# A giveback that tightens as the ride runs out of DAY, rather than as it
-# runs out of upside.
-#
-# The flat ratchet surrenders the same share of the peak at 10:20 as at
-# 13:20, and those are not the same situation: early in a ride a dip has
-# hours to recover, and near the handoff it has minutes. GIVEBACK_TAPER
-# already scales a giveback by PROGRESS TOWARD THE CEILING and measured
-# monotonically worse (section 10) -- this scales by elapsed time instead,
-# which is a different quantity and an untested one.
-#
-# The giveback runs from RIDE_GIVEBACK at the window's open down to
-# RIDE_GIVEBACK_LATE at the ride deadline, linearly in wall-clock time.
-# Zero disables it and the flat giveback applies throughout, which is the
-# shipped default.
-RIDE_GIVEBACK_LATE = float(os.getenv("TRADING_RIDE_GIVEBACK_LATE", "0"))
-
-# STALLED-PEAK EXIT. Book once the profit curve stops making new highs.
-#
-# The third distinct question an exit can ask, and the only one this
-# engine could not previously express:
-#
-#   a take-profit fires at a LEVEL          -- ignores shape entirely
-#   a ratchet fires on GIVEBACK             -- cannot tell a dip inside a
-#                                              climb from the end of one
-#   this fires on the ABSENCE OF PROGRESS   -- waits through any pullback
-#                                              while new highs keep coming
-#
-# Needs peak_at, added by migration d1f7a03c9e84, because peak_return_pct
-# alone says how good a position has been and nothing about when.
-#
-# MEASURED AND IT COSTS MONEY. Over 60 sessions the best arm returns
-# +13.10 a day against +38.39 for riding to the handoff -- about $25 a day
-# -- and buys a worst day of -358.80 against -592.40 plus two points of
-# green-day frequency. Deployed as a stated risk preference against that
-# measurement, not because the data favours it. Section 43.
-#
-# 15 minutes / 5 points is the deployed pair: it measures the same as the
-# 20-point variant (+13.10 against +13.09) and books far closer to the
-# top, which is the point of the rule. From a +59% peak it books at +54%
-# rather than +39%.
-#
-# Zero on either knob disables it.
-STALL_MINUTES = float(os.getenv("TRADING_STALL_MINUTES", "0"))
-STALL_GIVEBACK_PCT = float(os.getenv("TRADING_STALL_GIVEBACK_PCT", "0"))
-# The peak gain (on the sale price) the stall waits for before it watches at
-# all. 0 = any gain, the behaviour before this existed.
-STALL_ARM_PCT = float(os.getenv("TRADING_STALL_ARM_PCT", "0") or 0)
-# The stall used to run only in windows that ride. A non-riding debit window
-# (MORNING_PUT, ITM_GRINDER) had nothing between its target and the handoff:
-# on 2026-10-02 the 756/752 put sat between +17% and +28% for twenty minutes
-# under a +30% target and was closed by the 11:30 clock. On = the same stall
-# runs on every debit spread the engine holds. Off by default.
-STALL_ALL_WINDOWS = os.getenv("TRADING_STALL_ALL_WINDOWS", "false").lower() == "true"
 
 
 BAND_TOUCH_PERIOD = int(float(os.getenv("TRADING_BAND_TOUCH_PERIOD", "20") or 20))
@@ -681,272 +161,6 @@ def _band_touch() -> "dict | None":
         return None
 
 
-def _stalled_peak(position, peak_return: float, return_pct: float) -> "float | None":
-    """Minutes since the peak if the stall should book now, else None."""
-    if STALL_MINUTES <= 0 or STALL_GIVEBACK_PCT <= 0:
-        return None
-    if peak_return <= 0 or peak_return < STALL_ARM_PCT:
-        return None
-    peak_at = getattr(position, "peak_at", None)
-    if peak_at is None:
-        return None
-    quiet_min = (datetime.now(timezone.utc) - peak_at).total_seconds() / 60.0
-    if quiet_min >= STALL_MINUTES and return_pct <= peak_return - STALL_GIVEBACK_PCT:
-        return quiet_min
-    return None
-
-# THE SAME STALL, ON THE AFTERNOON CREDIT TRADE.
-#
-# The stalled-peak rule lives inside the RIDE branch, so only MORNING_DRIFT has
-# ever had it. The credit window books the instant it touches
-# final_take_profit_pct, and with TRADING_CREDIT_FINAL_TAKE_PROFIT=50 in
-# production that target sits ON the trail-arming level, collapsing the
-# designed 50-to-90 trail to zero width. The comment beside that code already
-# records what it costs: a 13:30 call credit spread booked at +51% on
-# 2026-08-20 was worth +72% forty-five minutes later, with spot four dollars
-# below the short strike.
-#
-# With this on, the target ARMS the exit instead of firing it, and what ends
-# the trade is the profit curve stopping. A short that finishes out of the
-# money pays 100% of the credit, so booking at the target hands the rest back
-# on precisely the sessions where nothing went wrong -- and for 0DTE short
-# premium, nothing going wrong is the base case.
-#
-# The stall reads more cleanly here than on the morning ride. While spot sits
-# still, theta prints a new high nearly every cycle, so an absence of new highs
-# is not noise: it means the underlying has come back toward the short strike
-# and decay has stopped winning.
-#
-# Off by default. Section 55 has the measurement.
-STALL_ON_CREDIT = os.getenv("TRADING_STALL_ON_CREDIT", "false").lower() == "true"
-
-# ITS OWN TIMER, RATHER THAN THE RIDE'S.
-#
-# These two rules shared STALL_MINUTES and STALL_GIVEBACK_PCT, which made them
-# impossible to tune apart: retiming the credit stall retimed the morning ride
-# with it, in production and in the harness alike. That is not a cosmetic
-# problem. It is the confound section 55 was written about -- sweep_creditstall
-# attributed +7.47/day to the credit stall when its arms were also retiming the
-# ride, and a deployment decision was made on the number.
-#
-# THE TWO RULES WANT DIFFERENT TIMERS ANYWAY. On the morning ride the profit
-# curve tracks spot, so a few quiet minutes genuinely means the move is over.
-# On a 0DTE credit spread with spot sitting still, THETA prints a new high
-# nearly every cycle -- so an absence of new highs means something has changed,
-# and it means it sooner. Forcing one number to serve both makes at most one of
-# them right.
-#
-# UNSET, EACH FALLS BACK TO THE RIDE'S VALUE, so this changes nothing that is
-# deployed today: the split exists to make the question askable, not to answer
-# it. TRADING_CREDIT_STALL_MINUTES / TRADING_CREDIT_STALL_GIVEBACK_PCT.
-CREDIT_STALL_MINUTES = float(
-    os.getenv("TRADING_CREDIT_STALL_MINUTES", "").strip() or STALL_MINUTES)
-CREDIT_STALL_GIVEBACK_PCT = float(
-    os.getenv("TRADING_CREDIT_STALL_GIVEBACK_PCT", "").strip() or STALL_GIVEBACK_PCT)
-
-# BREAKEVEN STOP: once a position has shown a real profit, it does not go
-# negative.
-#
-# THE GAP THIS COVERS, observed live 2026-09-02. A credit book peaked at
-# +152.50 and gave back to -207.50. Nothing in the engine saw it: the stall
-# only guards a peak once the target has ARMED it, the ratchet arms at
-# RATCHET_ARM_PCT, and RIDE_RATCHET_ARM_PCT is 0. Every profit-protection rule
-# here starts watching at a level this position never reached, so a trade that
-# makes a small profit and hands it all back falls through all of them.
-#
-# LOWERING AN ARM DOES NOT FIX IT. Guarding a small peak means booking on
-# noise -- that same book swung 290 dollars in one minute on a 35-cent move in
-# QQQ -- and truncating the trades that were about to work. The arm is high
-# because small peaks are not information.
-#
-# A BREAKEVEN STOP IS A DIFFERENT SHAPE. It never fires above zero, so it
-# cannot truncate a winner; it requires a full round trip from profit back to
-# flat, which noise does not produce; and it is defined by exactly the path
-# that beat every other rule.
-#
-# EXIT is not necessarily 0. A stop at precisely breakeven is hit by the
-# spread on the way past, so the exit level is its own knob.
-#
-# Both default off. It converts a class of small losses into a class of small
-# nothings and gives up the recoveries in exchange, and whether that trades
-# well is a question for the sweep, not for this comment.
-# STRIKE APPROACH: leave a short spread BEFORE spot reaches the short strike.
-#
-# Observed live 2026-09-02, and it is the clearest lesson of that session. A
-# 20-lot 709 call credit spread ran:
-#
-#     15:42  QQQ 708.55   -7.50   (flat)
-#     15:46  QQQ 708.96  -397.50
-#     15:48  QQQ 709.04  -657.50  <- breach trigger finally true
-#
-# EVERY DOLLAR OF THAT LOSS HAPPENED IN THE 45 CENTS BEFORE THE STRIKE. A rule
-# that fires when spot crosses the short strike is not a risk control on 0DTE
-# short premium; it is a notification that the risk already happened. Gamma in
-# the last half hour turns a 40-cent move into a 400-dollar swing on 20
-# contracts, and the crossing itself adds nothing new.
-#
-# So: exit while spot is still on the right side, at a DISTANCE. Measured in
-# dollars of underlying rather than percent, because the thing being avoided
-# is a strike, which is a price and not a ratio.
-#
-# Separate from CREDIT_TRAIL_STRIKE_BUFFER above, which only qualifies a
-# trend-break exit and cannot fire on its own. This one fires on distance
-# alone -- being 40 cents under your short strike at 15:45 IS the signal, and
-# waiting for a second confirmation is how the 45 cents got spent.
-#
-# 0 disables. Deliberately off until swept, but the argument for a nonzero
-# value on the 0DTE credit leg is the transcript above.
-CREDIT_STRIKE_EXIT_BUFFER = float(os.getenv("TRADING_CREDIT_STRIKE_EXIT", "0"))
-
-# Whether the credit stall must be ARMED by the target first.
-#
-# STALL_ON_CREDIT arms at final_take_profit_pct, which is the right shape for
-# protecting a large gain and the wrong shape for the loss above: that book
-# peaked at 14.2% of max, the ratchet arms at 32% and the stall at 50%, so no
-# profit-protection rule was ever watching it. The morning ride has no such
-# hole -- its stall is always on, which is why the breakeven stop measured as
-# a no-op there (section 55) and why the gap is credit-only.
-#
-# With this false the credit stall watches from entry, exactly as the ride's
-# does.
-CREDIT_STALL_REQUIRES_ARM = os.getenv("TRADING_CREDIT_STALL_ARM", "true").lower() == "true"
-
-BREAKEVEN_ARM_PCT = float(os.getenv("TRADING_BREAKEVEN_ARM", "0"))
-BREAKEVEN_EXIT_PCT = float(os.getenv("TRADING_BREAKEVEN_EXIT", "0"))
-
-
-def _broke_even(peak_return: float, return_pct: float) -> bool:
-    """Armed by a real peak, fires on the round trip back to flat."""
-    return (BREAKEVEN_ARM_PCT > 0
-            and peak_return >= BREAKEVEN_ARM_PCT
-            and return_pct <= BREAKEVEN_EXIT_PCT)
-
-# What the 9 EMA is compared against for the ema_cross reading.
-#
-# Three specifications have been in play and only one was ever deployed.
-# The code compares against a SIMPLE 20 average; section 3 of
-# strategy_notes.txt describes it as EMA(20); outside notes propose
-# EMA(21). The code comment defends the CONCEPT -- 9 EMA against a mean is
-# velocity, price against the 9 EMA is only position -- but says nothing
-# about simple versus exponential, which looks unexamined rather than
-# decided.
-#
-# ema_cross is one of CLEAN's four conditions and is the sole blocker on
-# 2-3% of cycles, so the choice is not cosmetic. sma20 is the default and
-# the deployed behaviour; ema20 and ema21 exist to be swept against it.
-EMA_CROSS_REFERENCE = os.getenv("TRADING_EMA_CROSS_REF", "sma20").strip().lower()
-
-# Require a MACD crossover to happen BELOW the zero line for a bullish
-# read (and above it for a bearish one).
-#
-# The engine reads only the histogram's SIGN. An outside note argues the
-# crossover's POSITION matters -- that a cross above the signal line while
-# the MACD line is still below zero is a turn from oversold, while the same
-# cross after hours above zero is a tiring trend. That is a genuinely
-# different filter and the engine has never looked at it.
-#
-# Off by default. On, a BULLISH read additionally requires the MACD line
-# below zero and a BEARISH read requires it above.
-MACD_ZERO_AXIS_GATE = os.getenv("TRADING_MACD_ZERO_AXIS", "false").lower() == "true"
-
-# Least credit worth selling a spread for, per contract.
-#
-# Without a floor the engine will open a credit vertical that collects
-# nothing. Sizing does not stop it -- estimate_credit_quantity divides the
-# budget by width-minus-credit, which is at its LARGEST when the credit is
-# zero, so a worthless entry sizes like a normal one. return_pct then reads
-# 0.0 forever (it guards its own denominator), so the position can never take
-# profit and never stop out; it just holds full width of downside to the
-# force close for an upside of nothing.
-#
-# Found by scripts/sweep.py replaying 60 sessions: on quiet days the model
-# prices a 3-sigma-out spread at zero and the engine takes it.
-MIN_CREDIT = float(os.getenv("TRADING_MIN_CREDIT", "0.05"))
-
-# Target delta for a credit spread's SHORT strike, when the chain is
-# available to measure it.
-#
-# The volatility placement it replaces put the short strike three standard
-# deviations out, which sounds conservative and on a quiet afternoon is
-# simply too far to be worth selling. Measured live on 2026-08-21: it chose
-# the 716 call with spot near 710, a 7-delta strike the market valued at
-# $0.02 the spread. The engine believed it had collected $0.28 because the
-# model said so, and booked a profit on premium no one would have paid.
-#
-# 0.20 is the conventional short-strike delta for a credit vertical: far
-# enough that it expires worthless most days, close enough to be worth
-# selling. Sigma placement remains the fallback when the chain is missing.
-CREDIT_SHORT_DELTA = float(os.getenv("TRADING_CREDIT_SHORT_DELTA", "0.20"))
-
-# Refuse BULLISH entries once the session itself is down this far, in percent
-# from the regular-hours open. Zero disables the filter.
-#
-# Every trend reading the engine had was intraday and short -- a 20 and 50 EMA
-# over five-minute bars, a VWAP, a nine-period EMA. On a day that opens bad
-# and keeps going, an ordinary bounce lifts price above all of them while the
-# session is still deeply red, and the tier ladder reads that as a clean
-# bullish stack.
-#
-# Measured across 60 sessions bucketed by the 09:45-to-close move, hard-down
-# days (worse than -0.75%) are the engine's only losing regime at -47.46 a
-# day, and the trades it took there include put credit spreads and a call
-# debit spread -- bullish structures, sold into a decline that continued.
-# Every other bucket is positive: -0.75..-0.25 +6.54, flat +70.26, up +68.54,
-# hard up +130.37.
-DAY_TREND_MAX_DROP_PCT = float(os.getenv("TRADING_DAY_TREND_MAX_DROP", "0"))
-
-# ZONE GATES. Both OFF by default (100 and 0 are the no-op ends of the scale).
-#
-# day_range_pos_pct is 0 at the session low and 100 at the session high, so
-# ZONE_MAX_RANGE_POS_LONG = 85 means "do not open a bullish debit spread in the
-# top 15% of the day's range" -- the mechanical form of not buying the high.
-# ZONE_MIN_RANGE_POS_SHORT is its mirror for bearish entries.
-#
-# Chosen over a distance-to-level threshold because range position needs no
-# tuning constant of its own: it is already normalised by the day's own range,
-# so a quiet session and a 2% session are on the same scale. The raw distances
-# are recorded anyway (see zones.py) if a level-proximity form is ever wanted.
-#
-# These gate nothing until swept and shown to survive both sample halves.
-ZONE_MAX_RANGE_POS_LONG = float(os.getenv("TRADING_ZONE_MAX_RANGE_POS_LONG", "100"))
-ZONE_MIN_RANGE_POS_SHORT = float(os.getenv("TRADING_ZONE_MIN_RANGE_POS_SHORT", "0"))
-# The other half of the square, because the direction is an open question and
-# not an assumption. "Do not buy the high" is the folk rule; "only buy strength"
-# is the opposite rule and equally sayable. Both get an arm, both are off, and
-# the sweep decides -- see section 51.
-ZONE_MIN_RANGE_POS_LONG = float(os.getenv("TRADING_ZONE_MIN_RANGE_POS_LONG", "0"))
-ZONE_MAX_RANGE_POS_SHORT = float(os.getenv("TRADING_ZONE_MAX_RANGE_POS_SHORT", "100"))
-
-# The two readings that actually separated. Range position did not -- see
-# section 51 -- but two others held their sign across both sample halves, and
-# a knob is the only way to price them against the freed position slot.
-#
-# INSIDE the prior day's range, and a FLAT open, are close to the same
-# statement made twice: a session that gapped is usually a session that has
-# already left yesterday's range. Both get a knob so the sweep can say whether
-# they are one effect or two.
-ZONE_REQUIRE_INSIDE_PRIOR_RANGE = os.getenv(
-    "TRADING_ZONE_REQUIRE_INSIDE_PRIOR_RANGE", "false").lower() == "true"
-ZONE_MAX_GAP_PCT = float(os.getenv("TRADING_ZONE_MAX_GAP_PCT", "0"))
-
-# On a STRONG trend, place the long leg this many dollars in the money
-# instead of the window's usual depth. Zero disables it.
-#
-# A deep spread caps early by construction. On 2026-08-21 the morning trade
-# was long 707 / short 712 with QQQ at 711.88; price ran to 714.82 and every
-# cent above 712 paid nothing, because the structure was already at maximum
-# intrinsic. Trading the same day with the long leg $2 in the money would
-# have put the short strike at 714 and left room for the rest of the move.
-#
-# The reason it is not simply done that way is measured: a $2-deep long leg
-# wins 31% of the time against 56% for the full-width placement, and the $5
-# shallow variant lost money outright. This asks the narrower question --
-# whether a shallow placement pays when ADX says the trend is real, which is
-# the only condition under which its lower hit rate could be worth the higher
-# ceiling.
-TRENDING_LONG_DEPTH = float(os.getenv("TRADING_TRENDING_LONG_DEPTH", "0"))
-TRENDING_ADX_MIN = float(os.getenv("TRADING_TRENDING_ADX_MIN", "25"))
-
 # Most of equity ONE position may put at structural risk -- not at stop risk.
 #
 # Every other control in this engine governs the loss the rules intend: the
@@ -969,21 +183,6 @@ TRENDING_ADX_MIN = float(os.getenv("TRADING_TRENDING_ADX_MIN", "25"))
 # today's equity that is four credit contracts, and it is the constraint that
 # binds rather than the capital fraction.
 MAX_POSITION_RISK_PCT = float(os.getenv("TRADING_MAX_POSITION_RISK_PCT", "0.15"))
-
-# Let a credit window open without a directional tier, taking its side from
-# the trend alone.
-#
-# The tier ladder was built for debit spreads, which need a move to pay and
-# so need a directional read worth acting on. A credit spread does not: it
-# pays if its short strike holds, and the strike holding is mostly a question
-# of distance and time, not direction. Measured model-free over 60 sessions,
-# a call short four dollars above spot at 13:30 is never touched in 92% of
-# them -- with no signal required at all.
-#
-# What the gate costs is window time. On 2026-08-21 the credit window opened
-# at 13:30 and the tier did not line up until 14:29, so the trade collected
-# an hour less decay than it could have.
-CREDIT_LOOSE_GATE = os.getenv("TRADING_CREDIT_LOOSE_GATE", "false").lower() == "true"
 
 # A debit spread cannot be worth more than its width, so the most a position
 # can ever gain is (width - entry debit) / entry debit — and the entry debit
@@ -1047,14 +246,6 @@ def _stop_confirmed(underlying: str, return_pct: float, stop_pct: float) -> bool
         underlying, return_pct, stop_pct, held, STOP_CONFIRM_MINUTES,
     )
     return False
-
-# Tightened stop for LONG positions while macro is risk-off (market_sentiment
-# == 'BAD'). Riding a losing 0DTE spread all the way to the full stop
-# into a deteriorating tape gives up twice the capital for a position whose
-# thesis has already broken; cutting earlier and re-entering later if
-# conditions improve is the cheaper path — entries are re-evaluated every
-# scheduler cycle anyway, so nothing is permanently forfeited by leaving.
-RISK_OFF_STOP_LOSS_PCT = float(os.getenv("TRADING_RISK_OFF_STOP_LOSS_PCT", "-13.0"))
 
 # Macro risk-off thresholds. VIX is judged on both level and session move:
 # a spike of this magnitude is treated as risk-off even from a low base.
@@ -1161,18 +352,6 @@ MACRO_LLM_GATE = os.getenv("TRADING_MACRO_LLM_GATE", "true").lower() == "true"
 # and a FinBERT read of the macro RSS tape would slot straight into it. With
 # no grader configured the verdict is NOT_GRADED, which is inert while the
 # gate is off and refusing while it is on.
-
-# Standard Wilder's RSI(14) thresholds.
-RSI_OVERBOUGHT = float(os.getenv("TRADING_RSI_OVERBOUGHT", "70.0"))
-RSI_OVERSOLD = float(os.getenv("TRADING_RSI_OVERSOLD", "30.0"))
-
-# Trend-entry RSI bands: strength present, not yet exhausted. Deliberately
-# mid-range rather than extreme -- the opposite construction to the
-# overbought/oversold gates, which look for a snap-back.
-RSI_BULL_BAND = (float(os.getenv("TRADING_RSI_BULL_LOW", "50.0")),
-                 float(os.getenv("TRADING_RSI_BULL_HIGH", "65.0")))
-RSI_BEAR_BAND = (float(os.getenv("TRADING_RSI_BEAR_LOW", "35.0")),
-                 float(os.getenv("TRADING_RSI_BEAR_HIGH", "48.0")))
 
 # How long the headline read (RSS scrape + Voyage embedding + Claude verdict)
 # is reused before being refreshed. The deterministic gates -- breadth, VIX,
@@ -1326,485 +505,6 @@ def _tracked_symbols() -> list:
     raw = os.getenv("TRADING_MANAGE_UNDERLYING", "") or ""
     syms = [s.strip().upper() for s in raw.split(",") if s.strip()]
     return syms[:20]
-
-
-def macd_agent(state: TradingState) -> dict:
-    """Standard 12/26/9 MACD over the fetched intraday bar series."""
-    bars = fetch_qqq_bars()
-    close = bars["Close"]
-
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    histogram = macd_line - signal_line
-
-    latest = histogram.iloc[-1]
-    if latest > 0.01:
-        signal = "BULLISH"
-    elif latest < -0.01:
-        signal = "BEARISH"
-    else:
-        signal = "NEUTRAL"
-
-    # The zero-axis refinement, off by default. The reading above uses only
-    # the histogram's SIGN, which says the MACD line is above its signal line
-    # and nothing about where that happened. A cross while the MACD line is
-    # still BELOW zero is a turn out of oversold; the same cross after hours
-    # above zero is a tiring trend making one more push. Whether that
-    # distinction is worth anything on 5-minute QQQ bars has never been
-    # measured here, which is why the knob exists rather than the opinion.
-    if MACD_ZERO_AXIS_GATE and signal != "NEUTRAL":
-        line = float(macd_line.iloc[-1])
-        if (signal == "BULLISH" and line >= 0) or (signal == "BEARISH" and line <= 0):
-            signal = "NEUTRAL"
-
-    # Recorded on every cycle, not just entries: without it a HOLD cycle
-    # leaves no trace of where price was, and "what did we miss" cannot be
-    # answered from our own data afterwards.
-    return {"macd_signal": signal, "qqq_close": round(float(close.iloc[-1]), 2)}
-
-
-def sma_agent(state: TradingState) -> dict:
-    """Closing price vs. the 20- and 50-period EMAs (computed over the
-    fetched intraday bar series). Uses EMA rather than a simple moving
-    average so this trend filter reacts on the same timescale as MACD
-    (which is itself EMA(12,26,9)-based) — important for same-day (0DTE)
-    positions where a laggy SMA can confirm a trend after most of the day's
-    move is already gone. The state field/values (sma_trend,
-    ABOVE_SMA/BELOW_SMA) are kept as-is; only the underlying average changed."""
-    bars = fetch_qqq_bars()
-    close = bars["Close"]
-
-    ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
-    ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1] if len(close) >= 50 else ema20
-    last_close = close.iloc[-1]
-
-    trend = "ABOVE_SMA" if (last_close > ema20 and last_close > ema50) else "BELOW_SMA"
-
-    # 9 EMA is the trailing reference, not an entry filter. A winning trade is
-    # held while price keeps closing on the right side of it, which is what
-    # lets a run go past any fixed target.
-    # 50 EMA rejection: this bar's HIGH pokes above the 50 EMA but the CLOSE
-    # finishes below it — buyers tried the ceiling and failed.
-    #
-    # Measured over a month of 5-minute bars: 96 occurrences, QQQ lower 66% of
-    # the time afterwards, averaging -$0.31 over the next 3 bars and -$0.66
-    # over 6. Baseline for all bars is 50% and roughly zero drift, and merely
-    # being below the 50 EMA is only 53%. The rejection itself carries the
-    # signal, not the position.
-    ema50_series = close.ewm(span=50, adjust=False).mean()
-    ema50_last = ema50_series.iloc[-1]
-    ema50_reject = bool(bars["High"].iloc[-1] > ema50_last and last_close < ema50_last)
-
-    ema9_series = close.ewm(span=9, adjust=False).mean()
-    ema9 = ema9_series.iloc[-1]
-    ema9_side = "ABOVE_EMA9" if last_close > ema9 else "BELOW_EMA9"
-
-    # Rule B proper: 9 EMA vs the 20 SMA, not price vs the 9 EMA. The first
-    # says velocity is accelerating in the trend's direction; the second only
-    # says price is above a fast average. They agree often and not always.
-    if EMA_CROSS_REFERENCE == "ema20":
-        reference = close.ewm(span=20, adjust=False).mean().iloc[-1]
-    elif EMA_CROSS_REFERENCE == "ema21":
-        reference = close.ewm(span=21, adjust=False).mean().iloc[-1]
-    else:
-        reference = close.rolling(20).mean().iloc[-1]
-    sma20 = reference
-    ema_cross = "EMA9_ABOVE_SMA20" if ema9 > reference else "EMA9_BELOW_SMA20"
-
-    # Rule C: VWAP, the institutional anchor. Must reset each session — a
-    # VWAP carried across days is not VWAP, it is a slow moving average.
-    vwap = fetch_qqq_session_vwap()
-    vwap_side = "UNKNOWN" if vwap is None else ("ABOVE_VWAP" if last_close > vwap else "BELOW_VWAP")
-
-    # Trend STRENGTH, alongside the direction read above. Recorded only — see
-    # ADX_TREND_THRESHOLD for why it gates nothing.
-    adx = compute_adx(bars)
-    adx_ok = adx == adx  # False for NaN
-    adx_zone = (
-        "UNKNOWN" if not adx_ok
-        else ("TRENDING" if adx >= ADX_TREND_THRESHOLD else "CHOPPY")
-    )
-
-    # Where the session stands, as distinct from where the last few bars do.
-    # The EMAs this function returns are intraday and short: on a day that
-    # falls all morning, an ordinary bounce lifts price above both of them
-    # while the session is still deeply red. That is how bullish entries were
-    # reaching hard-down days -- see DAY_TREND_MAX_DROP_PCT below.
-    try:
-        session_open = _regular_session_open(bars)
-        session_move_pct = (
-            (float(last_close) - session_open) / session_open * 100.0 if session_open else 0.0
-        )
-    except Exception:
-        session_move_pct = 0.0
-
-    # How far the session has been down at its WORST, which is a different
-    # question from where it stands now and the one a reversal thesis asks.
-    #
-    # By the time a CLEAN long triggers, price is above VWAP and both EMAs by
-    # construction -- so session_move_pct at that moment is near zero even on
-    # a day that was down a full percent an hour earlier. Gating a reversal
-    # entry on the CURRENT move would therefore never see the fall it is
-    # supposed to be reacting to.
-    try:
-        session_day = bars.index[-1].date()
-        today_bars = bars[[ts.date() == session_day and ts.time() >= dtime(9, 30)
-                           for ts in bars.index]]
-        session_drawdown_pct = (
-            (float(today_bars["Low"].min()) - session_open) / session_open * 100.0
-            if len(today_bars) and session_open else 0.0
-        )
-    except Exception:
-        session_drawdown_pct = 0.0
-
-    # Fixed levels -- day high/low, prior high/low/close -- alongside the
-    # moving averages above. See zones.py for why they are a different kind of
-    # reading and not a redundant one.
-    #
-    # Measured against the last CLOSE, not fetch_qqq_spot(). A live spot would
-    # be fresher and would make this the one reading the sweep cannot
-    # reproduce, because the harness replays bars and has no spot to hand.
-    # Section 30 is the record of what a live/sweep divergence costs: a gate
-    # that worked in every replay and never fired in production. The five
-    # minutes of staleness are the price of being able to measure this at all.
-    z = _zones.read(bars, float(last_close))
-
-    return {"sma_trend": trend, "ema9_side": ema9_side, "ema_cross": ema_cross,
-            "vwap_side": vwap_side, "ema50_reject": ema50_reject,
-            "session_move_pct": round(session_move_pct, 3),
-            "session_drawdown_pct": round(session_drawdown_pct, 3),
-            "adx": round(adx, 2) if adx_ok else 0.0, "adx_zone": adx_zone,
-            "zone": z["zone"], "zone_extension": z["zone_extension"],
-            "day_high": z["day_high"], "day_low": z["day_low"],
-            "prior_high": z["prior_high"], "prior_low": z["prior_low"],
-            "prior_close": z["prior_close"],
-            "day_range_pos_pct": z["day_range_pos_pct"],
-            "gap_pct": z["gap_pct"], "prior_change_pct": z["prior_change_pct"],
-            "dist_day_high_pct": z["dist_day_high_pct"],
-            "dist_day_low_pct": z["dist_day_low_pct"],
-            "dist_prior_high_pct": z["dist_prior_high_pct"],
-            "dist_prior_low_pct": z["dist_prior_low_pct"],
-            "dist_prior_close_pct": z["dist_prior_close_pct"],
-            "minutes_since_day_low": z["minutes_since_day_low"],
-            "minutes_since_day_high": z["minutes_since_day_high"],
-            "bounce_off_low_pct": z["bounce_off_low_pct"],
-            "fade_off_high_pct": z["fade_off_high_pct"]}
-
-
-ADX_PERIOD = int(os.getenv("TRADING_ADX_PERIOD", "14"))
-# Conventional trending/choppy line. Recorded only -- ADX does not gate any
-# entry, because measured over 60 sessions it did not earn one.
-#
-# On the morning debit leg a 22 threshold discriminated nothing: +4.50 a trade
-# above it against +4.03 below. On the credit leg it was informative but
-# BACKWARDS from the usual advice -- selling premium returned +63.39 a trade at
-# ADX >= 22 and +35.28 below it, every split stable across sample halves. High
-# ADX means high volatility, which widens our 3-sigma strike placement and
-# fattens the credit at the same time: further away and paid more. Gating
-# credit to quiet tape would skip the best trades.
-#
-# Logged so the question can be revisited on our own forward data.
-ADX_TREND_THRESHOLD = float(os.getenv("TRADING_ADX_TREND_THRESHOLD", "22.0"))
-
-
-def _wilder(series, period: int):
-    """Wilder's smoothing — an EMA with alpha = 1/period."""
-    return series.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-
-
-def compute_adx(bars, period: int = ADX_PERIOD) -> float:
-    """Wilder's ADX over the fetched bar series, or NaN if too short.
-
-    Measures how strongly price is trending without saying which way — the
-    directional read stays with the MA/VWAP stack in sma_agent.
-    """
-    high, low, close = bars["High"], bars["Low"], bars["Close"]
-    prev_close, prev_high, prev_low = close.shift(1), high.shift(1), low.shift(1)
-
-    true_range = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-
-    up_move, down_move = high - prev_high, prev_low - low
-    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
-    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-
-    atr = _wilder(true_range, period)
-    plus_di = 100.0 * _wilder(plus_dm, period) / atr
-    minus_di = 100.0 * _wilder(minus_dm, period) / atr
-
-    total = (plus_di + minus_di).replace(0.0, float("nan"))
-    dx = 100.0 * (plus_di - minus_di).abs() / total
-    adx = _wilder(dx, period)
-    return float(adx.iloc[-1]) if len(adx) and adx.iloc[-1] == adx.iloc[-1] else float("nan")
-
-
-# Iron Condor shadow log. Notionally opens a condor at these times each day
-# and marks it every cycle, WITHOUT trading it.
-#
-# Measured over 60 sessions the structure lost money at every parameter
-# combination tried -- 23 of them, across two entry times, four wing
-# distances, two profit targets and two stop multiples. At its own 09:45
-# entry the best cell was -41.36 a condor and the worst -53.10, against the
-# +61.00 at an 85% win rate that the existing 13:30 credit trade made on the
-# same sideways sessions.
-#
-# That is enough to refuse to trade it and not enough to close the question:
-# it rests on vendor bars and our own pricing model. So the condor is marked
-# and written to the cycle log instead, building a forward out-of-sample
-# record at no risk. If it earns its place over a few weeks, the schema work
-# is justified then.
-# 13:30 added after the 2026-08-21 sweep. The two morning entries were chosen
-# when the question was "does the 09:45 condor the notes recommend work" --
-# it does not, at -0.32 to +3.66 a condor with halves that flip sign. The
-# same sweep found the 13:30 cell is the one worth watching: +38.95 a condor
-# unfiltered and +54.62 behind ADX<22, at 82-88% win rates with halves that
-# agree. The shadow log has to cover the promising cell, not just the
-# rejected one, or the forward record answers a question nobody is asking.
-SHADOW_CONDOR_ENTRIES = ((9, 45), (10, 15), (13, 30))
-# Wings a FIXED distance out, not a sigma multiple. The live credit window
-# places its short strike at 3 sigma, which is right for a single wing sold
-# at 13:30 -- but applied to a 09:45 condor it put the wings 12 points out
-# and collected $0.10 the pair. The strategy being evaluated collects
-# $80-110, so a sigma-placed log would be evidence about a different trade.
-# $4 is the closest match to its 0.15-delta short strike and was the best
-# of the distances measured.
-SHADOW_CONDOR_OFFSET = float(os.getenv("TRADING_SHADOW_CONDOR_OFFSET", "4.0"))
-# A second, closer offset, marked alongside it.
-#
-# Comparing a condor against the single side the engine already sells, the
-# closest strikes won at every entry time: +39.00 a contract at $3 out
-# against +29.71 at $4 and +17.10 at $5, entering at 13:30. That is a
-# model-priced result on a structure whose premium the model overstates, so
-# the forward record has to cover the cell the sweep likes rather than only
-# the one the shadow happened to start with.
-SHADOW_CONDOR_OFFSET_ALT = float(os.getenv("TRADING_SHADOW_CONDOR_OFFSET_ALT", "3.0"))
-CONDOR_WIDTH = float(os.getenv("TRADING_SHADOW_CONDOR_WIDTH", "3.0"))
-
-
-def shadow_condor_marks(bars, spot: float) -> dict:
-    """Mark condors notionally opened earlier today, from the bar series alone.
-
-    Deliberately stateless — it reconstructs the entry from the historical
-    bar at each entry time rather than remembering anything, so it cannot
-    drift out of sync with the live position and cannot influence a decision.
-    """
-    marks: dict = {}
-    try:
-        idx = bars.index
-        if getattr(idx, "tz", None) is not None:
-            idx = idx.tz_convert(NY)
-        else:
-            return marks
-        today = datetime.now(NY).date()
-        closes = bars["Close"]
-        sd20 = closes.rolling(20).std()
-
-        pairs = [(h, m, off) for (h, m) in SHADOW_CONDOR_ENTRIES
-                 for off in (SHADOW_CONDOR_OFFSET, SHADOW_CONDOR_OFFSET_ALT)]
-        for hour, minute, offset in pairs:
-            key = "condor_%02d%02d_o%d" % (hour, minute, int(offset))
-            hits = [
-                i for i, ts in enumerate(idx)
-                if ts.date() == today and (ts.hour, ts.minute) == (hour, minute)
-            ]
-            if not hits:
-                continue
-            pos = hits[0]
-            entry_spot = float(closes.iloc[pos])
-            sd = sd20.iloc[pos]
-            atm = round_to_strike(entry_spot)
-            call_short, call_long = atm + offset, atm + offset + CONDOR_WIDTH
-            put_short, put_long = atm - offset, atm - offset - CONDOR_WIDTH
-
-            entry_minutes = minutes_to_expiry(idx[pos].to_pydatetime())
-            credit = (
-                fill_price(estimate_credit_value(CALL_CREDIT_SPREAD, call_short, call_long,
-                                                 entry_spot, entry_minutes), "sell")
-                + fill_price(estimate_credit_value(PUT_CREDIT_SPREAD, put_short, put_long,
-                                                   entry_spot, entry_minutes), "sell")
-            )
-            if credit <= 0.02:
-                continue
-            cost = (
-                fill_price(estimate_credit_value(CALL_CREDIT_SPREAD, call_short, call_long, spot), "buy")
-                + fill_price(estimate_credit_value(PUT_CREDIT_SPREAD, put_short, put_long, spot), "buy")
-            )
-            # The same mark, at real quotes. Everything above is the model
-            # marking its own homework: it produced the entry credit and it
-            # produces the value now, so a condor can look like a 94% winner
-            # without a market ever having offered either price. The chain
-            # says what closing it actually costs, and the four-leg bid-ask
-            # width says whether a 90%-decay exit is reachable at all -- on
-            # the quotes measured so far it is $9-11 a block against a target
-            # of $6-13, which is most or all of the last tenth.
-            market = None
-            try:
-                market = chain_condor_value(call_short, call_short + CONDOR_WIDTH,
-                                            put_short, put_short - CONDOR_WIDTH)
-            except Exception:
-                logger.exception("Chain condor mark failed — model mark only.")
-
-            # The market's price for this condor AT ENTRY, logged in the
-            # minutes around the entry bar. The mark is stateless and
-            # recomputed from bars every cycle, so it can never recover a
-            # quote from earlier in the day -- and without a real entry
-            # credit the whole forward record is model fiction, which is the
-            # error this file just spent a session correcting elsewhere.
-            try:
-                age_min = abs((datetime.now(NY) - idx[pos].to_pydatetime()).total_seconds()) / 60.0
-                if age_min <= 6.0 and market is not None:
-                    logger.info(
-                        "Shadow condor %s ENTRY at market: credit %.3f mid / %.3f natural "
-                        "(model says %.3f), four-leg width %.3f, short deltas %s",
-                        key, market["mid"], market["natural"], credit,
-                        market["spread_width"], market["short_deltas"],
-                    )
-            except Exception:
-                pass
-
-            marks[key] = {
-                "entry_spot": round(entry_spot, 2),
-                "entry_sd20": round(float(sd), 4) if sd == sd else None,
-                "call_short": call_short, "put_short": put_short,
-                "offset": offset,
-                "width": CONDOR_WIDTH,
-                "credit": round(credit, 4),
-                "value_now": round(cost, 4),
-                "return_pct": round((credit - cost) / credit * 100.0, 2),
-                "breached": bool(spot >= call_short or spot <= put_short),
-                # Market marks, None when the chain is unavailable or the
-                # strikes are not listed. return_pct_market uses the model's
-                # entry credit -- the snapshot cannot recover a price from
-                # 09:45 -- so it isolates the exit side of the question.
-                "market_value_now": market["mid"] if market else None,
-                "market_natural_cost": market["natural"] if market else None,
-                "market_spread_width": market["spread_width"] if market else None,
-                "market_short_deltas": market["short_deltas"] if market else None,
-                # Implied vol at entry, against which the session's realised
-                # move can be compared afterwards. That comparison -- not the
-                # level of either one alone -- is what a premium seller is
-                # actually paid for.
-                "market_short_ivs": market["short_ivs"] if market else None,
-                "return_pct_market": (
-                    round((credit - market["mid"]) / credit * 100.0, 2)
-                    if market and credit else None
-                ),
-            }
-    except Exception:
-        # Never let an observability feature break a trading cycle.
-        logger.exception("Shadow condor marking failed — continuing without it.")
-    return marks
-
-
-def bollinger_agent(state: TradingState) -> dict:
-    """20-period Bollinger Bands (2 standard deviations)."""
-    bars = fetch_qqq_bars()
-    close = bars["Close"]
-
-    window = close.rolling(window=20)
-    mid = window.mean().iloc[-1]
-    std = window.std().iloc[-1]
-    last_close = close.iloc[-1]
-
-    upper = mid + (2 * std)
-    lower = mid - (2 * std)
-
-    if last_close >= upper:
-        zone = "UPPER_BAND"
-    elif last_close <= lower:
-        zone = "LOWER_BAND"
-    else:
-        zone = "NORMAL"
-
-    # Midline cross: price closing through its 20-period mean. A different
-    # thesis from a band pierce -- the band says "stretched", the midline says
-    # "trend just turned" -- which is why the momentum tier uses it.
-    prev_close = close.iloc[-2] if len(close) >= 2 else last_close
-    prev_mid = window.mean().iloc[-2] if len(close) >= 2 else mid
-    if last_close > mid and prev_close <= prev_mid:
-        cross = "CROSS_UP"
-    elif last_close < mid and prev_close >= prev_mid:
-        cross = "CROSS_DOWN"
-    else:
-        cross = "NONE"
-
-    # Observability only — a condor we do NOT trade, marked so a forward
-    # record accumulates. See shadow_condor_marks for why it is not traded.
-    shadow = shadow_condor_marks(bars, float(last_close))
-
-    # First bar of a pierce, as distinct from riding the band.
-    #
-    # bollinger_zone alone cannot tell those apart -- both read UPPER_BAND.
-    # On 2026-08-26 QQQ rode the upper band all afternoon in an uptrend and a
-    # fade would have lost at every strike; the setup that measured +34.10 a
-    # trade was price pushing OUTSIDE a band that had not kept up. The
-    # difference is whether this is the bar that crossed out.
-    prev_zone = "NORMAL"
-    if len(close) >= 2:
-        prev_upper = (window.mean().iloc[-2] + 2 * window.std().iloc[-2])
-        prev_lower = (window.mean().iloc[-2] - 2 * window.std().iloc[-2])
-        if close.iloc[-2] >= prev_upper:
-            prev_zone = "UPPER_BAND"
-        elif close.iloc[-2] <= prev_lower:
-            prev_zone = "LOWER_BAND"
-    if zone == "UPPER_BAND" and prev_zone != "UPPER_BAND":
-        pierce = "UP_PIERCE"
-    elif zone == "LOWER_BAND" and prev_zone != "LOWER_BAND":
-        pierce = "DOWN_PIERCE"
-    else:
-        pierce = "NONE"
-
-    return {"bollinger_zone": zone, "bollinger_cross": cross,
-            "bollinger_pierce": pierce,
-            "bollinger_sd": round(float(std), 4) if std == std else 0.0,
-            "shadow_condor": shadow}
-
-
-def rsi_agent(state: TradingState) -> dict:
-    """Standard 14-period RSI (Wilder's smoothing) over the fetched intraday
-    bar series. >=70 overbought (fading a stretched high — pairs with
-    Bollinger UPPER_BAND for the bearish trigger), <=30 oversold (bouncing
-    off a stretched low — pairs with Bollinger LOWER_BAND for the bullish
-    trigger)."""
-    bars = fetch_qqq_bars()
-    close = bars["Close"]
-
-    delta = close.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-
-    avg_gain = gain.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
-
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    latest = rsi.iloc[-1]
-
-    if latest >= RSI_OVERBOUGHT:
-        zone = "OVERBOUGHT"
-    elif latest <= RSI_OVERSOLD:
-        zone = "OVERSOLD"
-    else:
-        zone = "NEUTRAL"
-
-    # A separate reading for trend entries: strength present but not spent.
-    # The extremes above are a mean-reversion idea -- price stretched far
-    # enough to snap back. This is the opposite: mid-range and still moving,
-    # which is what a trend looks like before it is exhausted. Measured over a
-    # month this band did 75% of the filtering in the four-rule gate.
-    prev = rsi.iloc[-2] if len(rsi) >= 2 else latest
-    rising, falling = latest > prev, latest < prev
-    if RSI_BULL_BAND[0] <= latest <= RSI_BULL_BAND[1] and rising:
-        band = "BULL_BAND"
-    elif RSI_BEAR_BAND[0] <= latest <= RSI_BEAR_BAND[1] and falling:
-        band = "BEAR_BAND"
-    else:
-        band = "NONE"
-
-    return {"rsi_zone": zone, "rsi_band": band}
 
 
 # ---------------------------------------------------------------------------
@@ -2251,14 +951,6 @@ def _is_within_opening_warmup() -> bool:
     return (now_est.hour, now_est.minute) < (MARKET_OPEN_HOUR, MARKET_OPEN_MINUTE + WARMUP_MINUTES)
 
 
-def _is_past_cutoff(cutoff_hour: int = 14) -> bool:
-    """No new entries and no BUY_MORE past this hour (EST) — these are
-    same-day (0DTE) QQQ spreads, so a fresh or added position needs enough
-    of the trading day left to actually work before expiration."""
-    now_est = datetime.now(ZoneInfo("America/New_York"))
-    return now_est.hour >= cutoff_hour
-
-
 def is_past_force_close(hour: int = None, minute: int = None) -> bool:
     """Hard close-out cutoff, independent of P&L — QQQ options expire at
     today's close, so any open spread must be flattened before then rather
@@ -2276,49 +968,15 @@ def is_past_force_close(hour: int = None, minute: int = None) -> bool:
     return (now_est.hour, now_est.minute) >= (hour, minute)
 
 
-def _clean_misses(bullish: bool, sma, ema_cross, vwap_side, rsi_band,
-                  sentiment) -> list:
-    """Which of CLEAN's conditions are unmet, by name.
-
-    CLEAN is the tier worth naming misses for: MORNING_DRIFT accepts only
-    it, so on most cycles 'why no entry' means 'which of these four'.
-    """
-    if bullish:
-        checks = (("trend", sma == "ABOVE_SMA"),
-                  ("ema9", ema_cross == "EMA9_ABOVE_SMA20"),
-                  ("vwap", vwap_side == "ABOVE_VWAP"),
-                  ("band", rsi_band == "BULL_BAND"),
-                  ("macro", sentiment == "GOOD"))
-    else:
-        checks = (("trend", sma == "BELOW_SMA"),
-                  ("ema9", ema_cross == "EMA9_BELOW_SMA20"),
-                  ("vwap", vwap_side == "BELOW_VWAP"),
-                  ("band", rsi_band == "BEAR_BAND"))
-    return [name for name, ok in checks if not ok]
-
-
-def _ride_giveback(deadline) -> float:
-    """The share of peak a ride may hand back, at this moment.
-
-    Flat at RIDE_GIVEBACK unless RIDE_GIVEBACK_LATE is set, in which case
-    it interpolates from RIDE_GIVEBACK at the morning window's open to
-    RIDE_GIVEBACK_LATE at the ride deadline. Outside that span it clamps to
-    the nearer end, so a position opened before the window or held past the
-    deadline still gets a defined number rather than an extrapolated one.
-    """
-    if RIDE_GIVEBACK_LATE <= 0 or deadline is None:
-        return RIDE_GIVEBACK
-    window = window_for()
-    start = window.start if window is not None else None
-    if start is None:
-        return RIDE_GIVEBACK
-    now_t = datetime.now(NY).time()
-    span = (deadline.hour * 60 + deadline.minute) - (start.hour * 60 + start.minute)
-    if span <= 0:
-        return RIDE_GIVEBACK
-    elapsed = (now_t.hour * 60 + now_t.minute) - (start.hour * 60 + start.minute)
-    frac = min(1.0, max(0.0, elapsed / span))
-    return RIDE_GIVEBACK * (1.0 - frac) + RIDE_GIVEBACK_LATE * frac
+def _touch_target_hit(position, band: "dict | None") -> bool:
+    """QQQ back at the 1-minute 20-SMA, on the side the trade was opened for."""
+    if not band:
+        return False
+    if position.strategy == BULL_CALL_SPREAD:
+        return band["spot"] >= band["mid"]
+    if position.strategy == BEAR_PUT_SPREAD:
+        return band["spot"] <= band["mid"]
+    return False
 
 
 def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -> dict:
@@ -2327,34 +985,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         return {"execution_status": "HALTED", "buy_more_count": state.get("buy_more_count", 0)}
 
     broker = broker or default_mock_broker()
-    # Initialised here, not where they are set: the entry that assigns
-    # them sits inside several layers of conditional, and the return at
-    # the bottom reads them unconditionally.
-    tranche_qty = 0
-    slices_remaining = 0
-    sentiment = state.get("market_sentiment")
     halt = bool(state.get("macro_halt"))
-    ema9_side = state.get("ema9_side")
-    ema_cross = state.get("ema_cross")
-    ema50_reject = bool(state.get("ema50_reject"))
-    vwap_side = state.get("vwap_side")
-    rsi_band = state.get("rsi_band")
-    macd = state.get("macd_signal")
-    sma = state.get("sma_trend")
-    bb = state.get("bollinger_zone")
-    bb_cross = state.get("bollinger_cross")
-    bb_sd = state.get("bollinger_sd")
-    ema9_side = state.get("ema9_side")
-    ema_cross = state.get("ema_cross")
-    ema50_reject = bool(state.get("ema50_reject"))
-    vwap_side = state.get("vwap_side")
-    rsi_band = state.get("rsi_band")
-    rsi = state.get("rsi_zone")
-    count = state.get("buy_more_count", 0)
-
     position = broker.get_open_position()
-    available_cash = broker.get_available_cash()
-    past_cutoff = _is_past_cutoff()
     force_close = is_past_force_close()
     in_warmup = _is_within_opening_warmup()
 
@@ -2362,1087 +994,80 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     exit_reason = ""
     playbook = ""
 
+    # ---- Managing the open position -------------------------------------
+    # Exit order (section 261): force close -> engine take-profit -> QQQ back
+    # at the 1-minute 20-SMA -> stop with confirmation -> hold. A row left by a
+    # retired window still gets the stop and the force close.
     if position is not None:
         return_pct = position.return_pct
-        # Thresholds belong to the strategy that OPENED the position. A credit
-        # spread judged on debit thresholds would read as catastrophically
-        # losing the instant it moved at all.
-        tp_pct, stop_pct, risk_off_pct = thresholds_for(
-            position.playbook, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, RISK_OFF_STOP_LOSS_PCT)
-        )
-        is_credit_pos = is_credit(position.strategy)
-        # RESET THE STOP CLOCK WHENEVER THE POSITION IS NOT BREACHING.
-        #
-        # _stop_confirmed only runs while return_pct <= stop_pct, so it never
-        # sees a recovery and could never clear its own key. Without this the
-        # first dip arms a clock that keeps running through every recovery, and
-        # the confirmation degrades into "five minutes after the first touch,
-        # ever" -- which is not what it claims and is barely a guard.
-        #
-        # It also clears the key for a NEW position in the same underlying,
-        # which would otherwise inherit the previous one's elapsed time.
+        _tp, stop_pct, _ro = thresholds_for(
+            position.playbook, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, STOP_LOSS_PCT))
+        # Reset the stop clock whenever the position is not breaching, so the
+        # confirmation measures sustained weakness, not "minutes since the
+        # first touch, ever".
         if return_pct > stop_pct:
             _stop_since.pop(position.underlying, None)
-        # Late-session tightening, credit positions only. A long debit spread
-        # has the opposite exposure into the close -- it converges toward its
-        # width -- so pulling its stop in would book the convergence it is
-        # being held for.
-        if is_credit_pos and LATE_STOP_PCT < 0 and datetime.now(NY).time() >= LATE_STOP_TIME:
-            if stop_pct < LATE_STOP_PCT:
-                logger.info(
-                    "Past %s — tightening the credit stop from %+.0f%% to %+.0f%% for peak gamma.",
-                    LATE_STOP_TIME.strftime("%H:%M"), stop_pct, LATE_STOP_PCT,
-                )
-                stop_pct = LATE_STOP_PCT
-        # Windows that let winners run keep only the stop and the force close.
-        # Booking an ITM debit spread at its +30% target gave up half of a
-        # structure capped near +64% in total; measured on bullish-stack
-        # mornings that cost 18.82 a trade against 36.40, for an identical
-        # worst case.
-        # Fill the rest of a sliced entry before any exit rule runs.
-        #
-        # Ordering matters and is deliberate: a position that is still being
-        # built should finish being built before it can be stopped out of a
-        # size it never reached. The tranche is due on the clock, not on P&L
-        # -- that is the whole difference between this and place_buy_more,
-        # which adds to losers.
-        remaining = getattr(position, "entry_slices_remaining", 0) or 0
-        tranche = getattr(position, "entry_tranche_qty", 0) or 0
-        opened = getattr(position, "opened_at", None)
-        if remaining > 0 and tranche > 0 and opened is not None:
-            _w = PB.window_by_playbook(getattr(position, "playbook", "") or "")
-            _s = (getattr(_w, "entry_slices", None) or ENTRY_SLICES) if _w else ENTRY_SLICES
-            _sm = ((getattr(_w, "entry_slice_minutes", None) or ENTRY_SLICE_MINUTES)
-                   if _w else ENTRY_SLICE_MINUTES)
-            filled_so_far = _s - remaining
-            due_at_min = filled_so_far * _sm
-            try:
-                elapsed_min = (datetime.now(NY) - opened).total_seconds() / 60.0
-            except Exception:
-                elapsed_min = 0.0
-            if elapsed_min >= due_at_min and not past_cutoff:
-                price = position.current_net_value
-                broker.add_entry_tranche(position.underlying, tranche, price)
-                position.entry_slices_remaining = remaining - 1
-                logger.info(
-                    "Entry tranche %d of %d: added %d contract(s) at %.2f after %.0f min "
-                    "— position now %d, blended entry %.2f.",
-                    filled_so_far + 1, _s, tranche, price, elapsed_min,
-                    position.quantity, position.entry_net_debit,
-                )
-
-        ride = rides_to_close(position.playbook)
-
-        # Does the trend still hold the stop off? Off unless the window asks
-        # for it. The test is directional: for a long structure the trend is
-        # intact while the fast MA leads, and the mirror for a short one.
-        stop_held_by_trend = False
-        guard = stop_trend_guard_for(position.playbook)
-        if guard:
-            long_side = position.strategy in (BULL_CALL_SPREAD, PUT_CREDIT_SPREAD)
-            if guard == "ema9":
-                stop_held_by_trend = (
-                    ema9_side == ("ABOVE_EMA9" if long_side else "BELOW_EMA9"))
-            else:
-                stop_held_by_trend = (
-                    ema_cross == ("EMA9_ABOVE_SMA20" if long_side else "EMA9_BELOW_SMA20"))
-
-        # Profit ratchet. What matters is whether this position HAS been up,
-        # not whether it still is: `gave_back` is only ever evaluated inside
-        # the take-profit branch or this one, so a peak that no branch owns is
-        # a peak with no protection under it.
-        #
-        # Armed at the LOWER of the two thresholds, which closes exactly that
-        # hole. RATCHET_ARM_PCT is 32 and ITM_GRINDER's target is 30, so a
-        # position peaking at +31% used to fall between them: too low to arm
-        # the ratchet, and once it slipped back under 30 the take-profit
-        # branch stopped running too. It then rode to the -20% stop having
-        # been up 31%. Anything that reached its own target is a win worth
-        # protecting, whatever the engine-wide arm point says.
-        peak_return = max(position.peak_return_pct, return_pct)
-        ratchet_armed = peak_return >= min(RATCHET_ARM_PCT, tp_pct)
-        base_giveback = ratchet_giveback_for(position.playbook, TRAIL_GIVEBACK)
-        if GIVEBACK_TAPER:
-            # The most this structure can return, as a percentage of what was
-            # put up: a credit spread tops out when the credit decays to zero,
-            # a debit one when it reaches its width.
-            width = abs(position.short_strike - position.long_strike)
-            if is_credit_pos:
-                max_possible = 100.0
-            else:
-                max_possible = (
-                    (width - position.entry_net_debit) / position.entry_net_debit * 100
-                    if position.entry_net_debit > 0 else 0.0
-                )
-            if max_possible > 0:
-                progress = min(max(peak_return / max_possible, 0.0), 1.0)
-                base_giveback = (
-                    base_giveback * (1.0 - progress) + GIVEBACK_TAPER_FLOOR * progress
-                )
-        giveback = max(peak_return * base_giveback, MIN_GIVEBACK_PCT)
-        gave_back = peak_return > 0 and return_pct <= peak_return - giveback
-
-        # Hand-over deadline for a window that does not ride. Checked with
-        # the force close because it is the same kind of rule: a clock that
-        # closes a position regardless of what it is worth, so the next
-        # window can have the slot.
-        hand_over = close_deadline(position.playbook)
-        past_hand_over = hand_over is not None and datetime.now(NY).time() >= hand_over
-
-        # Rule Z: same-day expiration hard close — overrides P&L entirely.
         touch_pos = (getattr(position, "playbook", "") or "").startswith("BAND_TOUCH")
-        touch_band = _band_touch() if (touch_pos and not force_close) else None
-        touch_target = bool(touch_band) and (
-            touch_band["spot"] >= touch_band["mid"]
-            if position.strategy == BULL_CALL_SPREAD else
-            touch_band["spot"] <= touch_band["mid"])
+        band = _band_touch() if (touch_pos and not force_close) else None
+        engine_tp = PB.ENGINE_TAKE_PROFIT_PCT
+
         if force_close:
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "FORCE_CLOSE"
-        # BAND TOUCH positions have exactly two exits besides the force close:
-        # QQQ back at the 1-minute 20-SMA, or the stop. No trail, stall,
-        # ratchet or handoff (section 260).
-        elif touch_pos and touch_target:
-            logger.info("Band touch: QQQ %.2f is back at the 20-SMA %.2f — booking %s at %+.1f%%.",
-                        touch_band["spot"], touch_band["mid"], position.strategy, return_pct)
+        elif (engine_tp is not None and not is_credit(position.strategy)
+              and return_pct >= engine_tp):
+            logger.info("Engine take-profit: %s at %+.1f%% reached the %+.0f%% setting — booking.",
+                        position.strategy, return_pct, engine_tp)
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
-        elif (touch_pos and return_pct <= stop_pct
-              and _stop_confirmed(position.underlying, return_pct, stop_pct)):
+        elif touch_pos and _touch_target_hit(position, band):
+            logger.info("Band touch: QQQ %.2f is back at the 20-SMA %.2f — booking %s at %+.1f%%.",
+                        band["spot"], band["mid"], position.strategy, return_pct)
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
+        elif return_pct <= stop_pct and _stop_confirmed(position.underlying, return_pct, stop_pct):
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "STOP_LOSS"
-        elif touch_pos:
-            action = "HOLD"
-            logger.info("Band touch: holding %s at %+.1f%% (stop %+.0f%%), QQQ %s vs 20-SMA %s.",
-                        position.strategy, return_pct, stop_pct,
-                        f"{touch_band['spot']:.2f}" if touch_band else "?",
-                        f"{touch_band['mid']:.2f}" if touch_band else "?")
-        elif past_hand_over:
-            logger.info(
-                "Handoff: closing %s at %+.1f%% so the next window can trade.",
-                position.strategy, return_pct,
-            )
-            broker.sell_all(position.underlying)
-            action, exit_reason = "SELL_ALL", "HANDOFF"
-        # The operator's engine-wide take-profit (TRADING_ENGINE_TAKE_PROFIT_PCT):
-        # books outright, ride or not, before any trail or stall gets a say.
-        elif (PB.ENGINE_TAKE_PROFIT_PCT is not None and not is_credit_pos
-              and return_pct >= PB.ENGINE_TAKE_PROFIT_PCT):
-            logger.info("Engine take-profit: %s at %+.1f%% reached the %+.0f%% setting — booking.",
-                        position.strategy, return_pct, PB.ENGINE_TAKE_PROFIT_PCT)
-            broker.sell_all(position.underlying)
-            action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
-        # Rule A: Take Profit
-        # Judged against the target of the strategy that OPENED this
-        # position, not whatever window the clock is in now: an ATM spread is
-        # still an ATM spread at 13:00, and holding it to the ITM target would
-        # book it early for no reason.
-        elif ride:
-            # This window rides. Only the stop, the handoff deadline, and the
-            # force close can end the trade, so a winner is never truncated by
-            # a target or a trail.
-            deadline = ride_deadline(position.playbook)
-            past_deadline = deadline is not None and datetime.now(NY).time() >= deadline
-            # The one number a ride still respects. A debit spread cannot
-            # exceed its width, so this is the point where the remaining
-            # upside no longer pays for the gamma risk of holding it.
-            width = abs(position.short_strike - position.long_strike)
-            max_return_pct = (
-                (width - position.entry_net_debit) / position.entry_net_debit * 100
-                if position.entry_net_debit > 0 else 0.0
-            )
-            ceiling_pct = RIDE_CEILING_FRACTION * max_return_pct
-            quiet_min = _stalled_peak(position, peak_return, return_pct)
-            stalled = quiet_min is not None
-            if stalled:
-                logger.info(
-                    "Stalled peak: %s peaked %+.1f%% and has made no new high "
-                    "for %.0f min, now %+.1f%% — booking.",
-                    position.strategy, peak_return, quiet_min, return_pct,
-                )
-            if stalled:
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "STALL"
-            elif _broke_even(peak_return, return_pct):
-                logger.info(
-                    "Breakeven stop: %s peaked %+.1f%% and has come back to %+.1f%% — "
-                    "booking flat rather than letting a winner become a loser.",
-                    position.strategy, peak_return, return_pct,
-                )
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "BREAKEVEN"
-            elif RIDE_TAKE_PROFIT_PCT > 0 and return_pct >= RIDE_TAKE_PROFIT_PCT:
-                logger.info(
-                    "Ride take-profit: %s at %+.1f%% reached the absolute +%.0f%% "
-                    "level — booking outright.",
-                    position.strategy, return_pct, RIDE_TAKE_PROFIT_PCT,
-                )
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
-            elif max_return_pct > 0 and return_pct >= ceiling_pct:
-                logger.info(
-                    "Ride ceiling: %s at %+.1f%% is %.0f%% of the %+.1f%% this structure "
-                    "can pay — booking rather than holding for the last few cents.",
-                    position.strategy, return_pct, RIDE_CEILING_FRACTION * 100, max_return_pct,
-                )
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
-            elif (return_pct <= stop_pct and not stop_held_by_trend
-                  and _stop_confirmed(position.underlying, return_pct,
-                                      stop_pct)):
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "STOP_LOSS"
-            elif (
-                RIDE_RATCHET_ARM_PCT > 0
-                and peak_return >= RIDE_RATCHET_ARM_PCT
-                and return_pct <= peak_return - max(
-                    peak_return * _ride_giveback(deadline), RIDE_MIN_GIVEBACK_PCT)
-            ):
-                logger.info(
-                    "Ride ratchet: peaked at %+.1f%%, now %+.1f%% — booking the ride "
-                    "rather than carrying it to the handoff.", peak_return, return_pct,
-                )
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "RATCHET"
-            elif past_deadline:
-                # Hand the single position slot to the next window. Holding a
-                # morning winner past 13:25 blocked the credit trade entirely,
-                # which measured +36.40 a day against +80.87 for handing over.
-                logger.info(
-                    "Handoff: closing %s at %+.1f%% so the next window can trade.",
-                    position.strategy, return_pct,
-                )
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "HANDOFF"
-            else:
-                action = "TRAILING"
-                logger.info(
-                    "Riding %s at %+.1f%% to the force close (stop %+.0f%%).",
-                    position.strategy, return_pct, stop_pct,
-                )
-        # Stall on a window that does not ride. See STALL_ALL_WINDOWS.
-        elif (STALL_ALL_WINDOWS and not is_credit_pos
-              and _stalled_peak(position, peak_return, return_pct) is not None):
-            logger.info(
-                "Stalled peak: %s peaked %+.1f%% (watching from %+.0f%%) and has made no "
-                "new high for %.0f min, now %+.1f%% — booking.",
-                position.strategy, peak_return, STALL_ARM_PCT,
-                _stalled_peak(position, peak_return, return_pct), return_pct,
-            )
-            broker.sell_all(position.underlying)
-            action, exit_reason = "SELL_ALL", "STALL"
-        # Rule A: Take Profit
-        elif return_pct >= tp_pct:
-            # Target reached. With trailing enabled this arms rather than
-            # sells: the position runs while the 5-minute trend holds, so a
-            # strong move is not truncated at a number chosen in advance.
-            #
-            # Two things end the ride: the 9 EMA turning against the
-            # structure, and the ratchet below, which measures the position's
-            # own giveback. Whichever fires first wins -- a price trail alone
-            # knows nothing about P&L, and spread value decays independently
-            # of direction.
-            #
-            # What that does not cover: a violent reversal inside one cycle.
-            # Price can round-trip a long way in 60 seconds and the exit only
-            # sees it on the next tick. Trailing genuinely trades a capped,
-            # certain gain for an uncapped, less certain one.
-            # Credit positions trail too, where their window sets a final
-            # target. The old rule booked them at the target on the grounds
-            # that a credit spread's gain is bounded by the credit collected
-            # and so has no tail to run. Bounded is not the same as finished:
-            # observed live on 2026-08-20, the 13:30 call credit spread was
-            # booked at +51% and was worth +72% forty-five minutes later,
-            # with spot four dollars below the short strike. What ends the
-            # ride is the same thing that ends a debit ride -- price turning
-            # against the structure -- not the target being reached.
-            final_tp = final_take_profit_for(position.playbook)
-            credit_trails = is_credit_pos and final_tp is not None
-            # An adverse move is a move toward the short strike, which is UP
-            # for a short call and DOWN for a short put -- the mirror of the
-            # debit spreads, and the same 9 EMA reading.
-            trend_broken = (
-                (position.strategy in (BULL_CALL_SPREAD, PUT_CREDIT_SPREAD)
-                 and ema9_side == "BELOW_EMA9")
-                or (position.strategy in (BEAR_PUT_SPREAD, CALL_CREDIT_SPREAD)
-                    and ema9_side == "ABOVE_EMA9")
-            )
-            if credit_trails and trend_broken:
-                # Direction alone does not threaten short premium -- distance
-                # to the short strike does. qqq_close is the same 5-minute
-                # series the 9 EMA is built from, so the two agree.
-                bar_close = state.get("qqq_close")
-                if bar_close:
-                    trend_broken = (
-                        abs(position.short_strike - float(bar_close)) <= CREDIT_TRAIL_STRIKE_BUFFER
-                    )
-            hit_final = final_tp is not None and return_pct >= final_tp
-            books_at_target = (is_credit_pos and not credit_trails) or not TRAILING_EXITS_ENABLED
-
-            # Target reached: arm rather than book, and hand the decision to
-            # the stall. Only for credit positions -- a debit spread's ride is
-            # governed by the branch above, which has its own stall.
-            credit_stalled = False
-            peak_at = getattr(position, "peak_at", None)
-            if (STALL_ON_CREDIT and is_credit_pos
-                    and (hit_final or not CREDIT_STALL_REQUIRES_ARM)
-                    and CREDIT_STALL_MINUTES > 0
-                    and peak_at is not None and peak_return > 0):
-                # Disarm the target ONLY when there is a working stall to hand
-                # the decision to. Without peak_at there is nothing to detect a
-                # stall with, and clearing hit_final would leave the position
-                # with no target at all -- a rule meant to capture MORE profit
-                # silently removing the exit. Rows written before migration
-                # d1f7a03c9e84 have no peak_at, and so does any harness whose
-                # mock position does not carry one.
-                hit_final = False
-                quiet_min = (datetime.now(timezone.utc) - peak_at).total_seconds() / 60.0
-                credit_stalled = (quiet_min >= CREDIT_STALL_MINUTES
-                                  and return_pct <= peak_return - CREDIT_STALL_GIVEBACK_PCT)
-                if credit_stalled:
-                    logger.info(
-                        "Stalled peak (credit): %s peaked %+.1f%% and has made no new "
-                        "high for %.0f min, now %+.1f%% — booking.",
-                        position.strategy, peak_return, quiet_min, return_pct,
-                    )
-                else:
-                    logger.info(
-                        "Credit target armed: %s at %+.1f%% is past %+.0f%%, peak "
-                        "%+.1f%% %.0f min ago — holding while it keeps climbing.",
-                        position.strategy, return_pct, final_tp, peak_return, quiet_min,
-                    )
-
-            # Distance to the short strike, on the threatening side. For a
-            # short CALL the danger is spot rising to it; for a short PUT,
-            # falling to it.
-            near_strike = False
-            if CREDIT_STRIKE_EXIT_BUFFER > 0 and is_credit_pos:
-                _spot = state.get("qqq_close")
-                if _spot:
-                    gap = (float(_spot) - position.short_strike
-                           if position.strategy == CALL_CREDIT_SPREAD
-                           else position.short_strike - float(_spot))
-                    near_strike = gap >= -CREDIT_STRIKE_EXIT_BUFFER
-                    if near_strike:
-                        logger.info(
-                            "Strike approach: %s spot %.2f is within %.2f of the %.0f short "
-                            "strike — leaving before it is reached, not after.",
-                            position.strategy, float(_spot), CREDIT_STRIKE_EXIT_BUFFER,
-                            position.short_strike,
-                        )
-
-            broke_even = _broke_even(peak_return, return_pct)
-            if broke_even:
-                logger.info(
-                    "Breakeven stop: %s peaked %+.1f%%, now %+.1f%% — booking flat.",
-                    position.strategy, peak_return, return_pct,
-                )
-            if (hit_final or credit_stalled or books_at_target or trend_broken
-                    or gave_back or broke_even or near_strike):
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", (
-                    "STRIKE_APPROACH" if near_strike else
-                    "BREAKEVEN" if broke_even else
-                    "STALL" if credit_stalled else
-                    "TAKE_PROFIT" if (hit_final or books_at_target)
-                    else ("RATCHET" if gave_back else "TRAIL_STOP")
-                )
-            else:
-                action = "TRAILING"
-                logger.info(
-                    "Trailing %s at %+.1f%% (armed at %+.0f%%, book at %s) — trend intact, letting it run.",
-                    position.strategy, return_pct, tp_pct,
-                    f"{final_tp:+.0f}%" if final_tp is not None else "trend break",
-                )
-        # Ratchet rung: armed earlier, has since given back too much. Sits
-        # above the stop so a position that was up 45% exits near 38% instead
-        # of riding to -10%.
-        elif TRAILING_EXITS_ENABLED and ratchet_armed and gave_back:
-            logger.info(
-                "Profit ratchet: peaked at %+.1f%%, now %+.1f%% (gave back more than %.0f%% of the gain) — closing.",
-                peak_return, return_pct, TRAIL_GIVEBACK * 100,
-            )
-            broker.sell_all(position.underlying)
-            action, exit_reason = "SELL_ALL", "RATCHET"
-        # Rule B / C: Stop Loss vs. Buy More
-        elif (return_pct <= stop_pct and not stop_held_by_trend
-              and _stop_confirmed(position.underlying, return_pct,
-                                  stop_pct)):
-            # place_buy_more adds `position.quantity` more contracts — it
-            # doubles the position — so the affordability check has to price
-            # that whole lot. Checking a single contract's cost (as this once
-            # did) authorised roughly a 5x larger purchase than it verified,
-            # and repeated doubling would have compounded the gap: 5 -> 10 ->
-            # 20 -> 40 contracts, each step approved by a one-contract test.
-            # Never on a credit position. Scaling in doubles the position,
-            # and a credit spread's loss is bounded by width-minus-credit
-            # rather than by the premium paid -- doubling at the stop roughly
-            # doubles an already-maximal loss, on a thesis the market has
-            # already disproved. Averaging down into short premium is how
-            # accounts die.
-            scale_in_cost = position.current_net_value * 100 * position.quantity
-            if (
-                not is_credit_pos
-                and not past_cutoff
-                and sentiment == "GOOD"
-                and count < MAX_SCALE_INS
-                and available_cash >= scale_in_cost
-            ):
-                broker.place_buy_more(position.underlying, position.quantity)
-                action = "BUY_MORE"
-            else:
-                # Past the 2PM EST cutoff, or sentiment/cash/count don't clear the bar — fall back to stop loss.
-                broker.sell_all(position.underlying)
-                action, exit_reason = "SELL_ALL", "STOP_LOSS"
-        # Rule D: risk-off exit — macro has turned BAD (deteriorating breadth,
-        # a VIX spike, or a risk-off headline read) while the position is
-        # already losing. Cut at the risk-off level rather than waiting for
-        # the full stop: the setup that justified the entry no longer holds,
-        # and re-entry is available on any later cycle if conditions recover.
-        #
-        # Deliberately evaluated *after* the full stop above so a position
-        # that already breached the full stop is still recorded as STOP_LOSS
-        # — this rule only owns the band between the two thresholds, which
-        # keeps the close reasons feeding the setup vector store honest.
-        # Only for LONG positions. market_sentiment BAD describes conditions
-        # hostile to being long, which are the same conditions a bear put
-        # spread profits from — cutting a short early because macro turned
-        # bearish would exit the position for the reason it was opened.
-        elif (
-            sentiment == "BAD"
-            and position.strategy == BULL_CALL_SPREAD
-            and return_pct <= risk_off_pct
-        ):
-            logger.warning(
-                "Risk-off exit: macro sentiment BAD with position at %.2f%% — closing early "
-                # stop_pct, not the module-level STOP_LOSS_PCT: the window's
-                # override is what this position is actually judged against,
-                # and a log naming the global one sent an entire debugging
-                # session chasing a threshold no trade was using.
-                "rather than riding to the %.1f%% stop.", return_pct, stop_pct,
-            )
-            broker.sell_all(position.underlying)
-            action, exit_reason = "SELL_ALL", "RISK_OFF"
-    # Entry is checked after management rather than as an `elif`, so a cycle
-    # that takes profit can immediately look for the next setup instead of
-    # sitting flat for a full tick. On a 5-minute cadence that dead cycle was
-    # costing a whole bar of a session that only offers ~3 tradeable moves.
-    #
-    # Only after a TAKE_PROFIT. Re-entering straight after a stop or a
-    # risk-off cut would just re-open the setup that had already failed --
-    # the signals will still be saying the same thing, so it would churn
-    # through the stop repeatedly.
-    # RATCHET and TRAIL_STOP belong here too: both can only fire on a
-    # position that armed above its target, so they are winning exits under
-    # different names. Leaving them out cost the credit window a cycle every
-    # time it trailed out instead of booking at the target.
-    may_reenter = position is None or exit_reason in ("TAKE_PROFIT", "RATCHET", "TRAIL_STOP")
-
-    # The 14:00 cutoff is a DEBIT rule: a bought spread needs enough day left
-    # for the move it is paying for. A credit spread wants the opposite --
-    # less time left is less time for the short strike to be reached -- and
-    # AFTERNOON_CREDIT is written to run to 15:00 for exactly that reason.
-    #
-    # Applying the cutoff to it anyway killed the last hour of its window.
-    # Observed on 2026-08-20: the window's setup came back at 14:50 and again
-    # at 14:51, 14:52 and 14:54, all four inside the window and all four
-    # refused by an hour that has nothing to do with short premium. The
-    # window's own end time is what bounds a credit entry.
-    entry_window = window_for()
-    # BAND_TOUCH is bounded by its own end time too (TRADING_BAND_TOUCH_END).
-    cutoff_blocks_entry = past_cutoff and not (
-        entry_window is not None
-        and (entry_window.placement == CREDIT or entry_window.name == "BAND_TOUCH")
-    )
-
-    if broker.get_open_position() is None and may_reenter and not cutoff_blocks_entry and not in_warmup:
-        # Bullish: bull call debit spread (long ITM call, short ATM call).
-        # Bearish: bear put debit spread (long ITM put, short ATM put). Same
-        # market_sentiment=GOOD gate either direction (a calm macro
-        # environment is required to open a new position at all). No new
-        # entries past the cutoff — a same-day spread opened too late has
-        # too little of the trading day left to work before it expires.
-        #
-        # Both directions now have two distinct setups, mirrored:
-        #   - Fade: MACD/EMA one direction while price is stretched to the
-        #     OPPOSITE band with RSI at that opposite extreme — a
-        #     topping/bottoming reversal read, betting the prior move is
-        #     exhausted. (Bullish fade: bearish price action stretched down
-        #     to LOWER_BAND/OVERSOLD, momentum turning up. Bearish fade:
-        #     bullish price action stretched up to UPPER_BAND/OVERBOUGHT,
-        #     momentum turning down.)
-        #   - Continuation: MACD/EMA AND price/RSI all agree in the SAME
-        #     direction — a breakout/breakdown-in-progress read, betting the
-        #     move keeps going. This is what a clean trending move (never
-        #     touching the opposite band) looks like, which the fade-only
-        #     trigger couldn't catch.
-        # Two tiers of the same idea, run side by side so the data decides
-        # between them rather than an argument.
-        #
-        # STRICT is the original gate: MACD, trend, a Bollinger pierce AND an
-        # RSI extreme all agreeing. RELAXED drops the RSI requirement only.
-        #
-        # The reason to try dropping it: a Bollinger pierce and an RSI extreme
-        # both measure "price is stretched from its mean", so requiring both
-        # is close to asking the same question twice. Measured over a month of
-        # 5-minute bars in the entry window, RSI removed 31 of 63 band
-        # pierces -- half the setups -- taking the gate from 2.8 to 1.5
-        # opportunities a day against a market that only offers about 2.8.
-        #
-        # But the overlap was 51%, not 90%, so RSI is genuinely filtering
-        # rather than duplicating. Whether the half it removes were losers
-        # worth avoiding or winners never seen is exactly what is unknown, so
-        # both tiers trade and each is attributed separately.
-        strict_bull = (
-            macd == "BULLISH" and sma == "ABOVE_SMA"
-            and ((bb == "LOWER_BAND" and rsi == "OVERSOLD")        # fade
-                 or (bb == "UPPER_BAND" and rsi == "OVERBOUGHT"))  # continuation
-            and sentiment == "GOOD"
-        )
-        # Short setups gate on `not halt`, not on GOOD. GOOD means "safe to be
-        # long"; requiring it to go short refused every bear put spread in
-        # precisely the tape — collapsing breadth, spiking VIX, rising yields —
-        # that such a spread exists to profit from.
-        strict_bear = (
-            macd == "BEARISH" and sma == "BELOW_SMA"
-            and ((bb == "UPPER_BAND" and rsi == "OVERBOUGHT")      # fade
-                 or (bb == "LOWER_BAND" and rsi == "OVERSOLD"))    # continuation
-        )
-        relaxed_bull = (
-            macd == "BULLISH" and sma == "ABOVE_SMA"
-            and bb in ("UPPER_BAND", "LOWER_BAND") and sentiment == "GOOD"
-        )
-        relaxed_bear = (
-            macd == "BEARISH" and sma == "BELOW_SMA"
-            and bb in ("UPPER_BAND", "LOWER_BAND")
-        )
-
-        # MOMENTUM: price closing back through its 20-period mean with MACD
-        # and trend agreeing. A trend-turning thesis rather than a
-        # mean-reversion one, so it catches moves that never reach a band.
-        #
-        # Deliberately NOT "rising RSI", which was the other candidate. RSI
-        # merely ticking up fired on 21 bars a day against a market with ~2.8
-        # tradeable moves -- it describes the last few bars rather than
-        # identifying anything, and trading it would mostly be paying the
-        # debit to enter noise.
-        # No MACD term. It was vetoing 77% of trend+cross setups over a month
-        # of history, cutting this tier from 2.7 opportunities a day to 0.6 --
-        # and 2.7 is about what the market actually supplies.
-        #
-        # A live example of the cost: on a session where QQQ fell $11, MACD
-        # read BULLISH on 150 of 219 cycles while price sat BELOW_SMA the
-        # whole time. That combination is short-term upticks inside a
-        # downtrend, and demanding MACD agree meant every one of the day's 15
-        # midline crosses was refused. The engine sat flat through a clean
-        # directional move.
-        #
-        # Trend plus a cross through the 20-period mean is the thesis on its
-        # own: price re-crossing its mean in the direction the trend already
-        # points. MACD is a second momentum read on the same price series, so
-        # requiring it was closer to demanding the same confirmation twice
-        # than to adding independent evidence.
-        momentum_bull = (
-            sma == "ABOVE_SMA" and bb_cross == "CROSS_UP" and sentiment == "GOOD"
-        )
-        momentum_bear = (
-            sma == "BELOW_SMA" and bb_cross == "CROSS_DOWN"
-        )
-
-        # CLEAN: the four-rule structural gate. Checked FIRST because it is
-        # the most selective -- if it and a looser tier both match, the
-        # tighter attribution is the more informative one.
-        # FADE: sell into a band PIERCE with no trend requirement. Bear only
-        # -- the mirror measured -17.08 against +5.00 unconditional, because
-        # the band is a good ceiling and a bad floor in this instrument.
-        fade_bear = state.get("bollinger_pierce") == "UP_PIERCE"
-
-        clean_bull = (
-            sma == "ABOVE_SMA" and ema_cross == "EMA9_ABOVE_SMA20"
-            and vwap_side == "ABOVE_VWAP" and rsi_band == "BULL_BAND"
-            and sentiment == "GOOD"
-        )
-        clean_bear = (
-            sma == "BELOW_SMA" and ema_cross == "EMA9_BELOW_SMA20"
-            and vwap_side == "BELOW_VWAP" and rsi_band == "BEAR_BAND"
-        )
-
-        # ZONE: the session low was set a while ago, price has lifted off it by
-        # a real but not-yet-spent amount, and VWAP agrees. Mirror for the high.
-        _since_low = state.get("minutes_since_day_low")
-        _since_high = state.get("minutes_since_day_high")
-        _bounce = state.get("bounce_off_low_pct")
-        _fade = state.get("fade_off_high_pct")
-        zone_bull = (
-            _since_low is not None and _bounce is not None
-            and float(_since_low) >= ZONE_HOLD_MINUTES
-            and ZONE_BOUNCE_MIN_PCT <= float(_bounce) <= ZONE_BOUNCE_MAX_PCT
-            and vwap_side == "ABOVE_VWAP"
-            and (sentiment == "GOOD" or not ZONE_REQUIRE_MACRO)
-        )
-        zone_bear = (
-            _since_high is not None and _fade is not None
-            and float(_since_high) >= ZONE_HOLD_MINUTES
-            and ZONE_BOUNCE_MIN_PCT <= float(_fade) <= ZONE_BOUNCE_MAX_PCT
-            and vwap_side == "BELOW_VWAP"
-        )
-
-        # REJECT: price tried the 50 EMA and failed. Requires the broader
-        # trend to already be down, so this is a continuation read rather than
-        # a lone candle pattern.
-        reject_bear = (
-            ema50_reject and sma == "BELOW_SMA" and vwap_side == "BELOW_VWAP"
-        )
-
-        # TREND: momentum, direction and an RSI extreme agreeing, no band
-        # needed. This is the tier that can trade a sustained move, which is
-        # precisely what the band-based tiers cannot see.
-        trend_bull = (
-            macd == "BULLISH" and sma == "ABOVE_SMA"
-            and rsi == "OVERBOUGHT" and sentiment == "GOOD"
-        )
-        trend_bear = (
-            macd == "BEARISH" and sma == "BELOW_SMA" and rsi == "OVERSOLD"
-        )
-
-        # A single guard rather than the same clause repeated on six
-        # conditions: VIX at or above its ceiling is disorder, and disorder is
-        # not directional — wide quotes and gap risk hurt a short spread as
-        # much as a long one. Everything below assumes it has already passed.
-        # Refuse the side that just lost, for the cooldown period. The
-        # signals still read the same after a stop-out, so without this the
-        # engine immediately re-enters the trade the market just rejected.
-        # A booked target pauses everything for a spell -- see
-        # equity.WIN_COOLDOWN_MINUTES. Checked before the directional cooldown
-        # because it subsumes it: if no entry may open at all, which side just
-        # lost is not a question worth asking.
-        # FADE and REJECT are bear-only tiers and were missing from all three
-        # blocks below, so a win pause, a bearish cooldown or the bearish start
-        # time left them free to open a put spread.
-        if win_pause_active() or entry_cap_reached():
-            strict_bull = relaxed_bull = momentum_bull = trend_bull = clean_bull = False
-            strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
-            zone_bull = zone_bear = fade_bear = reject_bear = False
-
-        cooling = blocked_direction()
-        if cooling == "bearish":
-            strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
-            zone_bear = fade_bear = reject_bear = False
-        elif cooling == "bullish":
-            strict_bull = relaxed_bull = momentum_bull = trend_bull = clean_bull = False
-            zone_bull = False
-
-        # Short setups are suppressed until the bearish start time, whatever
-        # the signals say. Long setups are unaffected.
-        if _is_before_bearish_start():
-            strict_bear = relaxed_bear = momentum_bear = trend_bear = clean_bear = False
-            zone_bear = fade_bear = reject_bear = False
-
-        # Strict band-only: nothing without a Bollinger band pierce may enter.
-        # FADE still needs its own switch (FADE_ENTRIES_ENABLED), RELAXED too.
-        if PB.BAND_ONLY:
-            clean_bull = clean_bear = zone_bull = zone_bear = False
-            momentum_bull = momentum_bear = trend_bull = trend_bear = False
-            reject_bear = False
-
-        if halt:
-            tier, bullish = None, False
-        elif CLEAN_ENTRIES_ENABLED and (clean_bull or clean_bear):
-            tier, bullish = "CLEAN", clean_bull
-        elif ZONE_ENTRIES_ENABLED and (zone_bull or zone_bear):
-            # Below CLEAN deliberately. When both match, CLEAN is the better
-            # attribution -- it is the tier with a measured record, and a ZONE
-            # label on a trade CLEAN would have taken anyway would overstate
-            # what this tier is contributing.
-            tier, bullish = "ZONE", zone_bull
-        elif strict_bull or strict_bear:
-            tier, bullish = "STRICT", strict_bull
-        elif RELAXED_ENTRIES_ENABLED and (relaxed_bull or relaxed_bear):
-            tier, bullish = "RELAXED", relaxed_bull
-        elif MOMENTUM_ENTRIES_ENABLED and (momentum_bull or momentum_bear):
-            tier, bullish = "MOMENTUM", momentum_bull
-        elif FADE_ENTRIES_ENABLED and fade_bear:
-            # Last in the ladder: if a trend-agreeing tier also matches,
-            # that is the more informative attribution.
-            tier, bullish = "FADE", False
-        elif REJECT_ENTRIES_ENABLED and reject_bear:
-            tier, bullish = "REJECT", False
-        elif TREND_ENTRIES_ENABLED and (trend_bull or trend_bear):
-            tier, bullish = "TREND", trend_bull
         else:
-            tier, bullish = None, False
+            logger.info("Holding %s at %+.1f%% (stop %+.0f%%%s)%s.",
+                        position.strategy, return_pct, stop_pct,
+                        f", take-profit {engine_tp:+.0f}%" if engine_tp is not None else "",
+                        f", QQQ {band['spot']:.2f} vs 20-SMA {band['mid']:.2f}" if band else "")
 
-        # THE MORNING'S MACRO NEWS READ, AS A VETO ON ONE SIDE.
-        #
-        # Placed after the tier ladder and before the event blackout, so it
-        # can only remove an entry the technicals already produced. See
-        # NEWS_DIRECTION for what it is gated on and why it is off by default.
-        if NEWS_DIRECTION and tier is not None:
-            _nv = _qqq_news_verdict()
-            if _nv and _nv[1] >= MACRO_DIRECTION_MIN_CONF:
-                _v, _c = _nv
-                if bullish and _v in NEWS_BEARISH:
-                    logger.info(
-                        "QQQ macro news reads %s (%.2f) — refusing the bullish "
-                        "%s entry. The tape and the tape's news disagree, and "
-                        "this gate resolves that by standing down, never by "
-                        "taking the other side.", _v, _c, tier)
-                    tier, bullish = None, False
-                elif (not bullish) and _v in NEWS_BULLISH:
-                    logger.info(
-                        "QQQ macro news reads %s (%.2f) — refusing the bearish "
-                        "%s entry.", _v, _c, tier)
-                    tier, bullish = None, False
-                else:
-                    logger.info("QQQ macro news reads %s (%.2f) — agrees with "
-                                "the %s %s setup.", _v, _c, tier,
-                                "bullish" if bullish else "bearish")
-            elif _nv:
-                logger.info("QQQ macro reads %s at %.2f, below the %.2f the "
-                            "direction gate requires — ignored.",
-                            _nv[0], _nv[1], MACRO_DIRECTION_MIN_CONF)
-
-        # THE TURN, which the level gate above cannot see. A read that has been
-        # BEARISH since 09:30 has said nothing new by 14:00; a read that was
-        # NEUTRAL and has just gone BEARISH is the event. No confidence floor
-        # here -- the movement between two graded reads IS the signal, and
-        # requiring both to be confident would mostly filter out the turn.
-        if NEWS_TURN_GATE and tier is not None:
-            _now = _qqq_news_verdict()
-            _open = _qqq_news_open_verdict()
-            if _now and _open:
-                _d = NEWS_ORD.get(_now[0], 0.0) - NEWS_ORD.get(_open, 0.0)
-                if bullish and _d <= -NEWS_TURN_STEPS:
-                    logger.info(
-                        "QQQ macro news TURNED bearish since the open (%s -> "
-                        "%s) — refusing the bullish %s entry. The level gate "
-                        "would have allowed this; the change is the signal.",
-                        _open, _now[0], tier)
-                    tier, bullish = None, False
-                elif (not bullish) and _d >= NEWS_TURN_STEPS:
-                    logger.info(
-                        "QQQ macro news TURNED bullish since the open (%s -> "
-                        "%s) — refusing the bearish %s entry.",
-                        _open, _now[0], tier)
-                    tier, bullish = None, False
-                elif _d:
-                    logger.info("QQQ macro news moved %s -> %s since the open, "
-                                "which agrees with the %s setup.", _open,
-                                _now[0], "bullish" if bullish else "bearish")
-
-        # A scheduled macro event. The VIX gate is a level and a Fed day with
-        # the VIX at 18 sails through it; the sentiment verdict gates bullish
-        # entries only, so a credit spread could open in either direction
-        # minutes before a rate decision. Logged on every event day whether or
-        # not the blackout is armed.
-        event_note = describe_event()
-        if event_note:
-            logger.info("%s", event_note)
-        if tier is not None and event_blackout_active():
-            logger.info("Scheduled macro event — refusing the %s entry.", tier)
-            tier, bullish = None, False
-
-        # WHERE IN THE WEEK'S RANGE (section 241): no bullish entry at the week
-        # high, no bearish one at the week low. Measured on 52 sessions: at the
-        # top tenth of the 5-session range the next four days were up 34% of
-        # the time against 53% mid-range. Off unless TRADING_WEEKRANGE_GUARD.
-        if tier is not None:
-            from . import structure_gates
-            if structure_gates.weekrange_on():
-                _why = structure_gates.weekrange_refusal(bullish, structure_gates.week_context("QQQ"))
-                if _why:
-                    logger.info("Week range: refusing the %s %s entry — %s.",
-                                "bullish" if bullish else "bearish", tier, _why)
-                    tier, bullish = None, False
-
-        # A session already this far down is not a place to be long, whatever
-        # the five-minute averages say about the last twenty minutes.
-        if (
-            tier is not None and bullish and DAY_TREND_MAX_DROP_PCT > 0
-            and state.get("session_move_pct") is not None
-            and float(state.get("session_move_pct") or 0.0) <= -DAY_TREND_MAX_DROP_PCT
-        ):
-            logger.info(
-                "Session is %.2f%% off the open — refusing the bullish %s entry.",
-                float(state.get("session_move_pct") or 0.0), tier,
-            )
-            tier, bullish = None, False
-
-        # WHERE IN THE DAY'S RANGE the entry would be opened. Distinct from the
-        # gate above, which asks how far the session has fallen: a day that is
-        # flat on the session can still be at its own high, and that is the
-        # case this refuses. Off unless a sweep earned it.
-        if tier is not None and ZONE_REQUIRE_INSIDE_PRIOR_RANGE:
-            _ext = state.get("zone_extension")
-            if _ext in ("ABOVE_PRIOR_RANGE", "BELOW_PRIOR_RANGE"):
-                logger.info(
-                    "Session has left yesterday's range (%s, %s-%s) — refusing the %s entry.",
-                    _ext, state.get("prior_low"), state.get("prior_high"), tier,
-                )
-                tier, bullish = None, False
-
-        if tier is not None and ZONE_MAX_GAP_PCT > 0:
-            _gap = state.get("gap_pct")
-            if _gap is not None and abs(float(_gap)) > ZONE_MAX_GAP_PCT:
-                logger.info(
-                    "Opened %.2f%% away from yesterday's close — refusing the %s entry.",
-                    float(_gap), tier,
-                )
-                tier, bullish = None, False
-
-        _pos = state.get("day_range_pos_pct")
-        if tier is not None and _pos is not None:
-            if bullish and ZONE_MIN_RANGE_POS_LONG > 0 and float(_pos) < ZONE_MIN_RANGE_POS_LONG:
-                logger.info(
-                    "Price is only %.0f%% up the day's range (%s-%s) — refusing the bullish %s entry.",
-                    float(_pos), state.get("day_low"), state.get("day_high"), tier,
-                )
-                tier, bullish = None, False
-            elif (not bullish) and ZONE_MAX_RANGE_POS_SHORT < 100 and float(_pos) > ZONE_MAX_RANGE_POS_SHORT:
-                logger.info(
-                    "Price is %.0f%% up the day's range (%s-%s) — refusing the bearish %s entry.",
-                    float(_pos), state.get("day_low"), state.get("day_high"), tier,
-                )
-                tier, bullish = None, False
-            elif bullish and ZONE_MAX_RANGE_POS_LONG < 100 and float(_pos) > ZONE_MAX_RANGE_POS_LONG:
-                logger.info(
-                    "Price is %.0f%% up the day's range (%s-%s) — refusing the bullish %s entry.",
-                    float(_pos), state.get("day_low"), state.get("day_high"), tier,
-                )
-                tier, bullish = None, False
-            elif (not bullish) and ZONE_MIN_RANGE_POS_SHORT > 0 and float(_pos) < ZONE_MIN_RANGE_POS_SHORT:
-                logger.info(
-                    "Price is %.0f%% up the day's range (%s-%s) — refusing the bearish %s entry.",
-                    float(_pos), state.get("day_low"), state.get("day_high"), tier,
-                )
-                tier, bullish = None, False
-
-        # No tier, but a credit window is open: sell premium on the side the
-        # trend is moving away from. Recorded as its own tier name so the
-        # scoreboard can separate it from the signal-driven entries.
-        if tier is None and CREDIT_LOOSE_GATE and not halt:
-            w = entry_window
-            if w is not None and w.placement == CREDIT and sma in ("ABOVE_SMA", "BELOW_SMA"):
-                tier, bullish = "THETA", sma == "ABOVE_SMA"
-
-        # STRICT BAND TOUCH MODE (section 260): the touch is the only entry.
-        # Everything the ladder and its gates decided above is discarded; the
-        # account-level guards still apply (macro halt, win pause, entry cap,
-        # the loss cooldown on the side that just lost, the bucket switch, the
-        # daily-loss and streak halts below).
-        if PB.BAND_TOUCH_MODE:
-            tier, bullish = None, False
-            _tb = _band_touch()
-            if _tb and _tb["touch"] and not halt:
-                _bull = _tb["touch"] == "LOWER"
-                _cool = blocked_direction()
-                if win_pause_active() or entry_cap_reached():
-                    pass
-                elif _cool == ("bullish" if _bull else "bearish"):
-                    pass
-                else:
-                    tier, bullish = "TOUCH", _bull
-            if _tb:
-                logger.info("Band touch read: QQQ %.2f, 1-min band %.2f / %.2f / %.2f — %s.",
-                            _tb["spot"], _tb["lower"], _tb["mid"], _tb["upper"],
-                            f"{_tb['touch']} touch -> {'call' if bullish else 'put'} spread"
-                            if tier else (f"{_tb['touch']} touch refused" if _tb["touch"]
-                                          else "inside the band"))
-
-        # ONE LINE SAYING WHAT THE ENTRY LOGIC SAW AND DECIDED.
-        #
-        # Added 2026-08-28 after a session where the cycle summary showed
-        # "action=HOLD ... rsi=NEUTRAL" through the whole credit window and
-        # looked like nothing came close. Three of CLEAN's four inputs were
-        # not logged anywhere -- vwap_side, ema_cross and rsi_band -- and the
-        # rsi field in that summary is the overbought/oversold ZONE, not the
-        # band the tier reads. In fact clean_bear held on two cycles and the
-        # entry was refused later, on price. Establishing that took running
-        # the engine's own indicator code against the day's bars and a live
-        # VWAP fetch inside the container, which is far too much work for
-        # "why did nothing trade".
-        #
-        # Logged whenever an entry is possible -- no position, past warmup --
-        # so it is one line a minute at most and silent while a trade is open.
-        _misses = (_clean_misses(True, sma, ema_cross, vwap_side, rsi_band, sentiment),
-                   _clean_misses(False, sma, ema_cross, vwap_side, rsi_band, sentiment))
-        logger.info(
-            "Entry read [%s]: tier=%s%s — trend=%s ema9=%s vwap=%s band=%s "
-            "macd=%s bb=%s macro=%s | zone=%s %s day=%s%% (%s-%s) prior=%s%%%s",
-            entry_window.name if entry_window is not None else "no window",
-            tier or "NONE",
-            "" if tier is None else ("/bull" if bullish else "/bear"),
-            sma, ema_cross, vwap_side, rsi_band, macd, bb,
-            "HALT" if halt else sentiment,
-            # Zone columns gate nothing. They ride on this line because the
-            # question they exist to answer -- does where price sits against a
-            # fixed level predict anything -- is answerable only by pairing the
-            # reading with the decision, and this is the line that already
-            # carries the decision.
-            state.get("zone") or "?", state.get("zone_extension") or "?",
-            state.get("day_range_pos_pct"),
-            state.get("day_low"), state.get("day_high"),
-            state.get("prior_change_pct"),
-            "" if tier is not None else
-            f" — clean_bull needs {_misses[0]}, clean_bear needs {_misses[1]}",
-        )
-
-        # THE MACRO GATE'S COUNTERFACTUAL, on its own greppable line.
-        #
-        # The gate went live 2026-08-28 on two refusals, both of which happened
-        # to be losers, and it cannot be swept: sweep.py hardcodes
-        # market_sentiment to GOOD, so no replay can ever price it. Its only
-        # possible evidence is forward, and forward evidence needs the refused
-        # trades recorded at the moment they are refused.
-        #
-        # Fires only when EVERY other CLEAN condition held and the verdict was
-        # the sole reason nothing opened -- the counterfactual trade, not a
-        # general complaint about a BAD reading. On 2026-08-31 that was 5 of
-        # 130 morning cycles, against 125 where the setup was failing anyway.
-        #
-        # Spot is recorded so the outcome can be reconstructed afterwards from
-        # bars alone, the way the shadow condor and weekly book are.
-        if tier is None and not halt:
-            for _dir, _miss in (("bull", _misses[0]), ("bear", _misses[1])):
-                if _miss == ["macro"]:
-                    logger.info(
-                        "MACRO REFUSED a %s setup [%s]: every other CLEAN condition held "
-                        "(trend=%s ema9=%s vwap=%s band=%s) — verdict %s, spot %s. "
-                        "Counterfactual, no order placed.",
-                        _dir,
-                        entry_window.name if entry_window is not None else "no window",
-                        sma, ema_cross, vwap_side, rsi_band, sentiment,
-                        state.get("qqq_close"),
-                    )
+    # ---- Entry: the 1-minute band touch ----------------------------------
+    # Checked after management, so a cycle that books the target can re-enter
+    # on the next touch without sitting out a minute. Never straight after a
+    # stop: the loss cooldown decides that.
+    may_reenter = position is None or exit_reason == "TAKE_PROFIT"
+    entry_window = window_for()
+    if (broker.get_open_position() is None and may_reenter and not in_warmup
+            and entry_window is not None):
+        tier, bullish = None, False
+        tb = _band_touch()
+        if tb and tb["touch"] and not halt:
+            _bull = tb["touch"] == "LOWER"
+            if win_pause_active() or entry_cap_reached():
+                pass
+            elif blocked_direction() == ("bullish" if _bull else "bearish"):
+                pass
+            else:
+                tier, bullish = "TOUCH", _bull
+        if tb:
+            if tier:
+                verdict = f"{tb['touch']} touch -> {'call' if bullish else 'put'} spread"
+            elif tb["touch"]:
+                verdict = f"{tb['touch']} touch refused" + (" (macro halt)" if halt else "")
+            else:
+                verdict = "inside the band"
+            logger.info("Band touch read: QQQ %.2f, 1-min band %.2f / %.2f / %.2f — %s.",
+                        tb["spot"], tb["lower"], tb["mid"], tb["upper"], verdict)
 
         if tier is not None:
-            # Strike placement comes from the time-of-day window, so the same
-            # signal produces a leveraged ATM structure during the morning
-            # momentum leg and a positive-theta ITM one through the midday
-            # lull. window is None outside every window — that is a no-entry
-            # period, including any gap left by retiring a strategy.
-            # Resolved by direction, not just by the clock. Two windows can
-            # share an hour and differ only in the side they take -- a
-            # long-only debit window and a short-only credit one -- so the
-            # direction has to be part of the lookup. entry_window above
-            # remains the clock-only answer, which is all the cutoff needs.
             window = window_for_direction(bullish)
-
-            # A window may restrict which tiers can open it. MORNING_DRIFT
-            # takes CLEAN only: the same ITM structure measured +18.74 a
-            # trade when the full bullish stack held and -4.49 when it did
-            # not, and the looser tiers are precisely what would open it on
-            # the days that lose.
-            if window is not None and not window.allows_tier(tier):
-                logger.info(
-                    "%s does not accept the %s tier — no entry.", window.name, tier,
-                )
-                window = None
-                action = "TIER_NOT_ALLOWED"
-
-            # Severity gate. A window may demand that the session already be
-            # down before it takes the short side -- the difference between a
-            # bearish signal and a bearish day.
-            if (
-                window is not None and not bullish
-                and window.min_session_drop_pct is not None
-                and float(state.get("session_move_pct") or 0.0) > -window.min_session_drop_pct
-            ):
-                logger.info(
-                    "%s wants the session down %.2f%% before selling into it; it is %.2f%% — no entry.",
-                    window.name, window.min_session_drop_pct,
-                    float(state.get("session_move_pct") or 0.0),
-                )
-                window = None
-                action = "SESSION_NOT_WEAK_ENOUGH"
-
-            # The bullish mirror: a reversal entry may demand that the session
-            # HAS BEEN down, whatever it is doing at this moment.
-            if (
-                window is not None and bullish
-                and window.min_session_drawdown_pct is not None
-                and float(state.get("session_drawdown_pct") or 0.0)
-                > -window.min_session_drawdown_pct
-            ):
-                logger.info(
-                    "%s wants the session to have been down %.2f%% before buying the "
-                    "bounce; its worst is %.2f%% — no entry.",
-                    window.name, window.min_session_drawdown_pct,
-                    float(state.get("session_drawdown_pct") or 0.0),
-                )
-                window = None
-                action = "SESSION_NOT_FALLEN_ENOUGH"
-
-            # Sell into strength. A window may refuse to open until the
-            # underlying has risen a set distance above its price when the
-            # window started -- so the short strike lands above a local high
-            # rather than wherever price sat when a clock struck.
-            #
-            # Reads the bar series directly rather than carrying a state
-            # field, because the reference price depends on WHICH window is
-            # active and the indicator agents do not know that. fetch_qqq_bars
-            # is patched by scripts/sweep.py, so this resolves the same way in
-            # a replay as it does live.
-            if window is not None and window.min_rise_from_start is not None:
-                rise = None
-                try:
-                    bars = fetch_qqq_bars()
-                    idx = bars.index
-                    if getattr(idx, "tz", None) is not None:
-                        idx = idx.tz_convert(NY)
-                    today = datetime.now(NY).date()
-                    at_start = [
-                        float(bars["Close"].iloc[i]) for i, ts in enumerate(idx)
-                        if ts.date() == today and ts.time() >= window.start
-                    ]
-                    if at_start:
-                        rise = float(state.get("qqq_close") or at_start[-1]) - at_start[0]
-                except Exception:
-                    logger.exception("Could not measure the rise since %s opened — "
-                                     "letting the entry through.", window.name)
-                if rise is not None and rise < window.min_rise_from_start:
-                    logger.info(
-                        "%s waits for a $%.2f rise before selling; QQQ is %+.2f "
-                        "since the window opened — no entry.",
-                        window.name, window.min_rise_from_start, rise,
-                    )
-                    window = None
-                    action = "AWAITING_RISE"
-
-            # Direction gate. The tier ladder is symmetric but the measured
-            # edge is not: on bearish-stack mornings the bear put spread
-            # returned -15.52 a trade at a 25% win rate, and its sign was not
-            # even stable across a five-minute shift of the judging bar.
-            if window is not None and not window.allows_direction(bullish):
-                logger.info(
-                    "%s is long-only — refusing the bearish %s setup.", window.name, tier,
-                )
-                window = None
-                action = "DIRECTION_NOT_ALLOWED"
-
-            # A window may also size itself, because one fraction cannot serve
-            # both structures — see PlaybookWindow.entry_fraction.
-            entry_fraction = ENTRY_FRACTION
-            if window is not None and window.entry_fraction is not None:
-                entry_fraction = window.entry_fraction
-
-            # Size against realized equity rather than the static budget:
-            # after a run of losses the account is smaller and the position
-            # should be too. And stop opening anything once the day's losses
-            # reach the limit. An already-open position is still managed,
-            # since refusing to manage what you hold is not risk control.
-            #
-            # Both checks run before the price fetch below, so a halted or
-            # out-of-window cycle costs nothing.
             eq = current_equity(POSITION_BUDGET)
-            # THE QQQ 0DTE BUCKET SWITCH (2026-09-24, section 227). Off means
-            # no NEW engine entries; an open position is still managed, like
-            # the daily-loss halt below. OFF unless switched on (operator,
-            # 09-24: no bucket trades by default). Read per cycle.
+            # THE QQQ 0DTE BUCKET SWITCH (section 227). Off means no NEW engine
+            # entries; an open position is still managed. Read per cycle.
             bucket_on = os.getenv("TRADING_BUCKET_QQQ_0DTE", "false").lower() == "true"
-            # Hoisted: sizing below needs to know whether this entry follows
-            # a loss, and a second query would just ask the same question of
-            # the same rows.
             streak = 0
             if not bucket_on:
                 window = None
@@ -3452,200 +1077,78 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 window = None
                 action = "HALTED_DAILY_LOSS"
             else:
-                # A run of losses says the strategy does not fit today's tape,
-                # and that can be true well before the dollar limit is hit.
-                # window is None here whenever an earlier gate refused the
-                # setup, so the exemption has to be read defensively.
-                exempt = window is not None and window.exempt_from_streak_halt
                 streak = consecutive_losses_today()
-
-                if streak >= MAX_CONSECUTIVE_LOSSES and not exempt:
+                if streak >= MAX_CONSECUTIVE_LOSSES:
                     logger.warning(
                         "%d consecutive losing trades today — standing down for the session.", streak,
                     )
                     window = None
                     action = "HALTED_LOSS_STREAK"
-                elif streak >= MAX_CONSECUTIVE_LOSSES:
-                    # The dollar cap above still governs this window, so risk
-                    # stays bounded. Three morning stops cost $111 against a
-                    # $200 cap yet would otherwise forfeit the credit trade,
-                    # which is the larger edge by roughly three to one.
-                    logger.info(
-                        "%d consecutive losses, but %s is exempt from the streak halt — "
-                        "the daily cap still applies.", streak, window.name,
-                    )
 
             if window is not None:
-                spot = fetch_qqq_spot()
+                spot = float(tb["spot"])
                 atm_strike = round_to_strike(spot)
-                is_credit_window = window.placement == CREDIT
-                # One chain for placement and pricing; it is cached for the
-                # cycle, and every use of it falls back to the model.
                 try:
                     chain = fetch_option_chain()
                 except Exception:
                     logger.exception("Chain fetch failed — pricing from the model.")
                     chain = {}
+                strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
+                long_strike, short_strike = strikes_for(window, atm_strike, bullish)
+                # Buying a vertical fills at its natural ask; the model is the
+                # fallback when the chain cannot price it.
+                model_mid = estimate_spread_value(strategy, long_strike, short_strike, spot)
+                net_debit = fill_price(model_mid, "buy")
+                market = chain_vertical(chain, option_type_for(strategy),
+                                        long_strike, short_strike) if chain else None
+                if market is not None and market["ask"] > 0:
+                    net_debit = market["ask"]
+                quantity = broker.estimate_spread_quantity(eq.equity * ENTRY_FRACTION, net_debit)
 
-                if is_credit_window:
-                    # Bullish sells puts below spot, bearish sells calls above.
-                    strategy = PUT_CREDIT_SPREAD if bullish else CALL_CREDIT_SPREAD
-                    short_strike, long_strike = credit_strikes_for(window, atm_strike, bullish, bb_sd)
-                    delta_strike = strike_for_delta(
-                        chain, option_type_for(strategy), CREDIT_SHORT_DELTA) if chain else None
-                    if delta_strike is not None:
-                        short_strike = delta_strike
-                        long_strike = (short_strike + window.width if not bullish
-                                       else short_strike - window.width)
-                        logger.info(
-                            "Credit strikes by delta: short %.0f (~%.2f delta), long %.0f — "
-                            "sigma placement would have used %.0f.",
-                            short_strike, CREDIT_SHORT_DELTA, long_strike,
-                            credit_strikes_for(window, atm_strike, bullish, bb_sd)[0],
-                        )
-                else:
-                    strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
-                    placement = window
-                    if (
-                        TRENDING_LONG_DEPTH > 0
-                        and float(state.get("adx") or 0.0) >= TRENDING_ADX_MIN
-                    ):
-                        placement = _dc_replace(window, long_depth=TRENDING_LONG_DEPTH)
-                        logger.info(
-                            "ADX %.1f — placing the long leg $%.0f ITM instead of $%.0f, "
-                            "so the short strike leaves room above.",
-                            float(state.get("adx") or 0.0), TRENDING_LONG_DEPTH,
-                            window.long_depth if window.long_depth is not None else window.width,
-                        )
-                    long_strike, short_strike = strikes_for(placement, atm_strike, bullish)
-
-                # Price the entry with the same model that reprices it next
-                # cycle. Sizing uses that price too, or the position costs
-                # something other than the budget it was sized against.
-                if is_credit_window:
-                    # Selling: you receive the BID, and size against capital
-                    # at risk (width - credit) rather than the credit itself.
-                    # A $3-wide sold for $0.40 collects $40 a contract and can
-                    # lose $260 -- sizing on the credit understates exposure
-                    # more than sixfold.
-                    model_mid = estimate_credit_value(strategy, short_strike, long_strike, spot)
-                    net_debit = fill_price(model_mid, "sell")
-                    # What the market would actually pay for it. Selling a
-                    # vertical fills at its natural bid: the short leg's bid
-                    # against the long leg's ask.
-                    market = chain_vertical(chain, option_type_for(strategy),
-                                            short_strike, long_strike) if chain else None
-                    if market is not None:
-                        net_debit = max(market["bid"], 0.0)
-                    quantity = broker.estimate_credit_quantity(
-                        eq.equity * entry_fraction, net_debit, window.width
-                    )
-                else:
-                    # Buying: you pay the ask.
-                    model_mid = estimate_spread_value(strategy, long_strike, short_strike, spot)
-                    net_debit = fill_price(model_mid, "buy")
-                    # Buying a vertical fills at its natural ask.
-                    market = chain_vertical(chain, option_type_for(strategy),
-                                            long_strike, short_strike) if chain else None
-                    if market is not None and market["ask"] > 0:
-                        net_debit = market["ask"]
-                    quantity = broker.estimate_spread_quantity(eq.equity * entry_fraction, net_debit)
-
-                # Size to what the BROKER will actually be given, once orders
-                # are live.
-                #
-                # tradier_orders.submit_vertical clamps any order to
-                # TRADING_MAX_ORDER_CONTRACTS -- deliberately, so a first live
-                # session tests fills rather than the strategy. But it clamps
-                # only the ORDER. Without this the engine sizes to 5 contracts
-                # on a $10k book, sends 1, and then tracks a 5-contract
-                # position it does not own: its recorded P&L is five times the
-                # real one, and the daily loss cap -- the rule that stops a bad
-                # day -- is counted against size that was never filled.
-                #
-                # Entry and exit are both clamped, so the BROKER stays flat
-                # correctly either way. What breaks is the accounting, which is
-                # precisely what a first live session is meant to verify.
-                #
-                # Only while LIVE_ORDERS is on: with orders off there is no
-                # broker to disagree with, and clamping here would silently
-                # change every paper result and every sweep.
+                # Size to what the broker will actually be given once orders are
+                # live, so the position, its P&L and the daily cap describe
+                # what was sent.
                 if tradier_orders.LIVE_ORDERS and quantity > tradier_orders.MAX_CONTRACTS:
-                    logger.info(
-                        "Sizing %d contracts down to the %d live-order cap so the "
-                        "position, its P&L and the daily loss cap all describe what "
-                        "the broker was actually asked for.",
-                        quantity, tradier_orders.MAX_CONTRACTS,
-                    )
+                    logger.info("Sizing %d contracts down to the %d live-order cap.",
+                                quantity, tradier_orders.MAX_CONTRACTS)
                     quantity = tradier_orders.MAX_CONTRACTS
 
-                # Half size after a loss. The cooldown decides WHETHER to
-                # take the next trade; this decides how big it is, and a
-                # trade taken into a tape that has just stopped one out is
-                # the wrong place to be larger than usual.
+                # Half size after a loss.
                 if streak > 0 and quantity > 1:
-                    logger.info(
-                        "Re-entry after %d loss(es) today — halving size from %d to %d contracts.",
-                        streak, quantity, quantity // 2,
-                    )
+                    logger.info("Re-entry after %d loss(es) today — halving size from %d to %d contracts.",
+                                streak, quantity, quantity // 2)
                     quantity = quantity // 2
 
-                # Risk allocation. The entry fraction has already said how
-                # much capital to deploy; this says how much of the day's
-                # loss budget that trade is allowed to consume, which is the
-                # number the daily cap is actually written in.
-                risk_share = (
-                    REENTRY_RISK_SHARE if streak > 0
-                    else risk_share_for(window.name, DEFAULT_RISK_SHARE)
-                )
+                # Risk allocation: how much of the day's loss budget this trade
+                # may consume at its stop.
+                risk_share = REENTRY_RISK_SHARE if streak > 0 else DEFAULT_RISK_SHARE
                 stop_pct_for_entry = thresholds_for(
-                    window.name, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, RISK_OFF_STOP_LOSS_PCT)
-                )[1]
-                # net_debit is the premium paid on a debit spread and the
-                # credit received on a credit one, and the stop is a
-                # percentage of exactly that number in both cases -- so one
-                # expression prices the intended loss for either structure.
+                    window.name, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, STOP_LOSS_PCT))[1]
                 risk_per_contract = abs(stop_pct_for_entry) / 100.0 * net_debit * 100
                 risk_budget = risk_share * eq.daily_loss_limit
                 if risk_per_contract > 0:
                     max_by_risk = int(risk_budget // risk_per_contract)
                     if max_by_risk < quantity:
                         logger.info(
-                            "Risk allocation: %s may spend %.0f%% of the $%.0f daily budget "
-                            "($%.0f); one contract stops at $%.0f — sizing %d contracts, not %d.",
-                            window.name, risk_share * 100, eq.daily_loss_limit,
-                            risk_budget, risk_per_contract, max_by_risk, quantity,
-                        )
+                            "Risk allocation: %.0f%% of the $%.0f daily budget ($%.0f); one contract "
+                            "stops at $%.0f — sizing %d contracts, not %d.",
+                            risk_share * 100, eq.daily_loss_limit, risk_budget,
+                            risk_per_contract, max_by_risk, quantity)
                         quantity = max_by_risk
 
-                # The tail cap. Structural loss is the premium paid on a debit
-                # spread and width-minus-credit on a credit one -- what the
-                # position loses when the stop does not get a chance to work.
-                structural_per_contract = (
-                    (window.width - net_debit) * 100 if is_credit_window else net_debit * 100
-                )
+                # The tail cap: the premium paid is what a debit spread loses
+                # when the stop does not get a chance to work.
+                structural_per_contract = net_debit * 100
                 if quantity > 0 and structural_per_contract > 0:
                     max_by_tail = int((MAX_POSITION_RISK_PCT * eq.equity) // structural_per_contract)
                     if max_by_tail < quantity:
                         logger.info(
-                            "Tail cap: %d contracts would put $%.0f at structural risk, above "
-                            "%.0f%% of $%.0f equity — sizing %d.",
-                            quantity, quantity * structural_per_contract,
-                            MAX_POSITION_RISK_PCT * 100, eq.equity, max_by_tail,
-                        )
+                            "Tail cap: %d contracts would put $%.0f at risk, above %.0f%% of $%.0f "
+                            "equity — sizing %d.", quantity, quantity * structural_per_contract,
+                            MAX_POSITION_RISK_PCT * 100, eq.equity, max_by_tail)
                         quantity = max_by_tail
 
-                # SIZE AGAINST THE MONEY IN THE ACCOUNT (section 239). The budget
-                # says what the engine MAY deploy; buying power says what it CAN.
-                # On 2026-09-25 the account held $131.68 against a $2,500 budget,
-                # so every budget-sized entry was refused before sending.
                 # SECTION 249: AT LEAST ONE CONTRACT, when the budget covers it.
-                # Every cap above is a FRACTION of the budget (entry 20%, tail
-                # 15%, risk share of a 6% daily limit), so on a small budget all
-                # of them round one contract down to zero -- 2026-10-01, $450:
-                # 45 CLEAN/bull setups, none sized above zero. With the switch on
-                # a zero becomes 1 when one contract's structural risk fits the
-                # budget; buying power still has the last word below.
                 if (quantity <= 0 and MIN_ONE_CONTRACT and structural_per_contract > 0
                         and structural_per_contract <= POSITION_BUDGET):
                     logger.info(
@@ -3653,118 +1156,45 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         "risk) fits the $%.0f budget — sizing 1 (TRADING_MIN_ONE_CONTRACT).",
                         structural_per_contract, POSITION_BUDGET)
                     quantity = 1
+                # SIZE AGAINST THE MONEY IN THE ACCOUNT (section 239).
                 quantity = cap_to_buying_power(quantity, structural_per_contract)
                 if quantity <= 0:
-                    # Section 249: a zero size used to end the cycle in silence, so a
-                    # valid setup left no trace but "HOLD". Say which cap did it.
                     logger.info(
-                        "Sizing: %s %s sized to 0 contracts at $%.2f — entry %.0f%% of $%.0f "
-                        "equity = $%.0f; risk share $%.2f of the $%.2f daily limit vs $%.0f "
-                        "at the stop per contract; tail cap %.0f%% = $%.0f vs $%.0f per "
-                        "contract. No entry.%s",
-                        window.name, tier, net_debit, entry_fraction * 100, eq.equity,
-                        eq.equity * entry_fraction, risk_budget, eq.daily_loss_limit,
-                        risk_per_contract, MAX_POSITION_RISK_PCT * 100,
-                        MAX_POSITION_RISK_PCT * eq.equity, structural_per_contract,
+                        "Sizing: %s sized to 0 contracts at $%.2f — entry %.0f%% of $%.0f equity; "
+                        "risk $%.2f of the $%.2f daily limit vs $%.0f at the stop; tail cap $%.0f "
+                        "vs $%.0f per contract. No entry.%s",
+                        window.name, net_debit, ENTRY_FRACTION * 100, eq.equity, risk_budget,
+                        eq.daily_loss_limit, risk_per_contract, MAX_POSITION_RISK_PCT * eq.equity,
+                        structural_per_contract,
                         "" if MIN_ONE_CONTRACT else
                         " (TRADING_MIN_ONE_CONTRACT would size 1 if one fits the budget.)")
 
-                if is_credit_window and 0 < quantity and net_debit < MIN_CREDIT:
-                    logger.info(
-                        "%s priced at %.3f credit, below the %.2f floor — no entry. "
-                        "A spread sold for nothing carries the full width of risk.",
-                        window.name, net_debit, MIN_CREDIT,
-                    )
-                    quantity = 0
-
                 if quantity > 0:
-                    # What the market says this spread is worth, next to what
-                    # the model just decided it is worth. Logged at the moment
-                    # of entry because that is where the two can be compared
-                    # against a price that is about to be committed to.
-                    #
-                    # A credit spread's model value is its cost to CLOSE, so
-                    # the short strike is the long leg of that vertical --
-                    # the same argument order estimate_credit_value uses.
                     try:
-                        buy_leg, sell_leg = (
-                            (short_strike, long_strike) if is_credit_window
-                            else (long_strike, short_strike)
-                        )
-                        log_price_divergence(
-                            option_type_for(strategy), buy_leg, sell_leg, model_mid,
-                            f"entry {window.name}",
-                        )
+                        log_price_divergence(option_type_for(strategy), long_strike, short_strike,
+                                             model_mid, f"entry {window.name}")
                     except Exception:
-                        # Never let an observational log stop an entry.
                         logger.exception("Chain divergence log failed — entering anyway.")
-
                     playbook = f"{window.name}:{tier}"
+                    tp_note = (f", take-profit {PB.ENGINE_TAKE_PROFIT_PCT:+.0f}%"
+                               if PB.ENGINE_TAKE_PROFIT_PCT is not None else "")
                     logger.info(
-                        "Entering %s via %s: %s %d contracts, long %.1f / short %.1f at $%.2f "
-                        "(equity $%.2f, target +%.0f%%)",
-                        "BULL" if bullish else "BEAR", playbook, window.placement,
-                        quantity, long_strike, short_strike, net_debit,
-                        eq.equity, window.take_profit_pct,
-                    )
-                    # Time-sliced entry. At the default ENTRY_SLICES=1 this is
-                    # a no-op: full_quantity == quantity and no plan is
-                    # recorded, so nothing downstream sees a difference.
-                    #
-                    # Integer division floors, so a target that does not divide
-                    # evenly puts the remainder in the FIRST tranche rather
-                    # than stranding it -- 5 contracts over 3 slices fills
-                    # 3/1/1, not 1/1/1 with two contracts never bought.
-                    full_quantity = quantity
-                    tranche_qty = 0
-                    slices_remaining = 0
-                    # PER WINDOW, falling back to the global. The two books
-                    # want opposite settings -- see PlaybookWindow.entry_slices
-                    # -- so one number cannot serve both while both run.
-                    _slices = ENTRY_SLICES
-                    _slice_min = ENTRY_SLICE_MINUTES
-                    if window is not None:
-                        if getattr(window, "entry_slices", None):
-                            _slices = max(int(window.entry_slices), 1)
-                        if getattr(window, "entry_slice_minutes", None):
-                            _slice_min = float(window.entry_slice_minutes)
-
-                    if _slices > 1 and quantity >= _slices:
-                        tranche_qty = quantity // _slices
-                        slices_remaining = _slices - 1
-                        quantity = full_quantity - tranche_qty * slices_remaining
-                        logger.info(
-                            "Sliced entry: %d contracts over %d tranches %.0f min apart — "
-                            "opening %d now, %d x %d to follow.",
-                            full_quantity, _slices, _slice_min,
-                            quantity, slices_remaining, tranche_qty,
-                        )
-                    elif _slices > 1:
-                        # Cannot slice a position smaller than the slice count.
-                        # Said out loud rather than silently opening in full,
-                        # because "slicing is on" and "slicing is happening"
-                        # are different states and only one of them is visible.
-                        logger.info(
-                            "Sliced entry configured at %d slices but the position is %d "
-                            "contract(s) — opening in one order.", _slices, quantity,
-                        )
-
-                    if is_credit_window:
-                        broker.place_credit_spread(strategy, "QQQ", quantity,
-                                                   short_strike, long_strike, net_debit, playbook)
-                        action = "SELL_PUT_CREDIT" if bullish else "SELL_CALL_CREDIT"
-                    elif bullish:
-                        broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike, net_debit, playbook)
+                        "Entering %s via %s: %d contracts, long %.1f / short %.1f at $%.2f "
+                        "(equity $%.2f, exit at the 20-SMA, stop %+.0f%%%s)",
+                        "BULL" if bullish else "BEAR", playbook, quantity, long_strike,
+                        short_strike, net_debit, eq.equity, stop_pct_for_entry, tp_note)
+                    if bullish:
+                        broker.place_bull_call_spread("QQQ", quantity, long_strike, short_strike,
+                                                      net_debit, playbook)
                         action = "BUY_CALL_SPREAD"
                     else:
-                        broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike, net_debit, playbook)
+                        broker.place_bear_put_spread("QQQ", quantity, long_strike, short_strike,
+                                                     net_debit, playbook)
                         action = "BUY_PUT_SPREAD"
 
     return {
-        "entry_tranche_qty": tranche_qty,
-        "entry_slices_remaining": slices_remaining,
         "execution_status": action,
         "exit_reason": exit_reason,
         "playbook": playbook,
-        "buy_more_count": count + 1 if action == "BUY_MORE" else count,
+        "buy_more_count": state.get("buy_more_count", 0),
     }

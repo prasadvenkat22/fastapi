@@ -767,10 +767,10 @@ LATER_TARGET_ON_INTRINSIC = os.getenv(
 # before a flatten cannot be caught by any stall with a longer window. That is
 # an argument about the FLATTEN boundary, not about the stall, and it should
 # not be fixed by making the stall fire on rests.
-STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_STALL_MINUTES",
-                                os.getenv("TRADING_STALL_MINUTES", "0")))
-STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT",
-                                     os.getenv("TRADING_STALL_GIVEBACK_PCT", "0")))
+# No fallback to the engine's TRADING_STALL_* any more: that stall was retired
+# with the old QQQ windows (section 261).
+STALL_MINUTES = float(os.getenv("TRADING_ORPHAN_STALL_MINUTES", "0") or 0)
+STALL_GIVEBACK_PCT = float(os.getenv("TRADING_ORPHAN_STALL_GIVEBACK_PCT", "0") or 0)
 
 # WHERE THE SAME-DAY STALL STARTS WATCHING. Section 229.
 #

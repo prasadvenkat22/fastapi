@@ -1091,11 +1091,16 @@ def main() -> None:
             week_ctx[sym] = structure_gates.week_context(sym)
             c = week_ctx[sym]
             if c:
-                logger.info("%-5s week %.2f-%.2f spot %.2f = %s of range | hourly %s 20-SMA | 5-min %s 20-SMA",
+                _b = lambda lo, up: ("?" if lo is None or up is None else f"{lo:.2f}/{up:.2f}")
+                logger.info("%-5s week %.2f-%.2f spot %.2f = %s of range | hourly %s 20-SMA | 5-min %s 20-SMA"
+                            " | bands 5-min %s, hourly %s (close %s)",
                             sym, c["week_low"], c["week_high"], c["spot"],
                             "?" if c["weekpos"] is None else f"{c['weekpos']:.0%}",
                             {True: "below", False: "above", None: "?"}[c["below_1h"]],
-                            {True: "below", False: "above", None: "?"}[c["below_5m"]])
+                            {True: "below", False: "above", None: "?"}[c["below_5m"]],
+                            _b(c.get("bb5_lower"), c.get("bb5_upper")),
+                            _b(c.get("bb1h_lower"), c.get("bb1h_upper")),
+                            "?" if c.get("hourly_close") is None else f"{c['hourly_close']:.2f}")
         return week_ctx[sym]
 
     # Best surviving candidate per symbol per side.
@@ -1181,6 +1186,15 @@ def main() -> None:
                     logger.info("%s %s %.0f/%.0f refused: %s.", r["sym"], side.upper(),
                                 float(r["lo"]), float(r["hi"]), _why)
                     rejects["pullback trigger not met"] += 1
+                    continue
+            # Section 261: the Bollinger band picks the side (calls at/below the
+            # lower band, puts at/above the upper, nothing inside), per bucket.
+            if structure_gates.bollinger_on(wtype or "dte0"):
+                _why = structure_gates.bollinger_refusal(bullish, _ctx(r["sym"]), _tf)
+                if _why:
+                    logger.info("%s %s %.0f/%.0f refused: %s.", r["sym"], side.upper(),
+                                float(r["lo"]), float(r["hi"]), _why)
+                    rejects["bollinger direction gate"] += 1
                     continue
             if MACRO_DELTA_GATE and abs(mdelta) >= MACRO_DELTA_STEPS:
                 # A bullish structure dies on a bearish turn and vice versa.

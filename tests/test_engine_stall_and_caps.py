@@ -9,38 +9,8 @@ from types import SimpleNamespace
 from trading_engine import nodes
 
 
-def _pos(minutes_since_peak):
-    return SimpleNamespace(peak_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_since_peak))
 
 
-def _stall(monkeypatch, arm=0.0, minutes=5.0, giveback=3.3):
-    monkeypatch.setattr(nodes, "STALL_ARM_PCT", arm)
-    monkeypatch.setattr(nodes, "STALL_MINUTES", minutes)
-    monkeypatch.setattr(nodes, "STALL_GIVEBACK_PCT", giveback)
-
-
-def test_stall_fires_after_quiet_minutes_and_giveback(monkeypatch):
-    _stall(monkeypatch)
-    assert nodes._stalled_peak(_pos(6), 28.0, 24.0) is not None
-
-
-def test_stall_waits_for_its_arm_level(monkeypatch):
-    _stall(monkeypatch, arm=30.0)
-    assert nodes._stalled_peak(_pos(20), 28.0, 20.0) is None
-    assert nodes._stalled_peak(_pos(20), 31.0, 20.0) is not None
-
-
-def test_stall_holds_inside_the_window_or_the_giveback(monkeypatch):
-    _stall(monkeypatch)
-    assert nodes._stalled_peak(_pos(2), 28.0, 20.0) is None      # too soon
-    assert nodes._stalled_peak(_pos(10), 28.0, 26.0) is None     # within 3.3 pts
-
-
-def test_stall_off_when_either_knob_is_zero(monkeypatch):
-    _stall(monkeypatch, minutes=0)
-    assert nodes._stalled_peak(_pos(60), 40.0, 0.0) is None
-    _stall(monkeypatch, giveback=0)
-    assert nodes._stalled_peak(_pos(60), 40.0, 0.0) is None
 
 
 def _dte0():
@@ -74,32 +44,7 @@ def test_max_entries_reads_the_bucket_setting(monkeypatch):
     assert d._max_entries("w7") == 0
 
 
-def test_band_only_overrides_window_tier_lists(monkeypatch):
-    from trading_engine import playbook as PB
-    w = PB.window_by_playbook("MORNING_DRIFT")
-    monkeypatch.setattr(PB, "BAND_ONLY", False)
-    assert w.allows_tier("CLEAN") and not w.allows_tier("RELAXED")
-    monkeypatch.setattr(PB, "BAND_ONLY", True)
-    assert not w.allows_tier("CLEAN") and not w.allows_tier("ZONE")
-    assert all(w.allows_tier(t) for t in ("STRICT", "RELAXED", "FADE"))
 
 
-def test_tiers_setting_validates():
-    import pytest
-    from trading_engine import settings_overrides as so
-    assert so.validate("TRADING_MORNING_PUT_TIERS", " strict, relaxed,strict ") == "STRICT,RELAXED"
-    assert so.validate("TRADING_MORNING_TIERS", "all") == "ALL"
-    with pytest.raises(ValueError):
-        so.validate("TRADING_MORNING_TIERS", "BANDS")
 
 
-def test_engine_stop_overrides_debit_windows_only(monkeypatch):
-    from trading_engine import playbook as PB
-    d = (30.0, -20.0, -13.0)
-    monkeypatch.setattr(PB, "ENGINE_STOP_PCT", None)
-    assert PB.thresholds_for("MORNING_PUT:ZONE", d)[1] == -20.0
-    monkeypatch.setattr(PB, "ENGINE_STOP_PCT", -12.0)
-    assert PB.thresholds_for("MORNING_PUT:ZONE", d)[1] == -12.0
-    assert PB.thresholds_for("ITM_GRINDER:CLEAN", d)[1] == -12.0
-    credit = PB.thresholds_for("AFTERNOON_CREDIT:CLEAN", d)[1]
-    assert credit != -12.0                      # credit windows keep their own

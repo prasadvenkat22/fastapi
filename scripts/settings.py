@@ -50,7 +50,7 @@ def cmd_list(group: str | None) -> None:
 def cmd_get(key: str) -> None:
     for r in so.snapshot()["settings"]:
         if r["key"] == key:
-            for k in ("label", "group", "help", "unit", "min", "max", "default",
+            for k in ("label", "group", "book", "order", "help", "unit", "min", "max", "default",
                       "env_value", "override", "effective", "source"):
                 print(f"{k:>10}: {r[k]}")
             return

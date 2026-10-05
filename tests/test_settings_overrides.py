@@ -118,40 +118,29 @@ def test_bucket_budgets_sit_in_the_bucket_group():
     assert 'budget = (_weekly_budget(wtype) if wtype else MAX_BUDGET)' in src
 
 
-ENGINE_STALL_KEYS = ("TRADING_STALL_MINUTES", "TRADING_STALL_GIVEBACK_PCT", "TRADING_STALL_ON_CREDIT",
-                     "TRADING_CREDIT_STALL_ARM", "TRADING_CREDIT_STALL_MINUTES",
-                     "TRADING_CREDIT_STALL_GIVEBACK_PCT")
-
-
-def test_engine_stall_knobs_are_tunable_in_their_own_group():
-    """Section 228: the QQQ bucket's trades exit on nodes.py's stall, not the orphan one."""
-    for k in ENGINE_STALL_KEYS:
+def test_engine_exit_knobs_are_tunable_in_their_own_group():
+    """Section 261: the QQQ engine card's stop, confirmation and take profit."""
+    for k in ("TRADING_ENGINE_STOP_PCT", "TRADING_STOP_CONFIRM_MINUTES", "TRADING_ENGINE_TAKE_PROFIT_PCT"):
         assert so.BY_KEY[k].group == so.G_ENGINE
-    assert so.validate("TRADING_STALL_GIVEBACK_PCT", "3.3") == "3.3"
-    assert so.validate("TRADING_STALL_ON_CREDIT", "on") == "true"
-    assert so.validate("TRADING_CREDIT_STALL_MINUTES", "") == ""   # blank = follow the ride
-    for key, bad in [("TRADING_STALL_MINUTES", ""), ("TRADING_STALL_MINUTES", "-1"),
-                     ("TRADING_STALL_GIVEBACK_PCT", "500")]:
+    assert so.validate("TRADING_ENGINE_STOP_PCT", "-15") == "-15"
+    assert so.validate("TRADING_ENGINE_TAKE_PROFIT_PCT", "") == ""      # blank = 20-SMA only
+    for key, bad in [("TRADING_ENGINE_STOP_PCT", ""), ("TRADING_ENGINE_STOP_PCT", "5"),
+                     ("TRADING_STOP_CONFIRM_MINUTES", "-1")]:
         with pytest.raises(ValueError):
             so.validate(key, bad)
 
 
-def test_fresh_process_engine_stall_follows_the_override(tmp_path):
+def test_fresh_process_engine_stop_follows_the_override(tmp_path):
     ov = tmp_path / "ov.env"
-    ov.write_text("TRADING_STALL_MINUTES=7\nTRADING_STALL_GIVEBACK_PCT=4.5\n"
-                  "TRADING_STALL_ON_CREDIT=true\nTRADING_CREDIT_STALL_ARM=false\n"
-                  "TRADING_CREDIT_STALL_MINUTES=\n")
-    env = {**os.environ, "TRADING_OVERRIDES_PATH": str(ov), "TRADING_STALL_MINUTES": "5",
-           "TRADING_CREDIT_STALL_GIVEBACK_PCT": "9", "PYTHONPATH": REPO}
+    ov.write_text("TRADING_ENGINE_STOP_PCT=-12\nTRADING_ENGINE_TAKE_PROFIT_PCT=25\n")
+    env = {**os.environ, "TRADING_OVERRIDES_PATH": str(ov), "TRADING_ENGINE_STOP_PCT": "-30",
+           "PYTHONPATH": REPO}
     out = subprocess.run(
         [sys.executable, "-c",
-         "from trading_engine import nodes as n;"
-         "print(n.STALL_MINUTES, n.STALL_GIVEBACK_PCT, n.STALL_ON_CREDIT,"
-         " n.CREDIT_STALL_REQUIRES_ARM, n.CREDIT_STALL_MINUTES, n.CREDIT_STALL_GIVEBACK_PCT)"],
+         "from trading_engine import playbook as p; print(p.ENGINE_STOP_PCT, p.ENGINE_TAKE_PROFIT_PCT)"],
         cwd=REPO, env=env, capture_output=True, text=True, timeout=180)
     assert out.returncode == 0, out.stderr
-    # blank credit window falls back to the ride's 7; the env's credit give-back still applies
-    assert out.stdout.strip().splitlines()[-1] == "7.0 4.5 True False 7.0 9.0"
+    assert out.stdout.strip().splitlines()[-1] == "-12.0 25.0"
 
 
 def test_a_write_keeps_keys_this_process_does_not_know(paths, monkeypatch):

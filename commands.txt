@@ -48,16 +48,21 @@ tset set TRADING_POSITION_BUDGET=450 TRADING_DTE0_MAX_BUDGET=450 TRADING_W3_MAX_
 # Entries per day, per bucket (0 = no cap)                              -- section 250
 tset set TRADING_MAX_ENTRIES_QQQ_0DTE=2 TRADING_MAX_ENTRIES_STOCK_0DTE=2 TRADING_MAX_ENTRIES_STOCK_W3=1 TRADING_MAX_ENTRIES_STOCK_W7=1
 
-# --- QQQ engine: stop, take profit, entry rules                         -- sections 250, 256 ---
-tset set TRADING_ENGINE_STOP_PCT=-15                  # every engine DEBIT spread (blank = each window's own)
-tset set TRADING_STOP_CONFIRM_MINUTES=1               # engine stop must hold this long (0 = first reading)
-tset set TRADING_ENGINE_TAKE_PROFIT_PCT=25            # book every engine debit spread outright at +25%
-tset unset TRADING_ENGINE_STOP_PCT                    # back to the windows' own stops
-tset set TRADING_BAND_ONLY=true                       # only Bollinger-pierce entries (STRICT/RELAXED/FADE)
-tset set TRADING_CLEAN_ENTRIES=false TRADING_ZONE_ENTRIES=false TRADING_REJECT_ENTRIES=false
-tset set TRADING_MORNING_TIERS=CLEAN TRADING_MORNING_PUT_TIERS=CLEAN,ZONE   # comma list or ALL
-tset set TRADING_STALL_ARM_PCT=10 TRADING_STALL_ALL_WINDOWS=true            # engine stall
-tset set TRADING_MORNING_PUT_CLOSE_BY=11:30
+# --- The settings page: four identical cards (section 261) ---
+# Each book: On/off, Budget, Entries per day, Bollinger band, Stop loss,
+# Stop confirmation, Take profit. Plus an "All books" card and Advanced.
+# QQQ engine: its ONLY entry is the 1-minute Bollinger band touch.
+tset set TRADING_BAND_TOUCH_PERIOD=20 TRADING_BAND_TOUCH_SD=2 TRADING_BAND_TOUCH_START=09:45 TRADING_BAND_TOUCH_END=15:00
+tset set TRADING_ENGINE_STOP_PCT=-20 TRADING_STOP_CONFIRM_MINUTES=1 TRADING_ENGINE_TAKE_PROFIT_PCT=25
+# Stock books: Bollinger band picks the direction (lower -> calls only,
+# upper -> puts only, inside -> no trade). 0DTE 5-min bars, 3/7-day hourly.
+tset set TRADING_BOLLINGER_GATE_DTE0=true TRADING_BOLLINGER_GATE_W3=true TRADING_BOLLINGER_GATE_W7=true
+# All books:
+tset set TRADING_MAX_DAILY_LOSS_PCT=0.06            # QQQ engine stops entering after losing 6% of the day's starting equity
+tset set TRADING_ORPHAN_FORCE_CLOSE=15:45           # also the engine's force close
+# Retired 10-05 with the old QQQ rules: TRADING_BAND_TOUCH, TRADING_BAND_ONLY,
+# TRADING_*_ENTRIES, TRADING_MORNING_*TIERS, TRADING_STALL_*, TRADING_CREDIT_STALL_*,
+# TRADING_MORNING_PUT_CLOSE_BY. tset refuses them; delete stale lines by hand.
 
 # --- Orders at the mid                                                  -- section 253 ---
 # Entries (QQQ engine and stock books) rest at the mid only and are skipped if

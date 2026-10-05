@@ -6,27 +6,14 @@ from langchain_core.messages import BaseMessage
 
 class TradingState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
-    qqq_close: float           # QQQ close on the indicator bar — recorded every cycle
-    macd_signal: str          # 'BULLISH', 'BEARISH', or 'NEUTRAL'
-    sma_trend: str
-    ema9_side: str             # 'ABOVE_EMA9'/'BELOW_EMA9' — trailing-exit reference
-    ema50_reject: bool         # high pierced the 50 EMA, close fell back below it
-    ema_cross: str             # 'EMA9_ABOVE_SMA20'/'EMA9_BELOW_SMA20' — velocity
-    vwap_side: str             # 'ABOVE_VWAP'/'BELOW_VWAP'/'UNKNOWN'
-    rsi_band: str              # 'BULL_BAND'/'BEAR_BAND'/'NONE' — trend strength             # 'ABOVE_EMA9' or 'BELOW_EMA9' — trailing-exit reference             # 'ABOVE_SMA' or 'BELOW_SMA'
+    # Section 261: the 5-minute indicator agents (MACD, SMA/VWAP/EMA/ADX, zones,
+    # Bollinger, RSI) were retired with the old entry tiers. The engine's only
+    # signal is the 1-minute band touch, read inside execution_risk_agent.
     oil_level: float           # WTI front-month (CL=F) — watched, not gating
     oil_change_pct: float      # crude move since the 09:30 open
     tnx_level: float           # 10-year yield, percent
     tnx_change_bps: float      # yield move since the open, basis points
     yields_direction: str      # 'RISING'/'FALLING'/'FLAT' — both directions recorded
-    shadow_condor: dict        # Iron Condor marked but NOT traded — forward evidence only
-    adx: float                 # Wilder ADX(14) — trend STRENGTH, not direction
-    adx_zone: str              # 'TRENDING' (>=22), 'CHOPPY' (<22), or 'UNKNOWN'
-    bollinger_zone: str
-    bollinger_sd: float        # 20-period stdev — sizes the credit-spread strike distance
-    bollinger_cross: str       # 'CROSS_UP', 'CROSS_DOWN', or 'NONE' — 20-period midline cross        # 'UPPER_BAND', 'LOWER_BAND', or 'NORMAL'
-    bollinger_pierce: str      # 'UP_PIERCE'/'DOWN_PIERCE'/'NONE' — the bar that crossed OUT of the band, not one riding it
-    rsi_zone: str              # 'OVERBOUGHT' (>=70), 'OVERSOLD' (<=30), or 'NEUTRAL'
     # Self-computed Nasdaq-100 breadth. Recorded because it GATES -- a level
     # check and a collapse check both read it -- and until now it left no
     # number behind: the value drove the decision and survived only inside the
@@ -43,60 +30,6 @@ class TradingState(TypedDict):
     breadth_net_ratio: float   # addq / basket size
     breadth_drawdown: float    # net ratio, down from the recent window's peak
     breadth_collapsing: bool   # drawdown past the collapse threshold
-    # Where the session stands, and where it has BEEN.
-    #
-    # DECLARING THESE IS NOT COSMETIC. LangGraph carries only the keys this
-    # TypedDict names: anything else a node returns is dropped before the next
-    # node sees it. sma_agent has been returning session_move_pct for a long
-    # time and it was never declared here, so every live read of
-    # state["session_move_pct"] -- DAY_TREND_MAX_DROP_PCT and a window's
-    # min_session_drop_pct -- has been resolving to None.
-    #
-    # It never showed, because both of those gates are off by default. It
-    # would have shown the day one was switched on, as a gate that worked
-    # perfectly in every sweep and never once fired in production:
-    # scripts/sweep.py builds its state as a plain dict via _session_state,
-    # which has no schema and drops nothing. That divergence is the dangerous
-    # part -- a sweep and a live cycle disagreeing about what the engine can
-    # even see.
-    #
-    # Found on 2026-08-25 when macro_block_reason and session_drawdown_pct
-    # were both added, both reached the log line, and neither reached the
-    # database.
-    session_move_pct: float    # move from the 09:30 open, percent
-    session_drawdown_pct: float  # the session's WORST point vs the open, percent
-    # FIXED LEVELS, as opposed to every moving statistic above.
-    #
-    # Declared here for the reason the block above spells out: LangGraph
-    # carries only the keys this TypedDict names, so an undeclared reading is
-    # computed each cycle, logged by sma_agent, and then silently dropped
-    # before any gate could read it. Recorded now, gating nothing -- see
-    # zones.py and nodes.py ZONE_*.
-    #
-    # Both the LABEL and the NUMBER, the same discipline weekly_signals.py
-    # uses: the label is what a gate would read, the number is what lets a
-    # different threshold be tested later without re-collecting the data.
-    zone: str                  # 'AT_DAY_HIGH'/'AT_DAY_LOW'/'AT_PRIOR_CLOSE'/'AT_PRIOR_HIGH'/'AT_PRIOR_LOW'/'MID_RANGE'
-    zone_extension: str        # 'ABOVE_PRIOR_RANGE'/'BELOW_PRIOR_RANGE'/'INSIDE_PRIOR_RANGE'
-    day_high: float            # this session's regular-hours high so far
-    day_low: float             # this session's regular-hours low so far
-    prior_high: float
-    prior_low: float
-    prior_close: float         # the level "prior day change" is measured from
-    day_range_pos_pct: float   # 0 at the session low, 100 at the session high
-    gap_pct: float             # today's open against the prior close
-    prior_change_pct: float    # price against the prior close, percent
-    dist_day_high_pct: float   # signed; negative means price is BELOW the level
-    dist_day_low_pct: float
-    dist_prior_high_pct: float
-    dist_prior_low_pct: float
-    dist_prior_close_pct: float
-    # WHEN the extreme was set, and how far price has travelled from it. The
-    # ZONE tier reads these four and nothing else reads them yet.
-    minutes_since_day_low: float
-    minutes_since_day_high: float
-    bounce_off_low_pct: float   # always >= 0; the size of the lift off the low
-    fade_off_high_pct: float    # always >= 0; the size of the fall from the high
     market_sentiment: str      # 'GOOD' or 'BAD'
     macro_block_reason: str    # which AND-term refused: breadth/vix_level/vix_spike/yields/llm
     macro_halt: bool           # VIX at/above its ceiling — no entries in either direction
@@ -106,10 +39,3 @@ class TradingState(TypedDict):
     playbook: str              # Named time-window strategy that opened the position ('' if none opened)
     exit_reason: str           # Why a position closed: 'FORCE_CLOSE', 'TAKE_PROFIT', 'STOP_LOSS', 'RISK_OFF' ('' if nothing closed)
     buy_more_count: int        # Tracking safety scale-ins
-    # Time-sliced entry plan for the position just opened. 0/0 means it
-    # was opened in one order, which is the default. Declared here for
-    # the same reason session_move_pct had to be: LangGraph drops keys
-    # this TypedDict does not name, so an undeclared field reaches the
-    # log line and never reaches the database.
-    entry_tranche_qty: int
-    entry_slices_remaining: int

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import statistics
 import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
@@ -62,10 +63,25 @@ def macro_bad_puts_only() -> bool:
     return _on("TRADING_MACRO_BAD_PUTS_ONLY")
 
 
+def bollinger_on(bucket: str) -> bool:
+    """TRADING_BOLLINGER_GATE_{DTE0|W3|W7} (section 261). bucket: 'dte0', 'w3' or 'w7'."""
+    return _on(f"TRADING_BOLLINGER_GATE_{(bucket or 'dte0').upper()}")
+
+
 # ---- pure: the context from bars ------------------------------------------
 
 def _sma(values: list, n: int = 20) -> Optional[float]:
     return sum(values[-n:]) / n if len(values) >= n else None
+
+
+def _bands(values: list, n: int = 20, k: float = 2.0) -> "tuple[float, float] | tuple[None, None]":
+    """(lower, upper): n-period mean +/- k sample SDs (statistics.stdev, the
+    same construction as the engine's pandas rolling std)."""
+    if len(values) < n:
+        return None, None
+    last = values[-n:]
+    mid, sd = sum(last) / n, statistics.stdev(last)
+    return mid - k * sd, mid + k * sd
 
 
 def context_from_bars(bars15: list, bars5: list, sessions: int = 5) -> Optional[dict]:
@@ -88,8 +104,13 @@ def context_from_bars(bars15: list, bars5: list, sessions: int = 5) -> Optional[
         hourly[bucket] = b["close"]
     hcloses = list(hourly.values())
     sma1h = _sma(hcloses)
-    sma5 = _sma([b["close"] for b in bars5])
+    closes5 = [b["close"] for b in bars5]
+    sma5 = _sma(closes5)
+    bb5_lower, bb5_upper = _bands(closes5)
+    bb1h_lower, bb1h_upper = _bands(hcloses)
     return {
+        "bb5_lower": bb5_lower, "bb5_upper": bb5_upper,
+        "bb1h_lower": bb1h_lower, "bb1h_upper": bb1h_upper,
         "spot": spot, "week_high": hi, "week_low": lo, "sessions": len(days),
         "weekpos": (spot - lo) / (hi - lo) if hi > lo else None,
         "hourly_close": hcloses[-1] if hcloses else None, "sma1h": sma1h,
@@ -123,6 +144,28 @@ def pullback_refusal(bullish: bool, ctx: Optional[dict], timeframe: str) -> Opti
     if (not bullish) and below:
         return f"bearish but {label} is BELOW the midline -- waiting for a bounce"
     return None
+
+
+def bollinger_refusal(bullish: bool, ctx: Optional[dict], timeframe: str) -> Optional[str]:
+    """Section 261: the band picks the direction. At/below the lower band only a
+    call (bullish) may open, at/above the upper band only a put, inside the band
+    nothing. 'hourly' compares the hourly close with the hourly band, otherwise
+    spot with the 5-minute band. Fails closed."""
+    if timeframe == "hourly":
+        price = None if ctx is None else ctx.get("hourly_close")
+        lo, up = (None, None) if ctx is None else (ctx.get("bb1h_lower"), ctx.get("bb1h_upper"))
+        label = "hourly close vs its 20/2SD band"
+    else:
+        price = None if ctx is None else ctx.get("spot")
+        lo, up = (None, None) if ctx is None else (ctx.get("bb5_lower"), ctx.get("bb5_upper"))
+        label = "5-min price vs its 20/2SD band"
+    if price is None or lo is None or up is None:
+        return f"{label} unreadable -- refusing rather than guessing"
+    if price <= lo:
+        return None if bullish else f"bearish but {label} is AT/BELOW the lower band ({price:.2f} <= {lo:.2f}) -- calls only"
+    if price >= up:
+        return None if not bullish else f"bullish but {label} is AT/ABOVE the upper band ({price:.2f} >= {up:.2f}) -- puts only"
+    return f"{label} is inside the band ({lo:.2f}-{up:.2f}) -- no entry"
 
 
 # ---- the fetch --------------------------------------------------------------

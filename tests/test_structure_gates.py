@@ -66,10 +66,57 @@ def test_switches_default_off(monkeypatch):
     assert not g.macro_bad_puts_only()
 
 
-def test_wired_into_the_engine_and_the_rotation():
-    nodes = open(os.path.join(REPO, "trading_engine", "nodes.py"), encoding="utf-8").read()
-    assert 'structure_gates.weekrange_refusal(bullish, structure_gates.week_context("QQQ"))' in nodes
+def test_wired_into_the_rotation():
+    # The QQQ engine's own gate went with the old rules (section 261); the
+    # stock rotation keeps every gate.
     rot = open(os.path.join(REPO, "scripts", "dte0_trade.py"), encoding="utf-8").read()
     for needle in ('rejects["week-range guard"]', 'rejects["pullback trigger not met"]',
-                   'rejects["bullish with engine macro BAD"]'):
+                   'rejects["bullish with engine macro BAD"]', 'rejects["bollinger direction gate"]',
+                   'structure_gates.bollinger_on(wtype or "dte0")'):
         assert needle in rot
+
+
+# ---- section 261: the Bollinger direction gate ------------------------------
+
+def _ctx(price, lo=99.0, up=101.0, timeframe="5min"):
+    if timeframe == "hourly":
+        return {"hourly_close": price, "bb1h_lower": lo, "bb1h_upper": up}
+    return {"spot": price, "bb5_lower": lo, "bb5_upper": up}
+
+
+def test_bollinger_lower_band_allows_calls_only():
+    for tf in ("5min", "hourly"):
+        assert g.bollinger_refusal(True, _ctx(98.5, timeframe=tf), tf) is None
+        assert g.bollinger_refusal(True, _ctx(99.0, timeframe=tf), tf) is None        # at the band
+        assert g.bollinger_refusal(False, _ctx(98.5, timeframe=tf), tf)
+
+
+def test_bollinger_upper_band_allows_puts_only():
+    for tf in ("5min", "hourly"):
+        assert g.bollinger_refusal(False, _ctx(101.5, timeframe=tf), tf) is None
+        assert g.bollinger_refusal(False, _ctx(101.0, timeframe=tf), tf) is None
+        assert g.bollinger_refusal(True, _ctx(101.5, timeframe=tf), tf)
+
+
+def test_bollinger_inside_or_unreadable_refuses_both():
+    for bull in (True, False):
+        assert g.bollinger_refusal(bull, _ctx(100.0), "5min")
+        assert g.bollinger_refusal(bull, None, "5min")
+        assert g.bollinger_refusal(bull, {"spot": 100.0}, "5min")
+        assert g.bollinger_refusal(bull, _ctx(100.0, lo=None), "hourly")
+
+
+def test_context_carries_both_bands():
+    bars5 = [{"time": f"2026-09-25T10:{i:02d}:00", "high": 0, "low": 0, "close": 100.0 + (i % 2)}
+             for i in range(25)]
+    ctx = g.context_from_bars(_bars15(DAYS, last=109.5), bars5)
+    assert ctx["bb5_lower"] < ctx["bb5_upper"] and ctx["bb1h_lower"] < ctx["bb1h_upper"]
+    assert g.context_from_bars(_bars15(DAYS), bars5[:5])["bb5_lower"] is None
+
+
+def test_bollinger_switches_default_off_per_bucket(monkeypatch):
+    for b in ("DTE0", "W3", "W7"):
+        monkeypatch.delenv(f"TRADING_BOLLINGER_GATE_{b}", raising=False)
+    assert not any(g.bollinger_on(b) for b in ("dte0", "w3", "w7"))
+    monkeypatch.setenv("TRADING_BOLLINGER_GATE_W7", "true")
+    assert g.bollinger_on("w7") and not g.bollinger_on("w3")

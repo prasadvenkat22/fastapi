@@ -10,14 +10,7 @@ from trading_engine import nodes, playbook as PB
 NY = ZoneInfo("America/New_York")
 
 
-def test_mode_off_never_returns_the_touch_window(monkeypatch):
-    monkeypatch.setattr(PB, "BAND_TOUCH_MODE", False)
-    w = PB.window_for(datetime(2026, 10, 5, 15, 0, tzinfo=NY))
-    assert w is None or w.name != "BAND_TOUCH"
-
-
-def test_mode_on_is_the_only_window_inside_its_hours(monkeypatch):
-    monkeypatch.setattr(PB, "BAND_TOUCH_MODE", True)
+def test_touch_is_the_only_window_inside_its_hours():
     at = datetime(2026, 10, 5, 10, 30, tzinfo=NY)
     for bull in (True, False):
         assert PB.window_for_direction(bull, at).name == "BAND_TOUCH"
@@ -63,3 +56,49 @@ def test_too_few_bars_is_no_signal(monkeypatch):
 def test_exits_never_cross_to_the_natural_by_default():
     from trading_engine import tradier_orders as t
     assert t.MID_STOPS is True and t.MID_EXIT_FALLBACK is False and t.MID_MAX_STEPS == 0
+
+
+# --- Exit order on the engine's own positions (section 261) ---------------
+
+from trading_engine.broker import MockBrokerClient, MockSpreadPosition  # noqa: E402
+
+
+def _run_exit(monkeypatch, playbook, value, band_spot=None, tp=None, force=False):
+    monkeypatch.setattr(nodes, "is_past_force_close", lambda *a, **k: force)
+    monkeypatch.setattr(nodes, "_is_within_opening_warmup", lambda: True)   # no re-entry
+    monkeypatch.setattr(nodes, "_stop_confirmed", lambda *a: True)
+    monkeypatch.setattr(PB, "ENGINE_TAKE_PROFIT_PCT", tp)
+    monkeypatch.setattr(PB, "ENGINE_STOP_PCT", -20.0)
+    band = None if band_spot is None else {"spot": band_spot, "mid": 750.0, "upper": 751.0,
+                                            "lower": 749.0, "touch": None}
+    monkeypatch.setattr(nodes, "_band_touch", lambda: band)
+    pos = MockSpreadPosition(strategy="BULL_CALL_SPREAD", underlying="QQQ", quantity=1,
+                             long_strike=746.0, short_strike=750.0, entry_net_debit=2.00,
+                             current_net_value=value, playbook=playbook)
+    broker = MockBrokerClient(position=pos)
+    return nodes.execution_risk_agent({}, broker)
+
+
+def test_engine_take_profit_fires_before_the_sma_target(monkeypatch):
+    out = _run_exit(monkeypatch, "BAND_TOUCH:TOUCH", 2.60, band_spot=748.0, tp=25.0)
+    assert out.get("exit_reason") == "TAKE_PROFIT"
+
+
+def test_sma_target_books_a_touch_position(monkeypatch):
+    out = _run_exit(monkeypatch, "BAND_TOUCH:TOUCH", 2.10, band_spot=750.2)
+    assert out.get("exit_reason") == "TAKE_PROFIT"
+
+
+def test_touch_position_holds_between_stop_and_target(monkeypatch):
+    out = _run_exit(monkeypatch, "BAND_TOUCH:TOUCH", 2.10, band_spot=749.5)
+    assert not out.get("exit_reason")
+
+
+def test_retired_window_position_still_gets_the_stop(monkeypatch):
+    out = _run_exit(monkeypatch, "MORNING_DRIFT:CLEAN", 1.40)      # -30%
+    assert out.get("exit_reason") == "STOP_LOSS"
+
+
+def test_force_close_beats_everything(monkeypatch):
+    out = _run_exit(monkeypatch, "BAND_TOUCH:TOUCH", 2.60, band_spot=748.0, tp=25.0, force=True)
+    assert out.get("exit_reason") == "FORCE_CLOSE"

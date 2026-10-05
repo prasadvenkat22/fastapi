@@ -88,4 +88,4 @@ def test_engine_entry_path_calls_the_cap():
     import inspect
     src = inspect.getsource(nodes)
     i = src.index("quantity = cap_to_buying_power(quantity, structural_per_contract)")
-    assert i < src.index("if is_credit_window and 0 < quantity and net_debit < MIN_CREDIT:")
+    assert i < src.index("broker.place_bull_call_spread(")  # capped before any order

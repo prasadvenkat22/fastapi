@@ -32,7 +32,19 @@ screener horizon off in both directions (`weekly_pick.session_horizon`, §252
 / §254); screener IV was the chain median, now at-the-money (§259);
 `run_cycle` poll budget now wall-clock.
 
-New settings (all default to the old behaviour): entries per day per bucket,
+**Section 261 (2026-10-05): the old QQQ rules are deleted.** The engine's only
+entry is the 1-minute 20/2SD Bollinger band touch (lower -> call debit,
+upper -> put debit); exits run force close -> engine take profit -> QQQ back
+at the 20-SMA -> stop with confirmation. CLEAN/ZONE/STRICT/RELAXED/FADE/
+REJECT/MOMENTUM/TREND, the six time windows, credit windows, ride/ratchet/
+stall/handoff exits, the 5-min indicator agents and the shadow condor are
+gone; so are `scripts/sweep.py` and its wrappers (results stay in the notes).
+Stock books gained a Bollinger direction gate (`TRADING_BOLLINGER_GATE_DTE0/
+W3/W7`, `structure_gates.bollinger_refusal`). /desk/settings is four identical
+book cards (On/off, Budget, Entries per day, Bollinger band, Stop loss, Stop
+confirmation, Take profit) + an "All books" card + a collapsed Advanced.
+
+Earlier this weekend, new settings (all default to the old behaviour): entries per day per bucket,
 QQQ entry-rule switches and `TRADING_BAND_ONLY`, morning tier lists (new
 `tiers` kind), QQQ engine stop / stop confirmation / take profit, engine stall
 arm and all-windows stall, `TRADING_MORNING_PUT_CLOSE_BY`, and mid-first
@@ -1412,7 +1424,7 @@ restart.
 | `news_ev_backtest.py` | re-price an expired `weekly_shadow` cohort and ask whether the news overlay moved EV toward the outcome |
 | `flow.py` | net signed volume and VWAP for any symbol, from Tradier intraday bars |
 | `oi_flow.py` | which strikes gained open interest day over day |
-| `sweep.py` | 0DTE replay. **Read the RUN CONFIG banner**. Modes added 2026-10-04: `stallarm`, `bandonly`, `costcheck`, `randomentry`, `cdsearch`, `earlyentry` |
+| ~~`sweep.py`~~ | deleted 2026-10-05 (section 261) with the rules it replayed; its results are in strategy_notes §251-255 |
 | `edge_bandscalp.py` | 1-min / 5-min Bollinger mean-reversion scalp, underlying and options layers, target-only exits (§253) |
 | `edge_fills.py` | real fill rates of mid-priced vs natural orders, per source (§253) |
 | `edge_stock0dte.py`, `edge_picks.py`, `edge_shadow.py`, `edge_backtest.py` | stock books against chance, on real fills and closes (§252) |

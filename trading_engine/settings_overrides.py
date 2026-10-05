@@ -37,14 +37,11 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-Kind = Literal["float", "int", "bool", "time", "tiers"]
-
-# Entry tiers a window's tier list may name (nodes.execution_risk_agent).
-TIER_NAMES = ("CLEAN", "ZONE", "STRICT", "RELAXED", "MOMENTUM", "FADE", "REJECT", "TREND")
+Kind = Literal["float", "int", "bool", "time"]
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OVERRIDES_PATH = os.getenv("TRADING_OVERRIDES_PATH",
@@ -67,6 +64,12 @@ class Setting:
     min: Optional[float] = None
     max: Optional[float] = None
     allow_blank: bool = False  # "" is valid: "disabled" on a time, "follow the other knob" on a number
+    # SECTION 261: the settings page's book cards. book is qqq / s0 / w3 / w7 /
+    # global; order sorts the card (multiples of 10 are the core rows every
+    # book card shares, in the same order; 41-49 are the QQQ band details).
+    # 0 = an Advanced row.
+    book: str = ""
+    order: int = 0
 
 
 G_ENGINE = "QQQ engine exits (the engine's own trades)"
@@ -85,7 +88,7 @@ REGISTRY: tuple[Setting, ...] = (
     # OFF BY DEFAULT (operator, 2026-09-24): nothing opens a new trade until a
     # bucket is switched on in /desk/settings (or `tset set ...=true`).
     Setting("TRADING_BUCKET_QQQ_0DTE", "QQQ 0DTE (engine)", G_BUCKETS, "bool", "false",
-            "The engine's own QQQ same-day entries (debit, credit, condor). Off: no new "
+            "The engine's QQQ same-day entries: 1-minute Bollinger band touches. Off: no new "
             "entries; an open position is still managed."),
     Setting("TRADING_POSITION_BUDGET", "QQQ 0DTE budget", G_BUCKETS, "float", "1000",
             "Capital the engine sizes a QQQ same-day entry against (realised equity, daily-loss "
@@ -96,12 +99,6 @@ REGISTRY: tuple[Setting, ...] = (
             "power. One stop-out can exceed the daily-loss limit and halt the day."),
     Setting("TRADING_MAX_ENTRIES_QQQ_0DTE", "QQQ 0DTE: entries per day", G_BUCKETS, "int", "0",
             "Most entries the engine makes in one session. 0 = no cap.", "", 0, 50),
-    Setting("TRADING_BAND_TOUCH", "QQQ: band TOUCH entries only (1-minute)", G_BUCKETS, "bool", "false",
-            "On: the engine's ONLY entry is QQQ touching its 1-minute 20-period 2-SD Bollinger band: "
-            "at/below the lower band buy a call debit spread, at/above the upper band a put debit "
-            "spread. Exit at the 20-SMA or the stop (QQQ engine stop loss, else -20%). Every other "
-            "entry rule and gate is off; the bucket switch, entry cap, daily-loss limit and cooldowns "
-            "still apply."),
     Setting("TRADING_BAND_TOUCH_START", "Band touch: from", G_BUCKETS, "time", "09:45", "First entry time (ET)."),
     Setting("TRADING_BAND_TOUCH_END", "Band touch: until", G_BUCKETS, "time", "15:00", "Last entry time (ET). Entries after 14:00 are allowed only here."),
     Setting("TRADING_BAND_TOUCH_WIDTH", "Band touch: spread width", G_BUCKETS, "float", "4",
@@ -110,23 +107,6 @@ REGISTRY: tuple[Setting, ...] = (
             "Standard deviations from the 20-SMA.", "sd", 1, 4),
     Setting("TRADING_BAND_TOUCH_PERIOD", "Band touch: SMA period", G_BUCKETS, "int", "20",
             "Number of 1-minute bars in the moving average.", "bars", 5, 100),
-    Setting("TRADING_BAND_ONLY", "QQQ: old 5-min band rules only", G_BUCKETS, "bool", "false",
-            "Restricts the OLD rules to the three 5-minute band ones (STRICT, RELAXED, FADE), which also need trend agreement. Not the same as band TOUCH, which is the simple 1-minute touch-and-fade rule. Ignored while 'band TOUCH entries only' is on."),
-    Setting("TRADING_MORNING_TIERS", "MORNING_DRIFT accepts", G_BUCKETS, "tiers", "CLEAN",
-            "Entry rules the bullish morning window takes: comma list of CLEAN, ZONE, STRICT, "
-            "RELAXED, MOMENTUM, FADE, REJECT, TREND, or ALL."),
-    Setting("TRADING_MORNING_PUT_TIERS", "MORNING_PUT accepts", G_BUCKETS, "tiers", "CLEAN",
-            "Entry rules the bearish morning window takes: comma list or ALL."),
-    Setting("TRADING_CLEAN_ENTRIES", "QQQ entry rule: CLEAN (trend, no bands)", G_BUCKETS, "bool", "true",
-            "Old rule: puts in a downtrend, calls in an uptrend (price vs 20-SMA, 9 EMA, VWAP, RSI). Never looks at the Bollinger bands -- it opened the 10-02 11:55 put. Ignored while 'band TOUCH entries only' is on."),
-    Setting("TRADING_ZONE_ENTRIES", "QQQ entry rule: ZONE (pullback, no bands)", G_BUCKETS, "bool", "false",
-            "Old rule: trade a 0.15-0.60% pullback from the day's high or low. Never looks at the Bollinger bands. Ignored while 'band TOUCH entries only' is on."),
-    Setting("TRADING_REJECT_ENTRIES", "QQQ entry rule: REJECT (50 EMA, no bands)", G_BUCKETS, "bool", "true",
-            "Old rule: puts after price fails at the 50 EMA. Never looks at the Bollinger bands. Ignored while 'band TOUCH entries only' is on."),
-    Setting("TRADING_RELAXED_ENTRIES", "QQQ entry rule: RELAXED (5-min band + trend)", G_BUCKETS, "bool", "true",
-            "Old rule: 5-minute band pierce, but only in the direction MACD and trend agree (it can buy puts at the LOWER band). Ignored while 'band TOUCH entries only' is on."),
-    Setting("TRADING_FADE_ENTRIES", "QQQ entry rule: FADE (5-min upper band -> puts)", G_BUCKETS, "bool", "false",
-            "Old rule: puts when price pierces the 5-minute upper band. Ignored while 'band TOUCH entries only' is on."),
     Setting("TRADING_BUCKET_STOCK_0DTE", "Single-stock 0DTE (rotation)", G_BUCKETS, "bool", "false",
             "dte0_trade.py same-day entries on single names. Off: screens and logs only."),
     Setting("TRADING_DTE0_MAX_BUDGET", "Single-stock 0DTE budget", G_BUCKETS, "float", "1500",
@@ -155,7 +135,7 @@ REGISTRY: tuple[Setting, ...] = (
             "0 = no cap; --max-trades still limits each run.", "", 0, 50),
     # --- Section 241: where in the range / which side of the midline -------
     Setting("TRADING_WEEKRANGE_GUARD", "Week-range guard", G_STRUCT, "bool", "false",
-            "All three buckets: no call spread (bullish) near the week's high, no put spread "
+            "Single-stock books: no call spread (bullish) near the week's high, no put spread "
             "(bearish) near its low. Range = last 5 sessions. Measured: at the top 10% the next "
             "4 days were up 34% of the time vs 53% mid-range."),
     Setting("TRADING_WEEKRANGE_CALL_MAX", "No calls above (share of week range)", G_STRUCT, "float", "0.90",
@@ -167,48 +147,38 @@ REGISTRY: tuple[Setting, ...] = (
             "Measured: below the midline, up 4 days later 60% vs 42%."),
     Setting("TRADING_PULLBACK_GATE_0DTE", "0DTE stocks: wait for the 5-min pullback", G_STRUCT, "bool", "false",
             "Single-stock 0DTE: a call needs price BELOW the 5-min 20-SMA, a put ABOVE it. Measured "
-            "weak (47% vs 43% up by the close). Not applied to the QQQ engine, whose bullish setups "
-            "require price above its average."),
+            "weak (47% vs 43% up by the close)."),
     Setting("TRADING_MACRO_BAD_PUTS_ONLY", "Macro BAD: put spreads only (stocks)", G_STRUCT, "bool", "false",
-            "Single-stock books refuse bullish spreads while the engine's macro verdict is BAD. The "
-            "QQQ engine already does this. NOT supported by the measurement (macro gates showed no "
-            "direction), set at the operator's direction."),
+            "Single-stock books refuse bullish spreads while the engine's macro verdict is BAD. NOT "
+            "supported by the measurement (macro gates showed no direction)."),
+    # Section 261: the band picks the side for each stock book.
+    Setting("TRADING_BOLLINGER_GATE_DTE0", "Single-stock 0DTE: Bollinger band", G_STRUCT, "bool", "false",
+            "On: only trade a name outside its 5-minute 20-period 2-SD band -- at/below the lower band "
+            "call spreads only, at/above the upper band put spreads only, inside the band no trade."),
+    Setting("TRADING_BOLLINGER_GATE_W3", "3-day: Bollinger band", G_STRUCT, "bool", "false",
+            "On: only trade a name outside its HOURLY 20-period 2-SD band -- at/below the lower band "
+            "call spreads only, at/above the upper band put spreads only, inside the band no trade."),
+    Setting("TRADING_BOLLINGER_GATE_W7", "7-day: Bollinger band", G_STRUCT, "bool", "false",
+            "On: only trade a name outside its HOURLY 20-period 2-SD band -- at/below the lower band "
+            "call spreads only, at/above the upper band put spreads only, inside the band no trade."),
     # --- The engine's own QQQ trades (trading_engine/nodes.py) ---------------
     # Section 228. The 0DTE group below is orphans.py, which manages positions the
     # engine did NOT open; the QQQ bucket's trades exit on these instead.
     # Stop and profit first (operator, 2026-10-04).
-    Setting("TRADING_ENGINE_STOP_PCT", "QQQ engine stop loss", G_ENGINE, "float", "",
-            "Stop for every engine DEBIT spread, as return on cost. Blank = each window's own "
-            "(MORNING_PUT -20, MORNING_DRIFT TRADING_MORNING_STOP_PCT, others -20). Credit "
-            "windows keep theirs.", "%", -100, 0, allow_blank=True),
+    Setting("TRADING_ENGINE_STOP_PCT", "QQQ engine stop loss", G_ENGINE, "float", "-20",
+            "Sell the engine's QQQ spread when its return on cost falls to this.", "%", -100, 0),
     Setting("TRADING_STOP_CONFIRM_MINUTES", "QQQ engine stop confirmation", G_ENGINE, "float", "5",
             "Minutes the engine's stop level must hold before it sells. 0 = the first reading "
             "past the stop.", "min", 0, 30),
     Setting("TRADING_ENGINE_TAKE_PROFIT_PCT", "QQQ engine take profit", G_ENGINE, "float", "",
-            "Book every engine DEBIT spread outright at this return on cost (at the mid when "
-            "'Work orders from the mid' is on). Blank = the windows' own targets and trails.",
+            "Sell the engine's QQQ spread once it is up this much (at the mid when 'Work orders "
+            "from the mid' is on). Blank = sell only when QQQ is back at the 1-minute 20-SMA.",
             "%", 0, 500, allow_blank=True),
-    Setting("TRADING_STALL_MINUTES", "Stall window (morning debit)", G_ENGINE, "float", "0",
-            "Close the engine's QQQ debit spread once it has gone this long without a new peak "
-            "AND sits the give-back below it. 0 disables. Also the orphan stall window when "
-            "TRADING_ORPHAN_STALL_MINUTES is unset.", "min", 0, 240),
-    Setting("TRADING_STALL_GIVEBACK_PCT", "Stall give-back (morning debit)", G_ENGINE, "float", "0",
-            "Return points below the peak that the stall needs. 0 disables. Also the orphan "
-            "give-back when TRADING_ORPHAN_STALL_GIVEBACK_PCT is unset.", "pts", 0, 200),
-    Setting("TRADING_STALL_ARM_PCT", "Stall starts watching at", G_ENGINE, "float", "0",
-            "The engine's stall only watches once the peak gain (on the sale price) reaches this. "
-            "0 = from any gain.", "%", 0, 500),
-    Setting("TRADING_STALL_ALL_WINDOWS", "Stall in every debit window", G_ENGINE, "bool", "false",
-            "Run the stall on every engine debit spread, not only the windows that ride. Covers "
-            "MORNING_PUT and ITM_GRINDER, which otherwise have nothing between the target and the "
-            "close-by clock."),
-    Setting("TRADING_MORNING_PUT_CLOSE_BY", "MORNING_PUT closes at", G_ENGINE, "time", "11:30",
-            "MORNING_PUT sells whatever it shows at this time so the next window can trade."),
     Setting("TRADING_MID_ORDERS", "Work orders from the mid", G_ENGINE, "bool", "false",
-            "QQQ engine and stock-book entries, and QQQ profit exits (target, ratchet, stall, trail, handoff) post at the "
-            "spread's mid and step toward the bid/ask. An entry that does not fill is not taken; a "
-            "profit exit ends at the bid/ask. Stops, the force close and risk-off always sell at the "
-            "bid/ask at once."),
+            "Entries (QQQ engine and the stock books) rest at the spread's mid and are skipped if "
+            "they do not fill. QQQ exits (take profit, 20-SMA target, and stops when 'stops at the "
+            "mid too' is on) post at the mid and retry each minute. The force close always sells "
+            "at the bid/ask."),
     Setting("TRADING_MID_ENTRY_MAX_STEPS", "Mid order: entry re-prices", G_ENGINE, "int", "0",
             "Entries (QQQ engine and the stock books): re-prices toward the ask after the mid. "
             "0 = the mid only; an entry that does not fill there is not taken.", "", 0, 10),
@@ -229,24 +199,12 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_MID_BUDGET_SECONDS", "Mid order: time limit", G_ENGINE, "float", "25",
             "Wall-clock limit for the whole ladder. Keep well under 60: the next cycle starts a "
             "minute later.", "s", 5, 40),
-    Setting("TRADING_STALL_ON_CREDIT", "Stall on the credit trade", G_ENGINE, "bool", "false",
-            "The afternoon credit spread exits on the stall instead of booking at its take-profit."),
-    Setting("TRADING_CREDIT_STALL_ARM", "Credit stall waits for the target", G_ENGINE, "bool", "true",
-            "true = the credit stall only watches once the take-profit is reached. "
-            "false = it watches from entry, like the morning stall."),
     Setting("TRADING_WIN_COOLDOWN_MINUTES", "Wait after a win", G_ENGINE, "float", "0",
             "Minutes before the engine re-enters after a profitable exit, either direction. 0 = the "
-            "next cycle (the state every sweep in sections 27-51 was measured under).", "min", 0, 240),
+            "next cycle.", "min", 0, 240),
     Setting("TRADING_REENTRY_COOLDOWN_MINUTES", "Wait after a loss", G_ENGINE, "float", "30",
-            "Minutes before re-entering the side that just stopped out. Measured (60 sessions): no "
-            "cooldown +51.17/day, 30 min +58.13, 90 min +60.15, and no cooldown widens the worst day.",
+            "Minutes before the engine re-enters the side that just stopped out.",
             "min", 0, 240),
-    Setting("TRADING_CREDIT_STALL_MINUTES", "Credit stall window", G_ENGINE, "float", "",
-            "Its own window for the credit stall. Blank = same as the morning window.",
-            "min", 0, 240, allow_blank=True),
-    Setting("TRADING_CREDIT_STALL_GIVEBACK_PCT", "Credit stall give-back", G_ENGINE, "float", "",
-            "Its own give-back for the credit stall. Blank = same as the morning give-back.",
-            "pts", 0, 200, allow_blank=True),
     # --- 0DTE exit ladder (trading_engine/orphans.py) -----------------------
     # Stop and profit first: the rows a manual 0DTE trade is managed by.
     Setting("TRADING_ORPHAN_STOP_PCT", "Stop loss", G_0DTE, "float", "-25",
@@ -471,6 +429,9 @@ REGISTRY: tuple[Setting, ...] = (
     # --- Account --------------------------------------------------------------
     Setting("TRADING_ACCOUNT_FLOOR", "Account floor", G_ACCOUNT, "float", "0",
             "Flatten EVERYTHING when equity falls to this. 0 disables.", "$", 0, 1_000_000),
+    Setting("TRADING_MAX_DAILY_LOSS_PCT", "Daily loss limit", G_ACCOUNT, "float", "0.02",
+            "QQQ engine: no new entries once today's realised losses reach this share of "
+            "session-start equity (0.06 = 6%). Open positions are still managed.", "x equity", 0, 0.5),
 
     # --- Entries (scripts/dte0_trade.py) -------------------------------------
     Setting("TRADING_DTE0_MAX_ROTATIONS", "Max rotations", G_ENTRY, "int", "3",
@@ -493,6 +454,69 @@ REGISTRY: tuple[Setting, ...] = (
             "Weekly picks need at least this win probability.", "", 0, 1),
 )
 
+# SECTION 261: THE BOOK CARDS. Every book shows the same core rows, in the same
+# order and with the same labels (orders 10..70); QQQ adds its band details at
+# 41-45 because band touch is its only entry. Everything not listed here is an
+# Advanced row on the settings page. Labels here replace the REGISTRY label.
+_CORE = ("On / off", "Budget", "Entries per day", "Bollinger band",
+         "Stop loss", "Stop confirmation", "Take profit")
+_CARDS: dict[str, tuple] = {
+    "qqq": ("TRADING_BUCKET_QQQ_0DTE", "TRADING_POSITION_BUDGET", "TRADING_MAX_ENTRIES_QQQ_0DTE",
+            "TRADING_BAND_TOUCH_PERIOD", "TRADING_ENGINE_STOP_PCT", "TRADING_STOP_CONFIRM_MINUTES",
+            "TRADING_ENGINE_TAKE_PROFIT_PCT"),
+    "s0": ("TRADING_BUCKET_STOCK_0DTE", "TRADING_DTE0_MAX_BUDGET", "TRADING_MAX_ENTRIES_STOCK_0DTE",
+           "TRADING_BOLLINGER_GATE_DTE0", "TRADING_ORPHAN_STOP_PCT", "TRADING_ORPHAN_STOP_CONFIRM_MINUTES",
+           "TRADING_ORPHAN_TARGET_RETURN_PCT"),
+    "w3": ("TRADING_BUCKET_STOCK_W3", "TRADING_W3_MAX_BUDGET", "TRADING_MAX_ENTRIES_STOCK_W3",
+           "TRADING_BOLLINGER_GATE_W3", "TRADING_W3_STOP_PCT", "TRADING_W3_STOP_MINUTES",
+           "TRADING_W3_TARGET_RETURN_PCT"),
+    "w7": ("TRADING_BUCKET_STOCK_W7", "TRADING_W7_MAX_BUDGET", "TRADING_MAX_ENTRIES_STOCK_W7",
+           "TRADING_BOLLINGER_GATE_W7", "TRADING_W7_STOP_PCT", "TRADING_W7_STOP_MINUTES",
+           "TRADING_W7_TARGET_RETURN_PCT"),
+}
+_EXTRA: dict[str, tuple] = {   # key -> (book, order, label)
+    "TRADING_BAND_TOUCH_SD": ("qqq", 41, "Bollinger band: width (SD)"),
+    "TRADING_BAND_TOUCH_START": ("qqq", 42, "Bollinger band: from"),
+    "TRADING_BAND_TOUCH_END": ("qqq", 43, "Bollinger band: until"),
+    "TRADING_BAND_TOUCH_WIDTH": ("qqq", 44, "Spread width"),
+    "TRADING_MID_ORDERS": ("global", 10, "Work orders from the mid"),
+    "TRADING_ACCOUNT_FLOOR": ("global", 20, "Account floor"),
+    "TRADING_MAX_DAILY_LOSS_PCT": ("global", 30, "Daily loss limit"),
+    "TRADING_ORPHAN_FORCE_CLOSE": ("global", 40, "Force close"),
+}
+_HELP: dict[str, str] = {
+    "TRADING_BAND_TOUCH_PERIOD": (
+        "The QQQ engine's only entry: live QQQ at/below the lower 1-minute band buys a call "
+        "spread, at/above the upper band a put spread; it sells at the 20-SMA, the take profit "
+        "or the stop. This is the number of 1-minute bars in the band's moving average."),
+    "TRADING_ORPHAN_STOP_PCT": (
+        "Sell a same-day stock spread when its return on cost falls to this. Also governs "
+        "manual trades and weeklies on their expiry day."),
+    "TRADING_ORPHAN_TARGET_RETURN_PCT": (
+        "Sell a same-day stock spread once it is up this much. Also governs manual trades and "
+        "weeklies on their expiry day. 0 = no target."),
+    "TRADING_ORPHAN_FORCE_CLOSE": (
+        "Every same-day position -- engine, stock books and manual -- is flattened at this "
+        "time (ET), at the bid/ask."),
+}
+
+
+def _carded(registry: tuple) -> tuple:
+    where: dict[str, tuple] = dict(_EXTRA)
+    for book, keys in _CARDS.items():
+        for i, k in enumerate(keys):
+            where[k] = (book, (i + 1) * 10, _CORE[i])
+    out = []
+    for st in registry:
+        if st.key in where:
+            book, order, label = where[st.key]
+            st = replace(st, book=book, order=order, label=label,
+                         help=_HELP.get(st.key, st.help))
+        out.append(st)
+    return tuple(out)
+
+
+REGISTRY = _carded(REGISTRY)
 BY_KEY: dict[str, Setting] = {s.key: s for s in REGISTRY}
 
 # The environment as the container started it, before overrides were applied.
@@ -516,15 +540,6 @@ def validate(key: str, raw: str) -> str:
         if low in ("false", "0", "no", "off"):
             return "false"
         raise ValueError(f"{key}: expected true/false, got {raw!r}")
-    if s.kind == "tiers":
-        if v.upper() in ("ALL", "*"):
-            return "ALL"
-        names = [t.strip().upper() for t in v.split(",") if t.strip()]
-        bad = [t for t in names if t not in TIER_NAMES]
-        if not names or bad:
-            raise ValueError(f"{key}: expected a comma list of {', '.join(TIER_NAMES)} or ALL, "
-                             f"got {raw!r}")
-        return ",".join(dict.fromkeys(names))
     if s.kind == "time":
         if not _TIME_RE.match(v):
             raise ValueError(f"{key}: expected HH:MM (24h, ET), got {raw!r}")

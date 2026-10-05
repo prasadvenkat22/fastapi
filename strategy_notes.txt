@@ -14682,3 +14682,28 @@ the band, the moment it is touched. TRADING_BAND_TOUCH (off):
   both halves; positive only at mid fills (mid+1SD target +51/+28 $/day), 20
   sessions. This exact rule (target = 20-SMA with a -20% stop) was not
   replayed. Unproven; run at 1 contract.
+
+
+261. OLD QQQ RULES DELETED; FOUR IDENTICAL SETTINGS CARDS  (2026-10-05)
+
+Operator: settings too confusing; Bollinger on/off for every book; delete
+legacy terms and old rules (chosen: delete from code, not hide).
+  ENGINE: nodes.py 5,000 -> 1,200 lines. Only entry: the 1-minute band touch
+  (always on; TRADING_BAND_TOUCH removed). Exits: force close -> engine take
+  profit (TRADING_ENGINE_TAKE_PROFIT_PCT, now ahead of the 20-SMA target) ->
+  20-SMA -> stop (TRADING_ENGINE_STOP_PCT, default -20) with confirmation ->
+  hold; a row from a retired window still gets the stop and force close.
+  Engine force close falls back to TRADING_ORPHAN_FORCE_CLOSE. Deleted: every
+  old tier and window, credit/ride/ratchet/stall/handoff/breakeven/risk-off
+  exits, tranches, buy-more, shadow condor, macd/sma/bollinger(5m)/rsi agents
+  (market_signals_agent kept: macro halt, /macro panel, dte0_trade), and
+  scripts/sweep.py + run_sweep_prod / harness_vs_live / harness_indicator_diff.
+  STOCK BOOKS: Bollinger direction gate per book (TRADING_BOLLINGER_GATE_DTE0
+  5-min, _W3/_W7 hourly, 20/2SD, fails closed): lower -> calls only, upper ->
+  puts only, inside -> no trade.
+  SETTINGS: Setting gained book/order. Cards qqq/s0/w3/w7: On/off, Budget,
+  Entries per day, Bollinger band, Stop loss, Stop confirmation, Take profit;
+  "All books": mid orders, account floor, daily loss limit
+  (TRADING_MAX_DAILY_LOSS_PCT, new row), force close. Everything else under
+  Advanced. Removed rows: BAND_TOUCH, BAND_ONLY, *_TIERS (and the tiers kind),
+  CLEAN/ZONE/REJECT/RELAXED/FADE, STALL_*, CREDIT_STALL_*, MORNING_PUT_CLOSE_BY.

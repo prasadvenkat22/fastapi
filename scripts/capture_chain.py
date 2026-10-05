@@ -99,7 +99,10 @@ MIN_ABS_DELTA, MAX_ABS_DELTA = 0.03, 0.97
 # the credit-to-risk ratio whatever the premium looks like.
 CAPTURE_SYMBOLS = [s.strip().upper() for s in os.getenv(
     "CHAIN_CAPTURE_SYMBOLS",
-    "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN,MRVL,NVDA"
+    # The whole stock-book list since 2026-10-04 (section 257), so the IV-vs-
+    # realised test the books still lack is built on every name they trade.
+    "QQQ,SNDK,MU,CRWV,STX,WDC,DELL,META,MSFT,GOOGL,AMZN,MRVL,NVDA,PANW,AVGO,"
+    "INTC,TSLA,AAPL,AMD"
 ).split(",") if s.strip()]
 
 

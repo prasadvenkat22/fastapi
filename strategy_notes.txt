@@ -14621,3 +14621,13 @@ confirmation (10-02 sold at -30%), target +70%, stall from +50% / 10 min.
   With TRADING_MID_ORDERS on: entries at the mid only, the take-profit at the
   mid, stops at the natural. Per-book entries per day and the stock books'
   stop/target rows (0DTE exits; 3-day and 7-day groups) already exist.
+
+
+257. CHAIN CAPTURE COVERS THE WHOLE STOCK-BOOK LIST  (2026-10-04)
+
+capture_chain.py already recorded 15 symbols 4x a day (10:05/12:05/14:05/15:30
+ET, 6 nearest expiries, bid/ask/IV/delta/OI/volume per quoted strike): 117
+snapshots, 38 MB, since 2026-08-24 (stocks since 08-26). Added INTC, TSLA,
+AAPL, AMD so every weekly-cron name is captured. Live list is
+CHAIN_CAPTURE_SYMBOLS in .env.production. Enough history already exists for
+a first IV-vs-realised (premium selling) test on the 15 original names.

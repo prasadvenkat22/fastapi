@@ -2464,6 +2464,14 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             )
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "HANDOFF"
+        # The operator's engine-wide take-profit (TRADING_ENGINE_TAKE_PROFIT_PCT):
+        # books outright, ride or not, before any trail or stall gets a say.
+        elif (PB.ENGINE_TAKE_PROFIT_PCT is not None and not is_credit_pos
+              and return_pct >= PB.ENGINE_TAKE_PROFIT_PCT):
+            logger.info("Engine take-profit: %s at %+.1f%% reached the %+.0f%% setting — booking.",
+                        position.strategy, return_pct, PB.ENGINE_TAKE_PROFIT_PCT)
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
         # Rule A: Take Profit
         # Judged against the target of the strategy that OPENED this
         # position, not whatever window the clock is in now: an ATM spread is

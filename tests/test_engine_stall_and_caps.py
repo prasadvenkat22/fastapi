@@ -91,3 +91,15 @@ def test_tiers_setting_validates():
     assert so.validate("TRADING_MORNING_TIERS", "all") == "ALL"
     with pytest.raises(ValueError):
         so.validate("TRADING_MORNING_TIERS", "BANDS")
+
+
+def test_engine_stop_overrides_debit_windows_only(monkeypatch):
+    from trading_engine import playbook as PB
+    d = (30.0, -20.0, -13.0)
+    monkeypatch.setattr(PB, "ENGINE_STOP_PCT", None)
+    assert PB.thresholds_for("MORNING_PUT:ZONE", d)[1] == -20.0
+    monkeypatch.setattr(PB, "ENGINE_STOP_PCT", -12.0)
+    assert PB.thresholds_for("MORNING_PUT:ZONE", d)[1] == -12.0
+    assert PB.thresholds_for("ITM_GRINDER:CLEAN", d)[1] == -12.0
+    credit = PB.thresholds_for("AFTERNOON_CREDIT:CLEAN", d)[1]
+    assert credit != -12.0                      # credit windows keep their own

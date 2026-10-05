@@ -85,6 +85,25 @@ def _env_bool(var: str, default: bool) -> bool:
     return default if raw is None else raw.strip().lower() == "true"
 
 
+def _env_opt_float(var: str) -> "float | None":
+    raw = (os.getenv(var) or "").strip()
+    try:
+        return float(raw) if raw else None
+    except ValueError:
+        return None
+
+
+# ONE STOP AND ONE TARGET FOR EVERY ENGINE DEBIT WINDOW (operator, 2026-10-04).
+# Blank = each window keeps its own (MORNING_PUT -20/+30, ITM_GRINDER the
+# TRADING_STOP_LOSS_PCT default, ...). Set = it applies to every DEBIT window;
+# credit windows keep theirs, because a credit's return is measured against
+# the credit collected and the same number would mean something else.
+# The take-profit BOOKS outright (nodes.execution_risk_agent), where a
+# window's own target only arms the trail.
+ENGINE_STOP_PCT = _env_opt_float("TRADING_ENGINE_STOP_PCT")
+ENGINE_TAKE_PROFIT_PCT = _env_opt_float("TRADING_ENGINE_TAKE_PROFIT_PCT")
+
+
 # STRICT BAND-ONLY (operator, 2026-10-04). On: only the tiers that need a
 # 20-SMA Bollinger band pierce may open a position -- STRICT, RELAXED, FADE --
 # in every window, overriding each window's own tier list. The other tiers
@@ -1093,11 +1112,16 @@ def thresholds_for(playbook_name: str, defaults: tuple) -> tuple:
         if w.name == base:
             # Fall back per-field: a window only overrides what it actually
             # sets, so the environment governs everything else.
+            stop = w.stop_loss_pct if w.stop_loss_pct is not None else defaults[1]
+            if ENGINE_STOP_PCT is not None and w.placement != CREDIT:
+                stop = ENGINE_STOP_PCT
             return (
                 w.take_profit_pct if w.take_profit_pct is not None else defaults[0],
-                w.stop_loss_pct if w.stop_loss_pct is not None else defaults[1],
+                stop,
                 w.risk_off_pct if w.risk_off_pct is not None else defaults[2],
             )
+    if ENGINE_STOP_PCT is not None:
+        return (defaults[0], ENGINE_STOP_PCT, defaults[2])
     return defaults
 
 

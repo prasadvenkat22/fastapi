@@ -165,6 +165,18 @@ REGISTRY: tuple[Setting, ...] = (
     # --- The engine's own QQQ trades (trading_engine/nodes.py) ---------------
     # Section 228. The 0DTE group below is orphans.py, which manages positions the
     # engine did NOT open; the QQQ bucket's trades exit on these instead.
+    # Stop and profit first (operator, 2026-10-04).
+    Setting("TRADING_ENGINE_STOP_PCT", "QQQ engine stop loss", G_ENGINE, "float", "",
+            "Stop for every engine DEBIT spread, as return on cost. Blank = each window's own "
+            "(MORNING_PUT -20, MORNING_DRIFT TRADING_MORNING_STOP_PCT, others -20). Credit "
+            "windows keep theirs.", "%", -100, 0, allow_blank=True),
+    Setting("TRADING_STOP_CONFIRM_MINUTES", "QQQ engine stop confirmation", G_ENGINE, "float", "5",
+            "Minutes the engine's stop level must hold before it sells. 0 = the first reading "
+            "past the stop.", "min", 0, 30),
+    Setting("TRADING_ENGINE_TAKE_PROFIT_PCT", "QQQ engine take profit", G_ENGINE, "float", "",
+            "Book every engine DEBIT spread outright at this return on cost (at the mid when "
+            "'Work orders from the mid' is on). Blank = the windows' own targets and trails.",
+            "%", 0, 500, allow_blank=True),
     Setting("TRADING_STALL_MINUTES", "Stall window (morning debit)", G_ENGINE, "float", "0",
             "Close the engine's QQQ debit spread once it has gone this long without a new peak "
             "AND sits the give-back below it. 0 disables. Also the orphan stall window when "

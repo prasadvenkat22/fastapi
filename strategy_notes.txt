@@ -14613,3 +14613,11 @@ give-back, Stall minimum gain. Removed "Take profit (legacy)"
 section near line 3732: "there is no orphan take-profit"); the live target is
 TRADING_ORPHAN_TARGET_RETURN_PCT. Live at the time: stop -10% with a 10-min
 confirmation (10-02 sold at -30%), target +70%, stall from +50% / 10 min.
+  QQQ ENGINE STOP / TAKE-PROFIT ON THE SETTINGS PAGE: TRADING_ENGINE_STOP_PCT
+  (blank = each window's own; set = every DEBIT window, credit windows keep
+  theirs), TRADING_STOP_CONFIRM_MINUTES (existing, default 5, now a row), and
+  TRADING_ENGINE_TAKE_PROFIT_PCT (blank = windows' own; set = books every debit
+  spread outright at that return, ride or not, ahead of trail and stall).
+  With TRADING_MID_ORDERS on: entries at the mid only, the take-profit at the
+  mid, stops at the natural. Per-book entries per day and the stock books'
+  stop/target rows (0DTE exits; 3-day and 7-day groups) already exist.

@@ -1,11 +1,43 @@
 # Architecture — what actually runs
 
-Current as of 2026-09-10. Read from the deployed server, not from code
-defaults. Where this file and a docstring disagree, check
+Current as of 2026-10-04 (sections 250-259 summarised just below). Read from
+the deployed server, not from code defaults. Where this file and a docstring disagree, check
 `docker exec app env | grep '^TRADING_'` and believe that.
 
 `strategy_notes.txt` is the decision record — why each number is what it is.
 This file is the map.
+
+---
+
+## State as of 2026-10-04 (sections 250-259)
+
+**No book has a demonstrated edge.** Measured on real data this weekend:
+
+| book | verdict | where |
+|---|---|---|
+| QQQ 0DTE engine | -$70/day replayed (60 sessions, live config incl. week-range guard); entries score ~30th pct against random entries; ~60% of the loss is bid/ask; no config beats flat out of sample | §251, §255 |
+| Stock 0DTE | 7 live fills, -$830; picks 5th-16th pct vs random | §252 |
+| 3-day / 7-day | 3-day gate picks the wrong side; 7-day backtest slightly positive, not significant; screener Pwin/edge do not rank outcomes | §252, §254 |
+| Premium selling (6 weeks of captured chains) | small VRP; at the natural only weekly put spreads survive, in a rising tape; condor not significant | §258 |
+
+Every trade bucket is OFF. The operator trades QQQ 0DTE by hand; the orphan
+ladder manages those exits (stop / profit target / stall rows first in the
+0DTE exits group). **`KILL_SWITCH.txt` stops the whole cycle, including that
+ladder** — it must be off for manual positions to be managed.
+
+Fixed this weekend: the orphan ladder re-adopted the engine's own legs
+(§250); win pause / cooldown / bearish start did not block FADE and REJECT;
+`PB` was used in `nodes.py` without an import (second tranche would crash);
+screener horizon off in both directions (`weekly_pick.session_horizon`, §252
+/ §254); screener IV was the chain median, now at-the-money (§259);
+`run_cycle` poll budget now wall-clock.
+
+New settings (all default to the old behaviour): entries per day per bucket,
+QQQ entry-rule switches and `TRADING_BAND_ONLY`, morning tier lists (new
+`tiers` kind), QQQ engine stop / stop confirmation / take profit, engine stall
+arm and all-windows stall, `TRADING_MORNING_PUT_CLOSE_BY`, and mid-first
+orders (`TRADING_MID_ORDERS`: entries rest at the mid only, profit exits work
+from the mid, stops go at the natural).
 
 ---
 
@@ -27,7 +59,7 @@ This file is the map.
 | every 15 min, 09:00–16:45 | `macro_objective.py` | the macro read from PRICES: crude + 10Y + VIX → one signed score. Stored beside the text read, **gates nothing** |
 | hourly at :12, 09:12–16:12 | `news_enrich.py` | macro leg: RSS → feedparser → GUID dedupe → promo regex → **one Gemini call** → topic clustering → one QQQ macro row. No HuggingFace, nothing installed |
 | hourly at :25, 09:25–16:25 | `news_watch.py` | grades everything published since the previous close, writes `news_verdicts` (current) **and `news_verdict_history` (append-only)**. Window guard 09:20–16:00, `TRADING_NEWS_HOURLY`. Unchanged headlines skip the model via the digest |
-| 10:00 / 12:00 / 14:00 / 15:30 | `capture_chain.py` | option-chain snapshots |
+| 10:05 / 12:05 / 14:05 / 15:30 | `capture_chain.py` | option-chain snapshots, 6 nearest expiries, bid/ask/IV/delta/OI/volume per quoted strike, to `data/qqq-chain-snapshots.jsonl`. 19 symbols since 2026-10-04 (`CHAIN_CAPTURE_SYMBOLS`): QQQ + the whole stock-book list |
 | every 5 min, 09:30–16:00 | `price_alert.py` | level crossings, fires once per crossing. Live rules: `SNDK<1762`, `SNDK>1762`, `SNDK<1700`, `CRWV<95` |
 | every 5 min, 09:30–16:00 | `profit_stall.py` | a winner giving back 5% from peak, after 15 min quiet. Decides on intrinsic |
 | 17:15 (21:15 UTC, both DST offsets land after the close) | `macro_outcome.py` | records the morning's macro read against the session that followed |
@@ -1211,6 +1243,15 @@ Three entry switches, **off by default**, on `/desk/settings` (first group) or
 open positions keep their exits. `TRADING_DTE0_LIVE` / `TRADING_LIVE_ORDERS`
 still exist beneath them as the account-level live switches.
 
+Same group, since 2026-10-04: **entries per day** per bucket
+(`TRADING_MAX_ENTRIES_QQQ_0DTE`, `_STOCK_0DTE`, `_STOCK_W3`, `_STOCK_W7`; 0 =
+no cap; QQQ counts its own `trading_history` rows, the stock books count the
+session's filled opening orders), the QQQ entry-rule switches (CLEAN, ZONE,
+REJECT, RELAXED, FADE), `TRADING_BAND_ONLY` (only STRICT/RELAXED/FADE, in
+every window) and the morning tier lists. Exits per bucket: QQQ engine group
+(engine stop, stop confirmation, take profit), 0DTE exits (stock 0DTE AND
+manual positions share it), 3-day and 7-day groups.
+
 ## The Macro panel and data releases (section 222)
 
 `GET /trading/macro` (admin/trader) returns what the engine's risk gates see:
@@ -1371,7 +1412,12 @@ restart.
 | `news_ev_backtest.py` | re-price an expired `weekly_shadow` cohort and ask whether the news overlay moved EV toward the outcome |
 | `flow.py` | net signed volume and VWAP for any symbol, from Tradier intraday bars |
 | `oi_flow.py` | which strikes gained open interest day over day |
-| `sweep.py` | 0DTE replay. **Read the RUN CONFIG banner** |
+| `sweep.py` | 0DTE replay. **Read the RUN CONFIG banner**. Modes added 2026-10-04: `stallarm`, `bandonly`, `costcheck`, `randomentry`, `cdsearch`, `earlyentry` |
+| `edge_bandscalp.py` | 1-min / 5-min Bollinger mean-reversion scalp, underlying and options layers, target-only exits (§253) |
+| `edge_fills.py` | real fill rates of mid-priced vs natural orders, per source (§253) |
+| `edge_stock0dte.py`, `edge_picks.py`, `edge_shadow.py`, `edge_backtest.py` | stock books against chance, on real fills and closes (§252) |
+| `edge_pwin_weekly.py` | walk-forward calibration of the screener's Pwin and edge (§254) |
+| `edge_vrp.py` | premium selling on the captured chains: straddle VRP and credit-spread rules (§258) |
 
 ---
 

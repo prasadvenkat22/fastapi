@@ -45,8 +45,32 @@ tset set TRADING_BUCKET_STOCK_W3=true         # single-stock 3-day (weekly runs 
 tset set TRADING_BUCKET_STOCK_W7=true         # single-stock 7-day (weekly runs buying 5+ days out, Thu-Fri)
 tset set TRADING_POSITION_BUDGET=450 TRADING_DTE0_MAX_BUDGET=450 TRADING_W3_MAX_BUDGET=450 TRADING_W7_MAX_BUDGET=400   # per-bucket budgets ($)
 # (TRADING_BUCKET_STOCK_WEEKLY and TRADING_WEEKLY_MAX_BUDGET were retired 09-26, section 245)
+# Entries per day, per bucket (0 = no cap)                              -- section 250
+tset set TRADING_MAX_ENTRIES_QQQ_0DTE=2 TRADING_MAX_ENTRIES_STOCK_0DTE=2 TRADING_MAX_ENTRIES_STOCK_W3=1 TRADING_MAX_ENTRIES_STOCK_W7=1
+
+# --- QQQ engine: stop, take profit, entry rules                         -- sections 250, 256 ---
+tset set TRADING_ENGINE_STOP_PCT=-15                  # every engine DEBIT spread (blank = each window's own)
+tset set TRADING_STOP_CONFIRM_MINUTES=1               # engine stop must hold this long (0 = first reading)
+tset set TRADING_ENGINE_TAKE_PROFIT_PCT=25            # book every engine debit spread outright at +25%
+tset unset TRADING_ENGINE_STOP_PCT                    # back to the windows' own stops
+tset set TRADING_BAND_ONLY=true                       # only Bollinger-pierce entries (STRICT/RELAXED/FADE)
+tset set TRADING_CLEAN_ENTRIES=false TRADING_ZONE_ENTRIES=false TRADING_REJECT_ENTRIES=false
+tset set TRADING_MORNING_TIERS=CLEAN TRADING_MORNING_PUT_TIERS=CLEAN,ZONE   # comma list or ALL
+tset set TRADING_STALL_ARM_PCT=10 TRADING_STALL_ALL_WINDOWS=true            # engine stall
+tset set TRADING_MORNING_PUT_CLOSE_BY=11:30
+
+# --- Orders at the mid                                                  -- section 253 ---
+# Entries (QQQ engine and stock books) rest at the mid only and are skipped if
+# unfilled; QQQ profit exits work from the mid; stops always go at the natural.
+tset set TRADING_MID_ORDERS=true
+tset set TRADING_MID_ENTRY_MAX_STEPS=0 TRADING_MID_ENTRY_WAIT_SECONDS=20      # 0 = never chase the ask
+tset set TRADING_MID_STEP=0.02 TRADING_MID_STEP_SECONDS=6 TRADING_MID_MAX_STEPS=3 TRADING_MID_BUDGET_SECONDS=25
 
 # --- 0DTE stop loss (applies to positions expiring TODAY only) ---
+# These rows also manage MANUAL QQQ 0DTE trades (and the stock 0DTE book).
+# They are the first rows of "0DTE exits" on /desk/settings (section 256).
+# TRADING_ORPHAN_TAKE_PROFIT ("legacy") was never read and is gone from the
+# page; the profit target is TRADING_ORPHAN_TARGET_RETURN_PCT.
 tset set TRADING_ORPHAN_STOP_PCT=-20                  # stop at -20% of cost   (range -100..0)
 tset set TRADING_ORPHAN_STOP_CONFIRM_MINUTES=5        # must hold 5 min (0 = first check)
 tset set TRADING_ORPHAN_STOP_RESPECTS_INTRINSIC=false # false = plain stop on price (no break-even hold-off)
@@ -223,6 +247,9 @@ tset set TRADING_BUCKET_QQQ_0DTE=false TRADING_BUCKET_STOCK_0DTE=false TRADING_B
 #   15:45 flatten keep running on everything open. Undo: set them back to true.
 #
 # KILL SWITCH -- halts the ENGINE ENTIRELY, INCLUDING EXITS:
+# (that includes the orphan ladder that stops/books MANUAL trades -- with the
+#  switch on, a hand-placed spread has NO automatic stop or target)
+ls -la /opt/fastapi/KILL_SWITCH.txt           # is it on?
 touch /opt/fastapi/KILL_SWITCH.txt            # on   (or Controls page -> kill switch)
 rm /opt/fastapi/KILL_SWITCH.txt               # off
 #   CAUTION (09-28): run_cycle.py then skips the whole cycle, so open

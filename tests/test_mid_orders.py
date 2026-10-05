@@ -134,3 +134,18 @@ def test_stock_entry_is_refused_when_not_filled_at_mid(monkeypatch):
     r = d._send_entry("MU", "2026-10-09", "call", 100, 105, 1, 3.2)
     assert r["status"] == "refused"
     assert round(seen["mid"], 3) == 3.05 and seen["fallback_natural"] is False
+
+
+def test_multileg_exec_quantity_counted_per_spread_not_per_leg(monkeypatch):
+    """2026-10-05: Tradier reported exec_quantity 2 for a filled 1-lot vertical."""
+    b = FakeBroker(3.30, monkeypatch)
+    orig = b.status
+
+    def legs_summed(oid):
+        st = orig(oid)
+        if st["status"] == "filled":
+            st["exec_quantity"] = 2          # 1 spread x 2 legs
+        return st
+    monkeypatch.setattr(t, "order_status", legs_summed)
+    r = _work(b, True, False)
+    assert r["filled"] is True and r["filled_qty"] == 1

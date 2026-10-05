@@ -426,7 +426,13 @@ def work_vertical(underlying: str, expiry: "date | str", call_put: str,
             except Exception:
                 st = {}
         status = str(st.get("status", "")).lower()
-        done = int(float(st.get("exec_quantity") or 0))
+        # EXEC_QUANTITY ON A MULTILEG ORDER IS SUMMED OVER THE LEGS: a filled
+        # 1-lot vertical reports 2. Taken at face value it doubled the engine's
+        # position row on 2026-10-05 (756/754 x1 booked as x2), and every close
+        # for 2 was rejected as "more than your current long position".
+        raw_done = int(float(st.get("exec_quantity") or 0))
+        done = raw_done // 2 if raw_done > quantity else raw_done
+        done = min(max(done, 0), quantity)
         if status in _FILLED or done > 0:
             fill = abs(float(st.get("avg_fill_price") or px))
             logger.info("Mid order %s %s/%s x%d filled %d at %.2f on rung %d of %s (%.1fs).",

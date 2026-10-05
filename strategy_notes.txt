@@ -14749,3 +14749,14 @@ the VIX halt does. Live at the time: engine stop -20% (operator raised from
 -10%), stop confirmation 0, take profit +40%, mid orders on, entries/day QQQ 7
 and stocks 5, trades per run unset (cron 4/3/3). Mid orders were OFF for the
 10:01 trade (bought the ask, sold near the bid).
+
+
+265. BUG: MULTILEG FILL QUANTITY DOUBLED THE POSITION ROW  (2026-10-05)
+
+The 10:58 ET band-touch put (756/754, 1 contract, entered at the mid) was
+recorded as x2: Tradier's exec_quantity on a multileg order is summed over the
+legs, and work_vertical took it as the spread count. Every take-profit close
+for 2 was rejected ("Sell order is for more shares than your current long
+position") from 11:06 ET while the trade sat at +14..+17%. Fixed:
+filled_qty = exec_quantity // 2 when it exceeds the order quantity, capped at
+the quantity (test_mid_orders). Live row corrected to x1 by hand.

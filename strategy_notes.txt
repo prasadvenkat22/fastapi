@@ -14648,3 +14648,11 @@ names), settled at real 16:00 closes. Halves split 09-14.
   mostly the rising market; the direction-neutral condor is not significant.
   IV-RV20 filter: unreliable. Verdict: a small premium, not demonstrated at
   the natural independent of direction. Re-run as the capture grows.
+
+
+259. SCREENER IV IS NOW AT-THE-MONEY  (2026-10-04)
+
+weekly_pick.evaluate()'s `iv` (the board's IV and IV/RV) was the median IV of
+every quoted strike on the side, wings included, which reads high under skew.
+Now atm_iv_at(): linear between the two quoted strikes around spot. Display
+only -- no ranking input reads it (Pwin is Phist; Pimp prices per leg).

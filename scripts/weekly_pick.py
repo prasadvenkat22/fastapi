@@ -292,6 +292,28 @@ def monte_carlo_terminal(spot: float, atr: float, days: float, seed: int = 7):
     return spot * np.exp(steps.sum(axis=1))
 
 
+def atm_iv_at(spot: float, iv_by_strike: dict) -> float:
+    """At-the-money IV: linear between the two quoted strikes around spot.
+
+    Section 259. This was the MEDIAN over every quoted strike, wings included,
+    which reads high on any name with skew -- the board's IV and IV/RV
+    described the whole chain, not the money.
+    """
+    pts = sorted((k, v) for k, v in iv_by_strike.items() if v and v > 0)
+    if not pts:
+        return float("nan")
+    below = [p for p in pts if p[0] <= spot]
+    above = [p for p in pts if p[0] >= spot]
+    if not below:
+        return float(above[0][1])
+    if not above:
+        return float(below[-1][1])
+    (k0, v0), (k1, v1) = below[-1], above[0]
+    if k1 == k0:
+        return float(v0)
+    return float(v0 + (v1 - v0) * (spot - k0) / (k1 - k0))
+
+
 def usable(row):
     b, a = float(row["bid"]), float(row["ask"])
     if b <= 0 or a <= 0 or float(row.get("openInterest") or 0) < MIN_OI:
@@ -429,8 +451,7 @@ def evaluate(sym, side, structure: str = "debit", expiry: str = ""):
         if u:
             q[float(r["strike"])] = u
     ks = sorted(q)
-    ivs = [q[k][3] for k in ks if q[k][3] > 0]
-    atm_iv = float(np.median(ivs)) if ivs else float("nan")
+    atm_iv = atm_iv_at(spot, {k: q[k][3] for k in ks})
     out = []
     for lo in ks:
         for hi in ks:

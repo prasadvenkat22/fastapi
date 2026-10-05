@@ -42,3 +42,10 @@ def test_monte_carlo_scales_with_a_fractional_horizon():
     half = wp.monte_carlo_terminal(100.0, 1.596, 0.25)
     sd = lambda x: float(np.std(np.log(x / 100.0)))
     assert abs(sd(half) / sd(full) - 0.5) < 0.03
+
+
+def test_atm_iv_interpolates_at_the_money_not_the_wings():
+    ivs = {80: 0.60, 95: 0.32, 100: 0.30, 105: 0.29, 120: 0.45}
+    assert abs(wp.atm_iv_at(102.5, ivs) - 0.295) < 1e-9
+    assert wp.atm_iv_at(100, ivs) == 0.30
+    assert wp.atm_iv_at(130, ivs) == 0.45          # beyond the quotes: nearest

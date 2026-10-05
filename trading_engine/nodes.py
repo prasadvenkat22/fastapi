@@ -645,6 +645,42 @@ STALL_ARM_PCT = float(os.getenv("TRADING_STALL_ARM_PCT", "0") or 0)
 STALL_ALL_WINDOWS = os.getenv("TRADING_STALL_ALL_WINDOWS", "false").lower() == "true"
 
 
+BAND_TOUCH_PERIOD = int(float(os.getenv("TRADING_BAND_TOUCH_PERIOD", "20") or 20))
+BAND_TOUCH_SD = float(os.getenv("TRADING_BAND_TOUCH_SD", "2.0") or 2.0)
+
+
+def _band_touch() -> "dict | None":
+    """The 1-minute band and the live price, for TRADING_BAND_TOUCH.
+
+    Band: BAND_TOUCH_PERIOD closed 1-minute bars, mean +/- BAND_TOUCH_SD sample
+    standard deviations (the same construction as the 5-minute band). Price:
+    a live Tradier quote, falling back to the newest 1-minute bar. Returns
+    {spot, mid, upper, lower, touch} with touch 'LOWER', 'UPPER' or None, or
+    None when the data is missing -- which means no entry and no band exit.
+    """
+    try:
+        bars = fetch_qqq_bars(period="1d", interval="1m")
+        close = bars["Close"].astype(float)
+        if len(close) < BAND_TOUCH_PERIOD:
+            return None
+        last = close.iloc[-BAND_TOUCH_PERIOD:]
+        mid, sd = float(last.mean()), float(last.std())
+        spot = None
+        try:
+            from .data_feed import _tradier_quote
+            q = _tradier_quote("QQQ") or {}
+            spot = float(q.get("last") or 0) or None
+        except Exception:
+            spot = None
+        spot = spot or float(fetch_qqq_spot())
+        upper, lower = mid + BAND_TOUCH_SD * sd, mid - BAND_TOUCH_SD * sd
+        touch = "LOWER" if spot <= lower else ("UPPER" if spot >= upper else None)
+        return {"spot": spot, "mid": mid, "upper": upper, "lower": lower, "touch": touch}
+    except Exception:
+        logger.exception("Band touch: could not read the 1-minute band.")
+        return None
+
+
 def _stalled_peak(position, peak_return: float, return_pct: float) -> "float | None":
     """Minutes since the peak if the stall should book now, else None."""
     if STALL_MINUTES <= 0 or STALL_GIVEBACK_PCT <= 0:
@@ -2454,9 +2490,33 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
         past_hand_over = hand_over is not None and datetime.now(NY).time() >= hand_over
 
         # Rule Z: same-day expiration hard close — overrides P&L entirely.
+        touch_pos = (getattr(position, "playbook", "") or "").startswith("BAND_TOUCH")
+        touch_band = _band_touch() if (touch_pos and not force_close) else None
+        touch_target = bool(touch_band) and (
+            touch_band["spot"] >= touch_band["mid"]
+            if position.strategy == BULL_CALL_SPREAD else
+            touch_band["spot"] <= touch_band["mid"])
         if force_close:
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "FORCE_CLOSE"
+        # BAND TOUCH positions have exactly two exits besides the force close:
+        # QQQ back at the 1-minute 20-SMA, or the stop. No trail, stall,
+        # ratchet or handoff (section 260).
+        elif touch_pos and touch_target:
+            logger.info("Band touch: QQQ %.2f is back at the 20-SMA %.2f — booking %s at %+.1f%%.",
+                        touch_band["spot"], touch_band["mid"], position.strategy, return_pct)
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
+        elif (touch_pos and return_pct <= stop_pct
+              and _stop_confirmed(position.underlying, return_pct, stop_pct)):
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "STOP_LOSS"
+        elif touch_pos:
+            action = "HOLD"
+            logger.info("Band touch: holding %s at %+.1f%% (stop %+.0f%%), QQQ %s vs 20-SMA %s.",
+                        position.strategy, return_pct, stop_pct,
+                        f"{touch_band['spot']:.2f}" if touch_band else "?",
+                        f"{touch_band['mid']:.2f}" if touch_band else "?")
         elif past_hand_over:
             logger.info(
                 "Handoff: closing %s at %+.1f%% so the next window can trade.",
@@ -2789,8 +2849,10 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     # refused by an hour that has nothing to do with short premium. The
     # window's own end time is what bounds a credit entry.
     entry_window = window_for()
+    # BAND_TOUCH is bounded by its own end time too (TRADING_BAND_TOUCH_END).
     cutoff_blocks_entry = past_cutoff and not (
-        entry_window is not None and entry_window.placement == CREDIT
+        entry_window is not None
+        and (entry_window.placement == CREDIT or entry_window.name == "BAND_TOUCH")
     )
 
     if broker.get_open_position() is None and may_reenter and not cutoff_blocks_entry and not in_warmup:
@@ -3162,6 +3224,30 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             w = entry_window
             if w is not None and w.placement == CREDIT and sma in ("ABOVE_SMA", "BELOW_SMA"):
                 tier, bullish = "THETA", sma == "ABOVE_SMA"
+
+        # STRICT BAND TOUCH MODE (section 260): the touch is the only entry.
+        # Everything the ladder and its gates decided above is discarded; the
+        # account-level guards still apply (macro halt, win pause, entry cap,
+        # the loss cooldown on the side that just lost, the bucket switch, the
+        # daily-loss and streak halts below).
+        if PB.BAND_TOUCH_MODE:
+            tier, bullish = None, False
+            _tb = _band_touch()
+            if _tb and _tb["touch"] and not halt:
+                _bull = _tb["touch"] == "LOWER"
+                _cool = blocked_direction()
+                if win_pause_active() or entry_cap_reached():
+                    pass
+                elif _cool == ("bullish" if _bull else "bearish"):
+                    pass
+                else:
+                    tier, bullish = "TOUCH", _bull
+            if _tb:
+                logger.info("Band touch read: QQQ %.2f, 1-min band %.2f / %.2f / %.2f — %s.",
+                            _tb["spot"], _tb["lower"], _tb["mid"], _tb["upper"],
+                            f"{_tb['touch']} touch -> {'call' if bullish else 'put'} spread"
+                            if tier else (f"{_tb['touch']} touch refused" if _tb["touch"]
+                                          else "inside the band"))
 
         # ONE LINE SAYING WHAT THE ENTRY LOGIC SAW AND DECIDED.
         #

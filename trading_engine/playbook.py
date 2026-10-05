@@ -110,6 +110,7 @@ ENGINE_TAKE_PROFIT_PCT = _env_opt_float("TRADING_ENGINE_TAKE_PROFIT_PCT")
 # are zeroed in nodes.execution_risk_agent before the ladder picks one.
 BAND_TIERS = frozenset({"STRICT", "RELAXED", "FADE"})
 BAND_ONLY = _env_bool("TRADING_BAND_ONLY", False)
+BAND_TOUCH_MODE = _env_bool("TRADING_BAND_TOUCH", False)
 
 
 # How the long leg sits relative to the ATM short strike.
@@ -402,6 +403,8 @@ class PlaybookWindow:
     note: str = ""
 
     def allows_tier(self, tier: str) -> bool:
+        if self.name == "BAND_TOUCH":
+            return tier == "TOUCH"
         if BAND_ONLY:
             return tier in BAND_TIERS
         return self.entry_tiers is None or tier in self.entry_tiers
@@ -936,6 +939,23 @@ WINDOWS = (
              "rather than 14:00 because a credit position WANTS less time left, "
              "which is exactly why the debit cutoff does not apply to it.",
     ),
+    PlaybookWindow(
+        # BAND TOUCH (operator, 2026-10-04, section 260). Active only with
+        # TRADING_BAND_TOUCH=true, and then the ONLY window (window_for and
+        # window_for_direction return it and nothing else). The entry signal is
+        # nodes._band_touch(): live QQQ at/below the lower or at/above the upper
+        # 20-period 2-SD band on 1-minute bars. Calls at the lower band, puts at
+        # the upper. Exit at the 20-SMA, or the stop (TRADING_ENGINE_STOP_PCT if
+        # set, else this window's). Kept last in WINDOWS so the ordinary clock
+        # lookup never reaches it while the mode is off.
+        name="BAND_TOUCH",
+        start=_env_time("TRADING_BAND_TOUCH_START", "09:45"),
+        end=_env_time("TRADING_BAND_TOUCH_END", "15:00"), placement=ITM,
+        width=_env_float("TRADING_BAND_TOUCH_WIDTH", 4.0),
+        take_profit_pct=None, stop_loss_pct=-20.0,
+        entry_tiers=frozenset({"TOUCH"}),
+        note="Fade a 1-minute Bollinger band touch back to the 20-SMA.",
+    ),
 )
 
 
@@ -982,10 +1002,17 @@ def window_for(now: Optional[datetime] = None) -> Optional[PlaybookWindow]:
     """
     now = now or datetime.now(NY)
     t = now.time()
+    if BAND_TOUCH_MODE:
+        return _band_touch_window(t)
     for w in WINDOWS:
         if w.start <= t < w.end:
             return w if w.name in ENABLED_WINDOWS else None
     return None
+
+
+def _band_touch_window(t) -> Optional[PlaybookWindow]:
+    w = window_by_playbook("BAND_TOUCH")
+    return w if (w is not None and w.start <= t < w.end) else None
 
 
 def window_for_direction(bullish: bool, now: Optional[datetime] = None) -> Optional[PlaybookWindow]:
@@ -1000,6 +1027,8 @@ def window_for_direction(bullish: bool, now: Optional[datetime] = None) -> Optio
     """
     now = now or datetime.now(NY)
     t = now.time()
+    if BAND_TOUCH_MODE:
+        return _band_touch_window(t)
     fallback = None
     for w in WINDOWS:
         if not (w.start <= t < w.end) or w.name not in ENABLED_WINDOWS:

@@ -96,6 +96,20 @@ REGISTRY: tuple[Setting, ...] = (
             "power. One stop-out can exceed the daily-loss limit and halt the day."),
     Setting("TRADING_MAX_ENTRIES_QQQ_0DTE", "QQQ 0DTE: entries per day", G_BUCKETS, "int", "0",
             "Most entries the engine makes in one session. 0 = no cap.", "", 0, 50),
+    Setting("TRADING_BAND_TOUCH", "QQQ: band TOUCH entries only (1-minute)", G_BUCKETS, "bool", "false",
+            "On: the engine's ONLY entry is QQQ touching its 1-minute 20-period 2-SD Bollinger band: "
+            "at/below the lower band buy a call debit spread, at/above the upper band a put debit "
+            "spread. Exit at the 20-SMA or the stop (QQQ engine stop loss, else -20%). Every other "
+            "entry rule and gate is off; the bucket switch, entry cap, daily-loss limit and cooldowns "
+            "still apply."),
+    Setting("TRADING_BAND_TOUCH_START", "Band touch: from", G_BUCKETS, "time", "09:45", "First entry time (ET)."),
+    Setting("TRADING_BAND_TOUCH_END", "Band touch: until", G_BUCKETS, "time", "15:00", "Last entry time (ET). Entries after 14:00 are allowed only here."),
+    Setting("TRADING_BAND_TOUCH_WIDTH", "Band touch: spread width", G_BUCKETS, "float", "4",
+            "Strike width of the in-the-money debit spread.", "$", 1, 10),
+    Setting("TRADING_BAND_TOUCH_SD", "Band touch: band width (SD)", G_BUCKETS, "float", "2",
+            "Standard deviations from the 20-SMA.", "sd", 1, 4),
+    Setting("TRADING_BAND_TOUCH_PERIOD", "Band touch: SMA period", G_BUCKETS, "int", "20",
+            "Number of 1-minute bars in the moving average.", "bars", 5, 100),
     Setting("TRADING_BAND_ONLY", "QQQ: strictly Bollinger-band entries", G_BUCKETS, "bool", "false",
             "On: the engine enters ONLY on a 20-SMA Bollinger band pierce (STRICT, RELAXED, FADE), in "
             "every window, overriding the window tier lists below. CLEAN, ZONE, REJECT, MOMENTUM and "
@@ -207,8 +221,14 @@ REGISTRY: tuple[Setting, ...] = (
             "How much each re-price moves toward the bid/ask, per spread.", "$", 0.01, 0.50),
     Setting("TRADING_MID_STEP_SECONDS", "Mid order: wait per step", G_ENGINE, "float", "6",
             "Seconds each price is left working before it is cancelled and re-priced.", "s", 2, 20),
-    Setting("TRADING_MID_MAX_STEPS", "Mid order: re-prices", G_ENGINE, "int", "3",
-            "Re-prices after the first post at the mid.", "", 0, 10),
+    Setting("TRADING_MID_MAX_STEPS", "Mid order: exit re-prices", G_ENGINE, "int", "0",
+            "Exit re-prices toward the bid/ask after the mid. 0 = the mid only.", "", 0, 10),
+    Setting("TRADING_MID_STOPS", "Mid order: stops at the mid too", G_ENGINE, "bool", "true",
+            "Stop-loss exits are posted at the mid like profit exits. An unfilled stop is re-posted "
+            "at the new mid every cycle until it fills. The 15:45 force close always sells at the bid/ask."),
+    Setting("TRADING_MID_EXIT_FALLBACK", "Mid order: exits may cross to the bid/ask", G_ENGINE, "bool", "false",
+            "On: an exit that does not fill at the mid ends with an order at the bid/ask. Off: it "
+            "waits and retries at the next cycle's mid."),
     Setting("TRADING_MID_BUDGET_SECONDS", "Mid order: time limit", G_ENGINE, "float", "25",
             "Wall-clock limit for the whole ladder. Keep well under 60: the next cycle starts a "
             "minute later.", "s", 5, 40),

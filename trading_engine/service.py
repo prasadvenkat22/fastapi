@@ -102,9 +102,9 @@ def _broker_holds(underlying: str, long_strike, short_strike) -> bool:
 
 
 
-# Exit reasons that may be WORKED from the mid (section 253). Everything else --
-# stops, the force close, risk-off, breakeven, strike approach -- sells at the
-# natural immediately: a protective exit must never wait on price improvement.
+# Exit reasons that may be WORKED from the mid (section 253). STOP_LOSS joins
+# them when TRADING_MID_STOPS is on (section 260, the operator's call). The
+# force close, risk-off, breakeven and strike approach sell at the natural.
 MID_EXIT_REASONS = {"TAKE_PROFIT", "RATCHET", "STALL", "TRAIL_STOP", "HANDOFF"}
 
 
@@ -180,7 +180,7 @@ def _route_order(position_like, quantity: int, opening: bool, limit_price: float
                     short_strike=position_like.short_strike,
                     quantity=quantity, opening=opening, mid=pq[0], natural=pq[1],
                     is_credit=is_credit(position_like.strategy),
-                    fallback_natural=not opening,
+                    fallback_natural=(not opening) and tradier_orders.MID_EXIT_FALLBACK,
                 )
                 logger.info("Order [%s] %s worked from mid %.3f (natural %.3f): %s", label,
                             "OPEN" if opening else "CLOSE", pq[0], pq[1], result)
@@ -584,7 +584,9 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         # A submitted close is not a completed one -- see _close_rejected.
         # On an explicit refusal the position row STAYS, nothing is recorded,
         # and the next cycle sees a live position again and can act on it.
-        _worked_close = final_state.get("exit_reason") in MID_EXIT_REASONS
+        _xr = final_state.get("exit_reason")
+        _worked_close = (_xr in MID_EXIT_REASONS
+                         or (_xr == "STOP_LOSS" and tradier_orders.MID_STOPS))
         order_result = _route_order(
             open_row, open_row.quantity, opening=False,
             limit_price=exit_value, label=open_row.playbook or open_row.strategy,

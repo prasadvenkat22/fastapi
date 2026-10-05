@@ -325,7 +325,13 @@ def submit_vertical(underlying: str, expiry: "date | str", call_put: str,
 MID_ORDERS = os.getenv("TRADING_MID_ORDERS", "false").lower() == "true"
 MID_STEP = float(os.getenv("TRADING_MID_STEP", "0.02"))           # $ per step toward the natural
 MID_STEP_SECONDS = float(os.getenv("TRADING_MID_STEP_SECONDS", "6"))
-MID_MAX_STEPS = int(os.getenv("TRADING_MID_MAX_STEPS", "3"))      # re-prices after the first post
+MID_MAX_STEPS = int(os.getenv("TRADING_MID_MAX_STEPS", "0"))      # exit re-prices after the mid; 0 = mid only
+# STOPS AT THE MID TOO, and exits never cross to the natural (operator,
+# 2026-10-04, section 260). An exit that does not fill at the mid is refused,
+# the position row stays, and the next cycle re-posts at the NEW mid. The
+# 15:45 force close is the one exit that still goes at the natural.
+MID_STOPS = os.getenv("TRADING_MID_STOPS", "true").lower() == "true"
+MID_EXIT_FALLBACK = os.getenv("TRADING_MID_EXIT_FALLBACK", "false").lower() == "true"
 MID_BUDGET_SECONDS = float(os.getenv("TRADING_MID_BUDGET_SECONDS", "25"))  # whole ladder, wall clock
 # ENTRIES AT THE MID ONLY (operator, 2026-10-04): an opening order is posted at
 # the mid and left there; 0 re-prices means it is never chased toward the ask.

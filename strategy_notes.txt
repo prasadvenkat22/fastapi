@@ -14656,3 +14656,29 @@ weekly_pick.evaluate()'s `iv` (the board's IV and IV/RV) was the median IV of
 every quoted strike on the side, wings included, which reads high under skew.
 Now atm_iv_at(): linear between the two quoted strikes around spot. Display
 only -- no ranking input reads it (Pwin is Phist; Pimp prices per leg).
+
+
+260. STRICT 1-MINUTE BAND TOUCH MODE  (2026-10-05)
+
+Operator: 10-02's second trade (CLEAN) did not use the bands; trade only on
+the band, the moment it is touched. TRADING_BAND_TOUCH (off):
+  ENTRY: every cycle, live QQQ (Tradier quote, else newest 1-min bar) against
+  a 20-period (TRADING_BAND_TOUCH_PERIOD) 2-SD (TRADING_BAND_TOUCH_SD) band on
+  closed 1-minute bars. At/below the lower band -> call debit spread;
+  at/above the upper band -> put debit spread; ITM, 4 wide
+  (TRADING_BAND_TOUCH_WIDTH), 09:45-15:00 (START/END; the 14:00 cutoff does
+  not apply). The BAND_TOUCH window is then the only window; every other tier
+  and gate (news, week range, day range, gap, ...) is bypassed. Still applied:
+  bucket switch, macro halt, win pause, entries-per-day cap, loss cooldown on
+  the side that lost, daily-loss and streak halts.
+  EXIT: QQQ back at the 1-minute 20-SMA -> TAKE_PROFIT; the stop
+  (TRADING_ENGINE_STOP_PCT, else -20%) with TRADING_STOP_CONFIRM_MINUTES; the
+  15:45 force close. No trail, stall, ratchet or handoff.
+  ORDERS (with TRADING_MID_ORDERS): entries rest at the mid only; exits,
+  stops included (TRADING_MID_STOPS, default on), post at the mid and do not
+  cross to the natural (TRADING_MID_EXIT_FALLBACK off, MID_MAX_STEPS 0): an
+  unfilled exit is re-posted at the next cycle's mid. Force close: natural.
+  EVIDENCE: §253 -- 1-min touch ("beyond") arms were negative at bid/ask in
+  both halves; positive only at mid fills (mid+1SD target +51/+28 $/day), 20
+  sessions. This exact rule (target = 20-SMA with a -20% stop) was not
+  replayed. Unproven; run at 1 contract.

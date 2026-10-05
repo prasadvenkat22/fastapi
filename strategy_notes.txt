@@ -14779,3 +14779,14 @@ unchanged): the 20-SMA exit books only at or above it; below, the trade keeps
 its take profit, stop and 15:45 force close. Also seen: the engine's running
 equity (budget + all-time engine P&L) read -$18 at 12:25; it still entered
 because TRADING_MIN_ONE_CONTRACT sizes one contract that fits.
+  12:25 PUT LOSS AND THE BAND-WIDTH QUESTION: 756/754 put on an UPPER touch with
+  the band $0.48 from the 20-SMA; QQQ walked the band 753.7 -> 754.4, stop
+  (operator set -15%, confirmation 0) at 12:51, sold at the mid 1.17: -$26.
+  Band width (touched band - 20-SMA) at each of the day's trades: 0.94 (+8),
+  0.51 (+21), 0.23 (+13), 0.29 ($0), 0.48 (-26). A minimum width of $1.00 would
+  have taken no trade (vs +$16), $0.75 only the first (+$8), $0.50 two (+$29).
+  Five trades fit any number; NOT added -- decide on a week or two of logged
+  touches. Min profit set to 10% live (TRADING_BAND_TOUCH_MIN_PROFIT_PCT=10,
+  deployed 0bb332d19, 12:59 ET). It cannot stop a trade that never reaches the
+  20-SMA; it can keep a winner open, which (one position at a time) may block a
+  later entry. Day: +8 +21 +13 0 -26 = +$16.

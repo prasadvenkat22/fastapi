@@ -59,6 +59,8 @@ tset set TRADING_ENGINE_STOP_PCT=-20 TRADING_STOP_CONFIRM_MINUTES=1 TRADING_ENGI
 tset set TRADING_BOLLINGER_GATE_DTE0=true TRADING_BOLLINGER_GATE_W3=true TRADING_BOLLINGER_GATE_W7=true
 # Trades per run (the Entry schedule panel's column; blank = the cron's 4/3/3):
 tset set TRADING_MAX_TRADES_STOCK_0DTE=2 TRADING_MAX_TRADES_STOCK_W3=2 TRADING_MAX_TRADES_STOCK_W7=2
+# QQQ: the 20-SMA exit books only once the spread is up this much (0 = any):
+tset set TRADING_BAND_TOUCH_MIN_PROFIT_PCT=10
 # QQQ waits after a WIN before the next entry (.env.production sets 30 min):
 tset set TRADING_WIN_COOLDOWN_MINUTES=0
 # All books:

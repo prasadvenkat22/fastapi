@@ -179,6 +179,17 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_STOP_CONFIRM_MINUTES", "QQQ engine stop confirmation", G_ENGINE, "float", "5",
             "Minutes the engine's stop level must hold before it sells. 0 = the first reading "
             "past the stop.", "min", 0, 30),
+    Setting("TRADING_BAND_TOUCH_MACRO_GATE", "Macro gate", G_ENGINE, "bool", "false",
+            "On: a call needs the 10-year yield not up more than the yield limit since the open, crude "
+            "not up more than the oil limit, and the QQQ macro news not bearish; a put needs the mirror "
+            "(not falling that much, news not bullish)."),
+    Setting("TRADING_BAND_TOUCH_MACRO_YIELD_BPS", "Macro gate: yield limit", G_ENGINE, "float", "2",
+            "Basis points the 10-year may move against the trade since the open.", "bp", 0, 50),
+    Setting("TRADING_BAND_TOUCH_MACRO_OIL_PCT", "Macro gate: oil limit", G_ENGINE, "float", "0.5",
+            "Percent crude may move against the trade since the open.", "%", 0, 10),
+    Setting("TRADING_BAND_TOUCH_MACD_CHECK", "MACD check", G_ENGINE, "bool", "false",
+            "On: a call needs the 1-minute MACD histogram rising (the drop is losing speed), a put "
+            "needs it falling."),
     Setting("TRADING_BAND_TOUCH_TREND_CHECK", "Trend check", G_ENGINE, "bool", "false",
             "On: no put spread while the 1-minute 20-SMA is rising, no call spread while it is "
             "falling (rise/fall = more than the trend size below over the trend window). Stops "
@@ -507,9 +518,9 @@ _EXTRA: dict[str, tuple] = {   # key -> (book, order, label)
     "TRADING_BAND_TOUCH_END": ("qqq", 43, "Bollinger band: until"),
     "TRADING_BAND_TOUCH_WIDTH": ("qqq", 44, "Spread width"),
     "TRADING_BAND_TOUCH_ATM": ("qqq", 45, "Strike placement: at the money"),
-    "TRADING_BAND_TOUCH_TREND_CHECK": ("qqq", 46, "Trend check"),
-    "TRADING_BAND_TOUCH_TREND_BARS": ("qqq", 47, "Trend check: window"),
-    "TRADING_BAND_TOUCH_TREND_MIN": ("qqq", 48, "Trend check: size"),
+    "TRADING_BAND_TOUCH_MACRO_GATE": ("qqq", 46, "Macro gate"),
+    "TRADING_BAND_TOUCH_TREND_CHECK": ("qqq", 47, "Trend check"),
+    "TRADING_BAND_TOUCH_MACD_CHECK": ("qqq", 48, "MACD check"),
     "TRADING_BAND_TOUCH_MIN_PROFIT_PCT": ("qqq", 71, "20-SMA exit: minimum profit"),
     "TRADING_MAX_TRADES_STOCK_0DTE": ("s0", 31, "Trades per run"),
     "TRADING_MAX_TRADES_STOCK_W3": ("w3", 31, "Trades per run"),

@@ -14818,3 +14818,24 @@ on the logged refusals before trusting it.
   deployed but not yet switched on. Live QQQ card at 14:06: width 2, ATM on,
   min profit at the 20-SMA 15%, take profit 30%, stop -10%, confirmation 0,
   entries/day 15, win cooldown 5 min, loss cooldown 10 min, start 09:40.
+
+
+269. THE OPERATOR'S QQQ CHECKLIST: MACRO GATE + TREND + BAND + MACD  (2026-10-06)
+
+Operator's entry logic for a call: yields not rising, oil not rising, no bad
+macro news -> trend check -> lower-band touch -> MACD turning up; puts the
+mirror. Added (all off by default, each logs its refusal as "Band touch: ..."):
+  TRADING_BAND_TOUCH_MACRO_GATE (+ _MACRO_YIELD_BPS 2, _MACRO_OIL_PCT 0.5):
+    call refused if 10Y up > 2bp vs the open, crude up > 0.5%, or QQQ news
+    BEARISH/VERY_BEARISH; put refused on the mirror (down > 2bp, down > 0.5%,
+    news bullish). Reads tnx_change_bps / oil_change_pct from
+    market_signals_agent and news_verdicts (QQQ, today). Missing data does not
+    block.
+  TRADING_BAND_TOUCH_MACD_CHECK: 1-minute MACD(12,26,9) histogram rising for a
+    call, falling for a put.
+Order of checks at a touch: halt, win pause / entry cap, loss cooldown, macro
+gate, trend check, MACD check. QQQ card shows the three switches (macro gate,
+trend check, MACD check); thresholds and the trend window/size are Advanced.
+CAUTION recorded with it: earlier measurements found macro gates carried no
+reliable direction (sections 209, 251), and on 10-05 macro read BAD all day
+while QQQ rose and calls won. Judge each switch on its logged refusals.

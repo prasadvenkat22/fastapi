@@ -135,6 +135,18 @@ BAND_TOUCH_SD = float(os.getenv("TRADING_BAND_TOUCH_SD", "2.0") or 2.0)
 BAND_TOUCH_TREND_CHECK = os.getenv("TRADING_BAND_TOUCH_TREND_CHECK", "false").lower() == "true"
 BAND_TOUCH_TREND_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_TREND_BARS", "15") or 15))
 BAND_TOUCH_TREND_MIN = float(os.getenv("TRADING_BAND_TOUCH_TREND_MIN", "0.25") or 0.25)
+# MACRO GATE and MACD CHECK (section 269, operator's checklist). Calls need the
+# 10Y not up more than MACRO_YIELD_BPS vs the open, crude not up more than
+# MACRO_OIL_PCT, and the QQQ macro news not bearish; puts the mirror (not
+# falling that much, news not bullish). MACD: the 1-minute histogram (12/26/9)
+# rising for a call (the drop is losing speed), falling for a put. Both off.
+BAND_TOUCH_MACRO_GATE = os.getenv("TRADING_BAND_TOUCH_MACRO_GATE", "false").lower() == "true"
+BAND_TOUCH_MACRO_YIELD_BPS = float(os.getenv("TRADING_BAND_TOUCH_MACRO_YIELD_BPS", "2") or 2)
+BAND_TOUCH_MACRO_OIL_PCT = float(os.getenv("TRADING_BAND_TOUCH_MACRO_OIL_PCT", "0.5") or 0.5)
+BAND_TOUCH_MACD_CHECK = os.getenv("TRADING_BAND_TOUCH_MACD_CHECK", "false").lower() == "true"
+_NEWS_BEARISH = {"BEARISH", "VERY_BEARISH"}
+_NEWS_BULLISH = {"BULLISH", "VERY_BULLISH"}
+_news_cache: dict = {}
 # The 20-SMA exit only books once the spread is up at least this much (section
 # 266). 10-05 12:22 ET: QQQ reached the 20-SMA in a $0.48-wide band and the
 # exit sold a 751/753 call spread at +0.3%, $0. Below the floor the position
@@ -173,8 +185,13 @@ def _band_touch() -> "dict | None":
         if BAND_TOUCH_TREND_BARS > 0 and len(close) >= n:
             then = float(close.iloc[-n:-BAND_TOUCH_TREND_BARS].mean())
             slope = mid - then                    # $ change of the 20-SMA
+        hist = hist_prev = None
+        if len(close) >= 35:
+            macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+            h = macd - macd.ewm(span=9, adjust=False).mean()
+            hist, hist_prev = float(h.iloc[-1]), float(h.iloc[-2])
         return {"spot": spot, "mid": mid, "upper": upper, "lower": lower, "touch": touch,
-                "slope": slope}
+                "slope": slope, "macd_hist": hist, "macd_hist_prev": hist_prev}
     except Exception:
         logger.exception("Band touch: could not read the 1-minute band.")
         return None
@@ -987,6 +1004,66 @@ def is_past_force_close(hour: int = None, minute: int = None) -> bool:
     return (now_est.hour, now_est.minute) >= (hour, minute)
 
 
+def _qqq_news_verdict() -> "str | None":
+    """Today's QQQ macro news verdict from news_verdicts (cached a minute)."""
+    import time as _t
+    now = _t.time()
+    if _news_cache.get("at", 0) > now - 60:
+        return _news_cache.get("v")
+    v = None
+    try:
+        import psycopg2
+        from .symbol_news import _dsn
+        with psycopg2.connect(_dsn()) as conn, conn.cursor() as cur:
+            cur.execute("SELECT verdict FROM news_verdicts WHERE symbol='QQQ' "
+                        "AND trading_day=%s", (datetime.now(NY).date(),))
+            row = cur.fetchone()
+            v = (row[0] or "").upper() if row else None
+    except Exception:
+        logger.warning("QQQ news verdict unreadable -- the macro gate ignores news.", exc_info=True)
+    _news_cache.update(at=now, v=v)
+    return v
+
+
+def macro_refusal(bullish: bool, state: dict) -> "str | None":
+    """Why the macro gate refuses this touch, or None (section 269).
+
+    Calls: 10Y not up > MACRO_YIELD_BPS, crude not up > MACRO_OIL_PCT, news not
+    bearish. Puts: the mirror. A missing reading does not block."""
+    if not BAND_TOUCH_MACRO_GATE:
+        return None
+    bps, oil = state.get("tnx_change_bps"), state.get("oil_change_pct")
+    news = _qqq_news_verdict()
+    y, o = BAND_TOUCH_MACRO_YIELD_BPS, BAND_TOUCH_MACRO_OIL_PCT
+    if bullish:
+        if bps is not None and float(bps) > y:
+            return f"macro gate: 10Y up {float(bps):+.1f}bp (> {y:g}bp) -- no call."
+        if oil is not None and float(oil) > o:
+            return f"macro gate: crude up {float(oil):+.2f}% (> {o:g}%) -- no call."
+        if news in _NEWS_BEARISH:
+            return f"macro gate: QQQ macro news {news} -- no call."
+    else:
+        if bps is not None and float(bps) < -y:
+            return f"macro gate: 10Y down {float(bps):+.1f}bp (< -{y:g}bp) -- no put."
+        if oil is not None and float(oil) < -o:
+            return f"macro gate: crude down {float(oil):+.2f}% (< -{o:g}%) -- no put."
+        if news in _NEWS_BULLISH:
+            return f"macro gate: QQQ macro news {news} -- no put."
+    return None
+
+
+def macd_refusal(bullish: bool, band: "dict | None") -> "str | None":
+    """Why the MACD check refuses this touch, or None (section 269)."""
+    if not BAND_TOUCH_MACD_CHECK or not band or band.get("macd_hist") is None:
+        return None
+    h, p = band["macd_hist"], band["macd_hist_prev"]
+    if bullish and not h > p:
+        return f"MACD check: 1-min histogram {h:+.3f} not rising (was {p:+.3f}) -- no call yet."
+    if not bullish and not h < p:
+        return f"MACD check: 1-min histogram {h:+.3f} not falling (was {p:+.3f}) -- no put yet."
+    return None
+
+
 def trend_refusal(bullish: bool, band: "dict | None") -> "str | None":
     """Why the trend check refuses this touch, or None (section 268)."""
     if not BAND_TOUCH_TREND_CHECK or not band or band.get("slope") is None:
@@ -1084,8 +1161,12 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                 pass
             elif blocked_direction() == ("bullish" if _bull else "bearish"):
                 pass
+            elif macro_refusal(_bull, state):
+                logger.info("Band touch: %s", macro_refusal(_bull, state))
             elif trend_refusal(_bull, tb):
                 logger.info("Band touch: %s", trend_refusal(_bull, tb))
+            elif macd_refusal(_bull, tb):
+                logger.info("Band touch: %s", macd_refusal(_bull, tb))
             else:
                 tier, bullish = "TOUCH", _bull
         if tb:

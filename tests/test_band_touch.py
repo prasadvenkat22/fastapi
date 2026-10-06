@@ -150,3 +150,35 @@ def test_band_reports_the_sma_slope(monkeypatch):
     _feed(monkeypatch, closes, closes[-1])
     b = nodes._band_touch()
     assert b["slope"] is not None and b["slope"] > 0.5
+
+
+
+def test_macro_gate_mirrors_for_puts(monkeypatch):
+    monkeypatch.setattr(nodes, "BAND_TOUCH_MACRO_GATE", True)
+    monkeypatch.setattr(nodes, "_qqq_news_verdict", lambda: None)
+    assert nodes.macro_refusal(True, {"tnx_change_bps": 3.0, "oil_change_pct": 0.0})       # yields up: no call
+    assert nodes.macro_refusal(True, {"tnx_change_bps": 0.0, "oil_change_pct": 0.8})       # oil up: no call
+    assert nodes.macro_refusal(True, {"tnx_change_bps": -1.0, "oil_change_pct": -0.2}) is None
+    assert nodes.macro_refusal(False, {"tnx_change_bps": -3.0, "oil_change_pct": 0.0})     # yields down: no put
+    assert nodes.macro_refusal(False, {"tnx_change_bps": 3.0, "oil_change_pct": 0.8}) is None
+    monkeypatch.setattr(nodes, "_qqq_news_verdict", lambda: "VERY_BEARISH")
+    assert nodes.macro_refusal(True, {}) and nodes.macro_refusal(False, {}) is None
+    monkeypatch.setattr(nodes, "BAND_TOUCH_MACRO_GATE", False)
+    assert nodes.macro_refusal(True, {"tnx_change_bps": 9.0}) is None
+
+
+def test_macd_check_wants_the_histogram_turning(monkeypatch):
+    monkeypatch.setattr(nodes, "BAND_TOUCH_MACD_CHECK", True)
+    turning_up = {"macd_hist": -0.05, "macd_hist_prev": -0.08}
+    still_down = {"macd_hist": -0.09, "macd_hist_prev": -0.06}
+    assert nodes.macd_refusal(True, turning_up) is None
+    assert nodes.macd_refusal(True, still_down)
+    assert nodes.macd_refusal(False, still_down) is None
+    assert nodes.macd_refusal(False, turning_up)
+
+
+def test_band_reports_macd(monkeypatch):
+    closes = [750.0 + (0.1 if i % 3 else -0.1) for i in range(60)]
+    _feed(monkeypatch, closes, closes[-1])
+    b = nodes._band_touch()
+    assert b["macd_hist"] is not None and b["macd_hist_prev"] is not None

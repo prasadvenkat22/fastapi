@@ -14846,3 +14846,28 @@ while QQQ rose and calls won. Judge each switch on its logged refusals.
   direction gate, the per-stock news veto and the yield-spike call veto. If a
   weekly book is switched back on, an hourly/daily 20-SMA trend check is the
   first candidate (card switch, off by default).
+
+
+270. 10-06: WHY THE ENGINE SAT OUT THE FALL  (2026-10-06)
+
+QQQ trades: 10:09 put -11 (stop), 10:42 call +31 (20-SMA at +41%), 11:46 call
+-15 (stop) = +$5. From noon QQQ slid 762 -> 760.5 with every check ON:
+  12:09 lower touch: macro gate (crude +1.06%) -- operator then turned the
+    macro gate OFF; it had also been set to refuse puts on BULLISH QQQ news,
+    so with crude up and news bullish it blocked BOTH sides.
+  12:10, 12:17 lower touches: trend check (20-SMA -$0.50/-$0.66 in 30 min) --
+    correct, no calls into a fall.
+  12:45, 12:46 UPPER touches: MACD check ("histogram not falling yet") -- the
+    put the operator wanted; trend check had allowed it. On a quick bounce the
+    1-minute histogram is still rising at the touch.
+  12:57: operator bought 761/759 put x2 by hand (+26..+33% by 13:10).
+  13:04 lower touch passed every check but sized 0: account buying power
+    $7.11 with the manual spread open (cap_to_buying_power, section 239).
+  13:04: a manual sell limit at 1.25 on the manual spread's legs switched the
+    orphan ladder to observation only (stop, stall, flatten OFF) until the
+    order fills or is cancelled. The QQQ 20-SMA exit and its minimum profit do
+    not apply to manual trades -- those use the 0DTE card (target +30%, stop
+    -10% / 10 min, stall off).
+Suggested, not done: MACD check off (the trend check alone would have taken
+12:45); a "trend follow" variant (falling 20-SMA + lower-band break -> put)
+would trade the slide itself -- unbuilt, untested.

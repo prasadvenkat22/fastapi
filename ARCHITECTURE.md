@@ -55,7 +55,7 @@ from / until, spread width, strike placement (`TRADING_BAND_TOUCH_ATM`: off =
 long one width in the money, on = long at the money), trend check
 (`TRADING_BAND_TOUCH_TREND_CHECK` + window + size: no put while the 1-minute
 20-SMA is rising, no call while it is falling), then stop / stop confirmation /
-take profit and "20-SMA exit: minimum profit"
+take profit and "20-SMA exit: minimum profit". Section 269 adds the macro gate (`TRADING_BAND_TOUCH_MACRO_GATE`: calls need the 10Y not up > 2bp and crude not up > 0.5% since the open and QQQ news not bearish; puts the mirror) and the MACD check (`TRADING_BAND_TOUCH_MACD_CHECK`: 1-minute histogram rising for a call, falling for a put). Check order at a touch: halt, win pause / entry cap, loss cooldown, macro gate, trend check, MACD check
 (`TRADING_BAND_TOUCH_MIN_PROFIT_PCT`). Entry logic is mean reversion: a LOWER
 touch buys a call debit spread, an UPPER touch a put debit spread; the trend
 check only removes touches, never adds or flips them.

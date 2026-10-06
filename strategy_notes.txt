@@ -14839,3 +14839,10 @@ trend check, MACD check); thresholds and the trend window/size are Advanced.
 CAUTION recorded with it: earlier measurements found macro gates carried no
 reliable direction (sections 209, 251), and on 10-05 macro read BAD all day
 while QQQ rose and calls won. Judge each switch on its logged refusals.
+  LIVE 2026-10-06 11:29 ET: deployed 03c94ceba with all three switches ON
+  (macro gate, trend check with a 30-minute window, MACD check).
+  STOCK BOOKS: not extended. 1-minute checks and same-day yield/oil moves are
+  noise for multi-day holds; the books already have the hourly Bollinger
+  direction gate, the per-stock news veto and the yield-spike call veto. If a
+  weekly book is switched back on, an hourly/daily 20-SMA trend check is the
+  first candidate (card switch, off by default).

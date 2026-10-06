@@ -63,6 +63,9 @@ tset set TRADING_MAX_TRADES_STOCK_0DTE=2 TRADING_MAX_TRADES_STOCK_W3=2 TRADING_M
 tset set TRADING_BAND_TOUCH_ATM=true
 # QQQ trend check: no put while the 1-min 20-SMA rose > $0.25 in 15 min, no call while it fell
 tset set TRADING_BAND_TOUCH_TREND_CHECK=true TRADING_BAND_TOUCH_TREND_BARS=15 TRADING_BAND_TOUCH_TREND_MIN=0.25
+# QQQ macro gate (10Y / crude / QQQ news) and MACD check (1-min histogram turning):
+tset set TRADING_BAND_TOUCH_MACRO_GATE=true TRADING_BAND_TOUCH_MACD_CHECK=true
+tset set TRADING_BAND_TOUCH_MACRO_YIELD_BPS=2 TRADING_BAND_TOUCH_MACRO_OIL_PCT=0.5
 # QQQ: the 20-SMA exit books only once the spread is up this much (0 = any):
 tset set TRADING_BAND_TOUCH_MIN_PROFIT_PCT=10
 # QQQ waits after a WIN before the next entry (.env.production sets 30 min):

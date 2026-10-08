@@ -55,6 +55,7 @@ import time
 from datetime import datetime, timezone
 
 from . import tradier_orders
+from . import exit_rules as XR
 
 logger = logging.getLogger(__name__)
 
@@ -3038,12 +3039,14 @@ def review(engine_symbols: "set | None" = None) -> list:
             # The fast stop's own confirmation clock. Reset both when the mark
             # recovers above the level and when the intrinsic guard suppresses
             # the stop, so neither state accumulates time toward a close.
+            # Section 271: TRADING_STOP_CONFIRM_TOTAL counts total minutes past
+            # the stop instead (a recovery pauses the clock, it does not reset it).
             stop_confirmed = True
             if ORPHAN_STOP_CONFIRM_MINUTES > 0 and zero_dte:
-                if ret_pct <= stop_pct and not intrinsic_ok:
-                    rec.setdefault("stop_since", now.isoformat())
-                    held = (now - datetime.fromisoformat(
-                        rec["stop_since"])).total_seconds() / 60.0
+                _total = XR.stop_confirm_total()
+                _breach = ret_pct <= stop_pct and not intrinsic_ok
+                held = XR.stop_clock(rec, _breach, now, _total)
+                if _breach:
                     # 10 s of slack: the cycle is "every minute" but lands 55-65 s
                     # apart, and a 2-minute confirmation read 1.9 at 15:02 on
                     # 09-23 and sold a cycle later at -21.5% instead of -19.1%.
@@ -3051,14 +3054,13 @@ def review(engine_symbols: "set | None" = None) -> list:
                     if not stop_confirmed:
                         logger.info(
                             "ORPHAN %s %g/%g is %+.1f%%, past the %+.0f%% stop, "
-                            "but only for %.1f of the %.0f minutes needed to confirm.",
+                            "but only for %.1f of the %.0f minutes needed to confirm (%s).",
                             st["root"], st["long_strike"], st["short_strike"],
                             ret_pct, stop_pct, held, ORPHAN_STOP_CONFIRM_MINUTES,
+                            "total minutes" if _total else "in a row",
                         )
-                else:
-                    rec.pop("stop_since", None)
             else:
-                rec.pop("stop_since", None)
+                XR.clear_stop_clock(rec)
 
             # The later-expiry stop. Guards live in the condition rather
             # than the branch so the reason line below stays a plain elif.
@@ -3183,6 +3185,31 @@ def review(engine_symbols: "set | None" = None) -> list:
                     logger.info("ORPHAN %s %g/%g: mark %.2f back at the %.2f profit lock — closing "
                                 "to keep it.", st["root"], st["long_strike"], st["short_strike"],
                                 value, lock_px)
+
+            # THE PERCENT PROFIT LOCK (section 271). Return on cost, judged on
+            # the mark like the width lock above: once the spread has been up
+            # TRADING_ORPHAN_PROFIT_LOCK_ARM_PCT (blank = the profit target),
+            # sell if it falls back to TRADING_ORPHAN_PROFIT_LOCK_PCT. The 10-07
+            # QQQ put reached +36.6%, its target missed the mid by 0.04, and
+            # it slid to a -$7 stop with nothing in between.
+            _pl_floor = XR.opt_float("TRADING_ORPHAN_PROFIT_LOCK_PCT")
+            if (not lock_hit and _pl_floor is not None and zero_dte
+                    and not st["credit"] and entry_abs):
+                _pl_arm = XR.opt_float("TRADING_ORPHAN_PROFIT_LOCK_ARM_PCT")
+                if _pl_arm is None:
+                    _pl_arm = type_setting(st, "TARGET_RETURN_PCT", ORPHAN_TARGET_RETURN_PCT) or None
+                if _pl_arm is not None and ret_pct >= _pl_arm and not rec.get("pct_lock_peak"):
+                    logger.info("ORPHAN %s %g/%g: %+.1f%% reached the %+.0f%% arm — profit lock "
+                                "armed, sells if it falls back to %+.0f%%.", st["root"],
+                                st["long_strike"], st["short_strike"], ret_pct, _pl_arm, _pl_floor)
+                if _pl_arm is not None and ret_pct >= _pl_arm:
+                    rec["pct_lock_peak"] = max(float(rec.get("pct_lock_peak") or 0.0), ret_pct)
+                if (past_hold and XR.profit_lock(float(rec.get("pct_lock_peak") or -1e9),
+                                                 ret_pct, _pl_arm, _pl_floor)):
+                    lock_hit = True
+                    logger.info("ORPHAN %s %g/%g: peaked %+.1f%%, back to %+.1f%% — at the %+.0f%% "
+                                "profit lock, closing to keep it.", st["root"], st["long_strike"],
+                                st["short_strike"], rec["pct_lock_peak"], ret_pct, _pl_floor)
 
             # THE UNDERLYING STOP's clock. See ORPHAN_UNDER_STOP.
             under_held = False

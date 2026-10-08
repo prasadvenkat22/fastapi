@@ -26,7 +26,8 @@ def test_every_book_has_the_same_core_rows_in_the_same_order():
 
 def test_global_card():
     assert [s.label for s in _card("global")] == [
-        "Work orders from the mid", "Account floor", "Daily loss limit", "Force close"]
+        "Work orders from the mid", "Account floor", "Daily loss limit", "Force close",
+        "Stop confirmation counts total minutes"]
 
 
 def test_orders_are_unique_within_a_card():

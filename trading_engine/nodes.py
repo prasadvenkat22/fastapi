@@ -21,6 +21,7 @@ from .breadth_history import RECENT_WINDOW_MINUTES, record_and_summarize
 from .equity import (MAX_CONSECUTIVE_LOSSES, blocked_direction, consecutive_losses_today,
                      current_equity, entry_cap_reached, win_pause_active)
 from . import playbook as PB
+from . import exit_rules as XR
 from .playbook import strikes_for, thresholds_for, window_for, window_for_direction
 from .broker import (
     BEAR_PUT_SPREAD,
@@ -256,30 +257,38 @@ STOP_CONFIRM_MINUTES = float(os.getenv("TRADING_STOP_CONFIRM_MINUTES", "5"))
 # a raised quota recovers without a restart.
 EMBED_COOLDOWN_S = float(os.getenv("TRADING_EMBED_COOLDOWN_S", "1800"))
 _EMBED_DEAD_UNTIL = 0.0
-_stop_since: dict = {}
 
 
-def _stop_confirmed(underlying: str, return_pct: float, stop_pct: float) -> bool:
-    """True when the stop level has HELD for STOP_CONFIRM_MINUTES.
+def _stop_clock_key(position) -> str:
+    return f"{position.underlying}|{position.long_strike:g}/{position.short_strike:g}|{position.opened_at}"
 
-    Keyed per underlying and RESET the moment the mark recovers above the
-    level, so only sustained weakness closes a position -- a wick starts the
-    count and is forgotten. Logs the wait itself, so a position sitting below
-    its stop says why it is still open rather than looking like a missed rule.
 
-    0 disables, restoring the fire-on-first-print behaviour.
+def _stop_confirmed(position, return_pct: float, stop_pct: float) -> bool:
+    """Tick the stop clock; True when it has held for STOP_CONFIRM_MINUTES.
+
+    Called on EVERY cycle with a position open, past the stop or not, so the
+    clock sees recoveries (in a row: reset; total: paused). The clock lives in
+    a file (exit_rules.ENGINE_CLOCK_PATH) because each cron cycle is a new
+    process -- section 271. 0 disables: the first reading past the stop sells.
     """
+    breaching = return_pct <= stop_pct
     if STOP_CONFIRM_MINUTES <= 0:
-        return True
-    now = datetime.now(timezone.utc)
-    first = _stop_since.setdefault(underlying, now)
-    held = (now - first).total_seconds() / 60.0
-    if held >= STOP_CONFIRM_MINUTES:
+        return breaching
+    key = _stop_clock_key(position)
+    rec = XR.load_engine_clock(key)
+    total = XR.stop_confirm_total()
+    held = XR.stop_clock(rec, breaching, datetime.now(timezone.utc), total)
+    XR.save_engine_clock(key, rec)
+    if not breaching:
+        return False
+    # 10 s of slack, as in orphans.py: cycles land 55-65 s apart.
+    if held >= STOP_CONFIRM_MINUTES - 10.0 / 60.0:
         return True
     logger.info(
         "%s is %+.1f%%, past the %+.1f%% stop, but only for %.1f of the %.0f "
-        "minutes needed to confirm — holding.",
-        underlying, return_pct, stop_pct, held, STOP_CONFIRM_MINUTES,
+        "minutes needed to confirm (%s) — holding.",
+        position.underlying, return_pct, stop_pct, held, STOP_CONFIRM_MINUTES,
+        "total minutes" if total else "in a row",
     )
     return False
 
@@ -1106,20 +1115,23 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
 
     # ---- Managing the open position -------------------------------------
     # Exit order (section 261): force close -> engine take-profit -> QQQ back
-    # at the 1-minute 20-SMA -> stop with confirmation -> hold. A row left by a
-    # retired window still gets the stop and the force close.
+    # at the 1-minute 20-SMA -> profit lock (section 271) -> stop with
+    # confirmation -> hold. A row left by a retired window still gets the stop
+    # and the force close.
     if position is not None:
         return_pct = position.return_pct
         _tp, stop_pct, _ro = thresholds_for(
             position.playbook, (TAKE_PROFIT_PCT, STOP_LOSS_PCT, STOP_LOSS_PCT))
-        # Reset the stop clock whenever the position is not breaching, so the
-        # confirmation measures sustained weakness, not "minutes since the
-        # first touch, ever".
-        if return_pct > stop_pct:
-            _stop_since.pop(position.underlying, None)
+        # Ticked every cycle, before the ladder, so recoveries reach the clock.
+        stop_ok = _stop_confirmed(position, return_pct, stop_pct)
         touch_pos = (getattr(position, "playbook", "") or "").startswith("BAND_TOUCH")
         band = _band_touch() if (touch_pos and not force_close) else None
         engine_tp = PB.ENGINE_TAKE_PROFIT_PCT
+        lock_floor = XR.opt_float("TRADING_ENGINE_PROFIT_LOCK_PCT")
+        lock_arm = XR.opt_float("TRADING_ENGINE_PROFIT_LOCK_ARM_PCT")
+        if lock_arm is None:
+            lock_arm = engine_tp
+        peak = max(position.peak_return_pct or 0.0, return_pct)
 
         if force_close:
             broker.sell_all(position.underlying)
@@ -1136,7 +1148,14 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                         band["spot"], band["mid"], position.strategy, return_pct)
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "TAKE_PROFIT"
-        elif return_pct <= stop_pct and _stop_confirmed(position.underlying, return_pct, stop_pct):
+        elif (not is_credit(position.strategy)
+              and XR.profit_lock(peak, return_pct, lock_arm, lock_floor)):
+            logger.info("Engine profit lock: %s peaked %+.1f%% (lock arms at %+.0f%%) and is back "
+                        "to %+.1f%% (lock %+.0f%%) — booking what is left.",
+                        position.strategy, peak, lock_arm, return_pct, lock_floor)
+            broker.sell_all(position.underlying)
+            action, exit_reason = "SELL_ALL", "PROFIT_LOCK"
+        elif return_pct <= stop_pct and stop_ok:
             broker.sell_all(position.underlying)
             action, exit_reason = "SELL_ALL", "STOP_LOSS"
         else:
@@ -1149,7 +1168,7 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
     # Checked after management, so a cycle that books the target can re-enter
     # on the next touch without sitting out a minute. Never straight after a
     # stop: the loss cooldown decides that.
-    may_reenter = position is None or exit_reason == "TAKE_PROFIT"
+    may_reenter = position is None or exit_reason in ("TAKE_PROFIT", "PROFIT_LOCK")
     entry_window = window_for()
     if (broker.get_open_position() is None and may_reenter and not in_warmup
             and entry_window is not None):

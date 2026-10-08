@@ -14871,3 +14871,43 @@ QQQ trades: 10:09 put -11 (stop), 10:42 call +31 (20-SMA at +41%), 11:46 call
 Suggested, not done: MACD check off (the trend check alone would have taken
 12:45); a "trend follow" variant (falling 20-SMA + lower-band break -> put)
 would trade the slide itself -- unbuilt, untested.
+
+
+271. 10-07 REVERSAL: ENGINE STOP CLOCK BUG; PROFIT LOCK; TOTAL-MINUTES STOP  (2026-10-08)
+
+10-07: the engine took no QQQ trades (MACD check refused every touch, trend
+check the puts at 11:36-11:39 and 14:27-14:30 ET). The one QQQ trade was manual,
+752/750 put x1 @ 0.41, run by orphans.py: +36.6% at 10:08 ET, TARGET posted at
+the 0.60 mid, unfilled in 12 s, cancelled; next reading +22% so the target never
+re-fired, and nothing protected the gain (stall off since 262). Past -10% from
+10:21; the 10-min confirmation reset at 10:31 (-9.8%) and 10:34-10:35; worst
+-36.6% at 10:42; STOP_LOSS 10:46, -$7. No MU or SNDK position existed on this
+account on 10-07 (weekly book scanned both, no order). VWAP tape exit was
+counting (13 of 15 min) and reset at 10:34; never fired.
+  1-min replay (scratch/ema_vwap_1007.py): at entry QQQ was above the 9 EMA,
+  9 EMA > 21 EMA and above VWAP. Close above 9 EMA 10:08 (~+$15), 9/21 cross
+  10:16 (~+$12), VWAP cross 10:19 (~$0). One trade; not built.
+
+BUG (fixed): nodes._stop_confirmed kept its clock in a module dict, and
+run_cycle.py is a new process every minute (polls <= 55 s), so any
+TRADING_STOP_CONFIRM_MINUTES >= 1 could never complete. Live 10 since 10-06
+11:51 ET: an engine spread past -20% would have held to 15:45. No engine trade
+reached its stop in that window. Clock now in engine_stop_clock.json
+(TRADING_ENGINE_STOP_CLOCK), keyed by position, ticked every cycle.
+
+New (all off by default; trading_engine/exit_rules.py, tests/test_exit_rules.py):
+  TRADING_ENGINE_PROFIT_LOCK_PCT / _ARM_PCT (QQQ card 72/73) and
+  TRADING_ORPHAN_PROFIT_LOCK_PCT / _ARM_PCT (stock 0DTE card 72/73, also manual
+  trades): once return on cost has reached the arm (blank = take profit /
+  profit target), sell if it falls back to the lock. Exit PROFIT_LOCK. Engine:
+  checked after take profit and 20-SMA, before the stop; priced like a stop
+  (mid when MID_STOPS); may re-enter like a take profit. Ladder: reuses the
+  width lock's branch (ahead of the intrinsic hold-off and drag guard).
+  TRADING_STOP_CONFIRM_TOTAL (All books card 50): stop confirmation counts
+  total minutes past the stop (recovery pauses, gaps > 2 min not counted),
+  engine and ladder.
+  ON 10-07's PUT (logged marks): lock arm 30 / at 15 or 20 -> 10:10 at +14.6%
+  (~+$6); at 25 -> 10:09 at +22% (~+$9); actual -$7. Total-minutes with 10 min
+  -> 10:33 at -22% (~-$9), WORSE than the actual -$7 -- the trade bounced back to
+  -17% by 10:46. A shorter confirmation is the faster stop; total minutes only
+  stops a long chop from resetting it. NOT MEASURED beyond this one trade.

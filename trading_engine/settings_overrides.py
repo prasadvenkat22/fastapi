@@ -212,6 +212,14 @@ REGISTRY: tuple[Setting, ...] = (
             "Sell the engine's QQQ spread once it is up this much (at the mid when 'Work orders "
             "from the mid' is on). Blank = sell only when QQQ is back at the 1-minute 20-SMA.",
             "%", 0, 500, allow_blank=True),
+    # Section 271: protect a gain once the trade has been up enough.
+    Setting("TRADING_ENGINE_PROFIT_LOCK_PCT", "Profit lock: sell if back to", G_ENGINE, "float", "",
+            "Once the engine's spread has been up the 'arms at' amount, sell if it falls back to "
+            "this return (e.g. 15 = keep at least +15%). Catches a take profit that did not fill "
+            "and then reversed. Blank = off.", "%", -50, 500, allow_blank=True),
+    Setting("TRADING_ENGINE_PROFIT_LOCK_ARM_PCT", "Profit lock: arms at", G_ENGINE, "float", "",
+            "The return the spread must reach before the profit lock watches it. Blank = the "
+            "take profit (no take profit set = the lock stays off).", "%", 0, 500, allow_blank=True),
     Setting("TRADING_MID_ORDERS", "Work orders from the mid", G_ENGINE, "bool", "false",
             "Entries (QQQ engine and the stock books) rest at the spread's mid and are skipped if "
             "they do not fill. QQQ exits (take profit, 20-SMA target, and stops when 'stops at the "
@@ -257,6 +265,21 @@ REGISTRY: tuple[Setting, ...] = (
             "says the sale would give away too much intrinsic on a deep in-the-money spread. "
             "0 disables; the 0DTE picker sizes entries against 30 when unset.",
             "%", 0, 500),
+    # Section 271.
+    Setting("TRADING_ORPHAN_PROFIT_LOCK_PCT", "Profit lock: sell if back to", G_0DTE, "float", "",
+            "Same-day stock and manual spreads: once the spread has been up the 'arms at' amount, "
+            "sell if its market price falls back to this return (e.g. 15 = keep at least +15%). "
+            "Catches a profit target that did not fill and then reversed. Blank = off.",
+            "%", -50, 500, allow_blank=True),
+    Setting("TRADING_ORPHAN_PROFIT_LOCK_ARM_PCT", "Profit lock: arms at", G_0DTE, "float", "",
+            "The return the spread must reach before the profit lock watches it. Blank = the "
+            "profit target (no target set = the lock stays off).", "%", 0, 500, allow_blank=True),
+    Setting("TRADING_STOP_CONFIRM_TOTAL", "Stop confirmation counts total minutes", G_0DTE, "bool",
+            "false",
+            "Off: the stop confirmation needs minutes IN A ROW past the stop, and one reading back "
+            "above the stop starts it over. On: every minute past the stop counts and a recovery "
+            "only pauses the count. Applies to the QQQ engine and to same-day stock and manual "
+            "spreads."),
     Setting("TRADING_ORPHAN_STALL_ARM", "Stall starts watching at", G_0DTE, "float", "0",
             "The same-day stall only watches once the peak gain reaches this. After that every "
             "new high resets the watch to that level (a local max) and restarts the stall window. "
@@ -522,6 +545,11 @@ _EXTRA: dict[str, tuple] = {   # key -> (book, order, label)
     "TRADING_BAND_TOUCH_TREND_CHECK": ("qqq", 47, "Trend check"),
     "TRADING_BAND_TOUCH_MACD_CHECK": ("qqq", 48, "MACD check"),
     "TRADING_BAND_TOUCH_MIN_PROFIT_PCT": ("qqq", 71, "20-SMA exit: minimum profit"),
+    "TRADING_ENGINE_PROFIT_LOCK_ARM_PCT": ("qqq", 72, "Profit lock: arms at"),
+    "TRADING_ENGINE_PROFIT_LOCK_PCT": ("qqq", 73, "Profit lock: sell if back to"),
+    "TRADING_ORPHAN_PROFIT_LOCK_ARM_PCT": ("s0", 72, "Profit lock: arms at"),
+    "TRADING_ORPHAN_PROFIT_LOCK_PCT": ("s0", 73, "Profit lock: sell if back to"),
+    "TRADING_STOP_CONFIRM_TOTAL": ("global", 50, "Stop confirmation counts total minutes"),
     "TRADING_MAX_TRADES_STOCK_0DTE": ("s0", 31, "Trades per run"),
     "TRADING_MAX_TRADES_STOCK_W3": ("w3", 31, "Trades per run"),
     "TRADING_MAX_TRADES_STOCK_W7": ("w7", 31, "Trades per run"),

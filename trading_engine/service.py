@@ -586,7 +586,7 @@ async def execute_and_persist_cycle(db: Session) -> TradingState:
         # and the next cycle sees a live position again and can act on it.
         _xr = final_state.get("exit_reason")
         _worked_close = (_xr in MID_EXIT_REASONS
-                         or (_xr == "STOP_LOSS" and tradier_orders.MID_STOPS))
+                         or (_xr in ("STOP_LOSS", "PROFIT_LOCK") and tradier_orders.MID_STOPS))
         order_result = _route_order(
             open_row, open_row.quantity, opening=False,
             limit_price=exit_value, label=open_row.playbook or open_row.strategy,

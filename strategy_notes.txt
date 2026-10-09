@@ -14911,3 +14911,49 @@ New (all off by default; trading_engine/exit_rules.py, tests/test_exit_rules.py)
   -> 10:33 at -22% (~-$9), WORSE than the actual -$7 -- the trade bounced back to
   -17% by 10:46. A shorter confirmation is the faster stop; total minutes only
   stops a long chop from resetting it. NOT MEASURED beyond this one trade.
+
+
+272. BAND-TOUCH REPLAY ON 1-MINUTE BARS  (2026-10-09)
+
+scripts/replay_band_touch.py: the live engine's band touch (nodes.py as of 271)
+replayed on Tradier 1-min QQQ bars, 25 sessions 09-04..10-09 (halves split
+09-22 / 09-23). Entry once a minute at the bar OPEN vs a 20-bar band on today's
+closed bars; win/loss cooldowns, entries cap, 3-loss streak, trend and MACD
+checks; exits force close -> take profit -> 20-SMA (min profit) -> profit lock
+-> stop with confirmation, checked at open / favourable extreme / close. Priced
+with chain_pricer at the prior day's VIX. 1 contract. No daily-loss halt;
+entries always fill.
+  PRICER vs the engine's 16 real band-touch fills: median model/fill 1.02,
+  range 0.92..1.36 (afternoon spreads near the money priced high). 10-09 entries
+  after 11:24 (same settings) reproduced: 12:01 C, 12:51 P, 14:50 P.
+  COSTS: Tradier commission $0; fees ~$0.115 per contract per leg (account
+  history) = 0.0023 a spread per side. Columns: mid+fees (live fills at the mid
+  when they fill), and mid +/- 0.01 + fees.
+
+  "LIVE" as replayed = min profit 15, TP 50, lock 30/20, stop -20 / 10 min, trend
+  20 bars $0.10, MACD off, 2-wide ATM:
+    165 trades, win 73%, +15.50/day, worst -74, halves +21.82/+9.68;
+    +1.77/day at mid +/- 0.01. Exits: SMA 107 (+1558), STOP 42 (-1288).
+  NULL (live exits, coin-flip entries, 20 seeds): +0.33/trade (5th..95th
+    -1.65..+2.14) vs band touch +2.35 -- 100th percentile. First entry rule in
+    this file to beat random entries (at the mid, model prices, 25 sessions).
+  ONE AT A TIME (fees): min profit 25 +22.77 (both halves up), 35 +10.34 (h2
+    -4.16); trend window 30 +19.00 (worst -51); total minutes +22.84 (worst -37);
+    confirm 0/2/5/10 = +9.45/+5.26/+22.99/+15.50; stop -10 +21.28; MACD on 17
+    trades; width 4 +32.47 (both halves); sd 1.5 +24.16.
+  GRID 192 (min profit, stop, confirm, total, sd, width, trend window), chosen
+    on half 1: rank correlation h1 vs h2 +0.33; top 10% by h1 averaged +41.86 in
+    h2 vs +29.52 for all configs. Every top-10 row is 4-wide. Per dollar of
+    debit 4-wide still wins (+4.4% vs +3.1% a trade) but the pricer was only
+    validated on 1-2 wide fills: unproven.
+  RECOMMENDED (2-wide): min profit 25, trend window 30, total minutes on, with
+    confirm 10 and lock 20: +25.08/day, worst -48, halves +28.33/+22.08, +13.48
+    at mid +/- 0.01.
+  LIVE AT 17:43 ET 10-09 (operator's own changes): min profit 25 and trend 30
+    already set, but engine confirm 2 and lock floor 0: replays +0.55/day, worst
+    -97. Same + total minutes +1.71; + total with confirm 10 +23.51 (worst -57).
+    The stop confirmation is the largest single lever measured here.
+  APPLIED 21:43 UTC: TRADING_STOP_CONFIRM_TOTAL=true. Engine confirm (2) and
+  lock floor (0) left at the operator's values pending their call.
+  CAVEATS: model prices; mid fills assumed (2 of 6 mid entries did not fill on
+  10-09); 25 sessions in a mostly rising market; profit thin at +/- 0.01.

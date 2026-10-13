@@ -14957,3 +14957,23 @@ entries always fill.
   lock floor (0) left at the operator's values pending their call.
   CAVEATS: model prices; mid fills assumed (2 of 6 mid entries did not fill on
   10-09); 25 sessions in a mostly rising market; profit thin at +/- 0.01.
+
+
+273. DECISIONS PAGE: WHY THE ENGINE TRADED OR DID NOT  (2026-10-13)
+
+10-13: the engine took no QQQ trade. Reasons were only in /var/log/qqq-trading.log
+on the host (the API container cannot read it): 15 lower-band touches refused by
+the macro gate (10Y +2.8..+4.5 bp vs a 2 bp limit), 5 upper-band touches that
+passed every check sized to 0 (buying power $7.61: a manual MU 950/940 put held
+the cash), TRADING_ACCOUNT_FLOOR=4500 (typo for 400/450) logging "flattening
+every position" every minute and closing that MU put at 12:21 ET (-$20, reason
+ACCOUNT_FLOOR, first rule in the ladder), 14 cycles failed on Tradier 504s.
+NEW: trading_engine/decisions.py keeps those lines as decisions.jsonl (touch,
+refused, sizing, entry, exit, booked, stop_wait, floor, halt, macro; floor and
+macro repeats collapse to one per 30 min). run_cycle.py attaches the handler;
+it only copies log records and swallows its own errors. GET /trading/decisions
+?date= returns that New York day's events plus the settings changes from
+trading_overrides.log. Desk > Decisions (data-ai-solutions, /desk/decisions).
+Not captured: dte0_trade.py (stock rotation) runs as its own process and has no
+handler yet. Backfill: python3 trading_engine/decisions.py backfill
+/var/log/qqq-trading.log decisions.jsonl (replaces the file).

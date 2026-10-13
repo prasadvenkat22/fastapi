@@ -32,6 +32,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run_cycle")
 
+# Section 273: copy decision-bearing log lines to decisions.jsonl for the desk.
+from trading_engine import decisions as _decisions
+logging.getLogger().addHandler(_decisions.DecisionHandler())
+
 from trading_engine import market_calendar
 
 NY = ZoneInfo("America/New_York")

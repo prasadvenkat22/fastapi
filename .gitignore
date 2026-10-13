@@ -44,3 +44,4 @@ crontab.snapshot
 
 # local analysis data (chain copies, caches) -- section 252-258
 scratch/
+decisions.jsonl

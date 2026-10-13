@@ -23,7 +23,7 @@ from schemas_pgrs.trading_schema import (
     TradingCycleResponse,
     TradingStatusResponse,
 )
-from trading_engine import orphans, scheduler, settings_overrides, tradier_orders
+from trading_engine import decisions, orphans, scheduler, settings_overrides, tradier_orders
 from trading_engine.broker import estimate_credit_value, estimate_spread_value, fill_price, is_credit
 from trading_engine.playbook import WINDOWS
 from trading_engine.data_feed import TradierDataError, fetch_qqq_spot
@@ -539,6 +539,39 @@ async def update_settings(body: SettingsUpdate,
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     return settings_overrides.snapshot()
+
+
+def _settings_changes(day: str) -> list:
+    """Settings changes made on New York calendar day `day`, oldest first."""
+    from zoneinfo import ZoneInfo
+    ny = ZoneInfo("America/New_York")
+    out = []
+    try:
+        with open(settings_overrides.AUDIT_PATH, encoding="utf-8") as fh:
+            for ln in fh:
+                parts = ln.rstrip("\n").split("\t")
+                if len(parts) < 4:
+                    continue
+                try:
+                    t = datetime.strptime(parts[0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if t.astimezone(ny).strftime("%Y-%m-%d") == day:
+                    out.append({"et": t.astimezone(ny).strftime("%H:%M:%S"), "who": parts[1],
+                                "key": parts[2], "change": parts[3]})
+    except FileNotFoundError:
+        pass
+    return out
+
+
+@router.get("/decisions")
+async def get_decisions(date: str = Query(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")):
+    """Why the engine did or did not trade on a day (New York date, default today):
+    band touches and their refusals, sizing, entries, exits, floor/halt events,
+    plus the settings changes made that day. Section 273."""
+    from zoneinfo import ZoneInfo
+    day = date or datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    return {"date": day, "events": decisions.read_day(day), "settings_changes": _settings_changes(day)}
 
 
 # ---------------------------------------------------------------------------

@@ -116,6 +116,9 @@ def context_from_bars(bars15: list, bars5: list, sessions: int = 5) -> Optional[
         "hourly_close": hcloses[-1] if hcloses else None, "sma1h": sma1h,
         "below_1h": (hcloses[-1] < sma1h) if sma1h is not None else None,
         "sma5": sma5, "below_5m": (spot < sma5) if sma5 is not None else None,
+        # Close series for the trend check (section 274): the 20-SMA's change is
+        # measured over a window the operator sets, so the series is kept.
+        "hcloses": hcloses, "closes5": closes5,
     }
 
 
@@ -166,6 +169,42 @@ def bollinger_refusal(bullish: bool, ctx: Optional[dict], timeframe: str) -> Opt
     if price >= up:
         return None if not bullish else f"bullish but {label} is AT/ABOVE the upper band ({price:.2f} >= {up:.2f}) -- puts only"
     return f"{label} is inside the band ({lo:.2f}-{up:.2f}) -- no entry"
+
+
+def trend_on(bucket: str) -> bool:
+    """TRADING_TREND_CHECK_{DTE0|W3|W7} (section 274). bucket: 'dte0', 'w3' or 'w7'."""
+    return _on(f"TRADING_TREND_CHECK_{(bucket or 'dte0').upper()}")
+
+
+def trend_refusal(bullish: bool, ctx: Optional[dict], bucket: str, timeframe: str) -> Optional[str]:
+    """Section 274, the QQQ engine's trend check (section 268) for the stock books.
+
+    No put while the book's 20-SMA (5-minute bars for 0DTE, hourly for 3- and
+    7-day) has risen more than TRADING_TREND_MIN_PCT_<BUCKET> percent of price
+    over TRADING_TREND_BARS_<BUCKET> bars; no call while it has fallen that
+    much. Size is a percent of price, not dollars, because the names run from
+    $30 to $1,700. An unreadable series does not block: the Bollinger gate
+    already fails closed on the same bars.
+    """
+    b = (bucket or "dte0").upper()
+    bars = int(_num(f"TRADING_TREND_BARS_{b}", 15 if b == "DTE0" else 6))
+    min_pct = _num(f"TRADING_TREND_MIN_PCT_{b}", 0.15 if b == "DTE0" else 0.5)
+    closes = None if ctx is None else ctx.get("hcloses" if timeframe == "hourly" else "closes5")
+    if not closes or bars <= 0 or len(closes) < 20 + bars:
+        return None
+    now, then = _sma(closes), _sma(closes[:-bars])
+    spot = closes[-1]
+    if now is None or then is None or spot <= 0:
+        return None
+    chg = (now - then) / spot * 100.0
+    unit = "hourly" if timeframe == "hourly" else "5-min"
+    if (not bullish) and chg > min_pct:
+        return (f"trend check: the {unit} 20-SMA rose {chg:.2f}% in {bars} bars (> {min_pct:g}%) "
+                f"-- no put against a rising market")
+    if bullish and chg < -min_pct:
+        return (f"trend check: the {unit} 20-SMA fell {-chg:.2f}% in {bars} bars (> {min_pct:g}%) "
+                f"-- no call against a falling market")
+    return None
 
 
 # ---- the fetch --------------------------------------------------------------

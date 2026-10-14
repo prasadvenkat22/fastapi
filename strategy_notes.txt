@@ -14977,3 +14977,22 @@ trading_overrides.log. Desk > Decisions (data-ai-solutions, /desk/decisions).
 Not captured: dte0_trade.py (stock rotation) runs as its own process and has no
 handler yet. Backfill: python3 trading_engine/decisions.py backfill
 /var/log/qqq-trading.log decisions.jsonl (replaces the file).
+
+
+274. TREND CHECK ON THE STOCK BOOKS  (2026-10-14)
+
+Operator: the single-stock 0DTE, 3-day and 7-day cards had the Bollinger
+direction gate only; the trend check (window, size) existed only on the QQQ
+card. Added per book, all off by default:
+  TRADING_TREND_CHECK_{DTE0|W3|W7}, TRADING_TREND_BARS_*, TRADING_TREND_MIN_PCT_*
+  (cards s0/w3/w7, orders 41-43: "Trend check", "Trend check: window", "Trend
+  check: size"). No put while the book's 20-SMA (5-minute bars for 0DTE, hourly
+  for 3- and 7-day, the same bars as its Bollinger gate) has risen more than the
+  size over the window; no call while it has fallen that much. Size is a PERCENT
+  of price, not dollars (names run $30..$1,700). Defaults 15 five-minute bars /
+  0.15% for 0DTE, 6 hourly bars / 0.5% for 3- and 7-day: UNMEASURED guesses.
+  Checked after the Bollinger gate in scripts/dte0_trade.py, refusal logged as
+  "<SYM> <SIDE> lo/hi refused: trend check: ..." and counted as "trend check".
+  An unreadable series does not block (the Bollinger gate already fails closed).
+  Not added: per-book band width (SD) and MACD. NOT MEASURED: no stock replay
+  exists (no historical option prices; see 252, 254).

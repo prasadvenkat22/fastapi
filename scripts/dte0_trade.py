@@ -1212,6 +1212,14 @@ def main() -> None:
                                 float(r["lo"]), float(r["hi"]), _why)
                     rejects["bollinger direction gate"] += 1
                     continue
+            # Section 274: the QQQ card's trend check, per stock book.
+            if structure_gates.trend_on(wtype or "dte0"):
+                _why = structure_gates.trend_refusal(bullish, _ctx(r["sym"]), wtype or "dte0", _tf)
+                if _why:
+                    logger.info("%s %s %.0f/%.0f refused: %s.", r["sym"], side.upper(),
+                                float(r["lo"]), float(r["hi"]), _why)
+                    rejects["trend check"] += 1
+                    continue
             if MACRO_DELTA_GATE and abs(mdelta) >= MACRO_DELTA_STEPS:
                 # A bullish structure dies on a bearish turn and vice versa.
                 if (bullish and mdelta <= -MACRO_DELTA_STEPS) or                    ((not bullish) and mdelta >= MACRO_DELTA_STEPS):

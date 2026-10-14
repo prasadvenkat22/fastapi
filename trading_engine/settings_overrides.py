@@ -170,6 +170,33 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_BOLLINGER_GATE_W7", "7-day: Bollinger band", G_STRUCT, "bool", "false",
             "On: only trade a name outside its HOURLY 20-period 2-SD band -- at/below the lower band "
             "call spreads only, at/above the upper band put spreads only, inside the band no trade."),
+    Setting("TRADING_TREND_CHECK_DTE0", "Single-stock 0DTE: trend check", G_STRUCT, "bool", "false",
+            "On: no put spread while the 5-minute 20-SMA is rising, no call spread while it is falling "
+            "(rise/fall = more than the trend size below over the trend window). Stops fading a "
+            "name that keeps riding its band."),
+    Setting("TRADING_TREND_BARS_DTE0", "Single-stock 0DTE: trend window", G_STRUCT, "int", "15",
+            "Number of 5-minute bars over which the 20-SMA's change is measured.", "bars", 3, 60),
+    Setting("TRADING_TREND_MIN_PCT_DTE0", "Single-stock 0DTE: trend size", G_STRUCT, "float", "0.15",
+            "How far the 20-SMA must move over the window, as a percent of the stock's price, to "
+            "count as a trend.", "%", 0, 10),
+    Setting("TRADING_TREND_CHECK_W3", "3-day: trend check", G_STRUCT, "bool", "false",
+            "On: no put spread while the hourly 20-SMA is rising, no call spread while it is falling "
+            "(rise/fall = more than the trend size below over the trend window). Stops fading a "
+            "name that keeps riding its band."),
+    Setting("TRADING_TREND_BARS_W3", "3-day: trend window", G_STRUCT, "int", "6",
+            "Number of hourly bars over which the 20-SMA's change is measured.", "bars", 3, 60),
+    Setting("TRADING_TREND_MIN_PCT_W3", "3-day: trend size", G_STRUCT, "float", "0.5",
+            "How far the 20-SMA must move over the window, as a percent of the stock's price, to "
+            "count as a trend.", "%", 0, 10),
+    Setting("TRADING_TREND_CHECK_W7", "7-day: trend check", G_STRUCT, "bool", "false",
+            "On: no put spread while the hourly 20-SMA is rising, no call spread while it is falling "
+            "(rise/fall = more than the trend size below over the trend window). Stops fading a "
+            "name that keeps riding its band."),
+    Setting("TRADING_TREND_BARS_W7", "7-day: trend window", G_STRUCT, "int", "6",
+            "Number of hourly bars over which the 20-SMA's change is measured.", "bars", 3, 60),
+    Setting("TRADING_TREND_MIN_PCT_W7", "7-day: trend size", G_STRUCT, "float", "0.5",
+            "How far the 20-SMA must move over the window, as a percent of the stock's price, to "
+            "count as a trend.", "%", 0, 10),
     # --- The engine's own QQQ trades (trading_engine/nodes.py) ---------------
     # Section 228. The 0DTE group below is orphans.py, which manages positions the
     # engine did NOT open; the QQQ bucket's trades exit on these instead.
@@ -550,6 +577,15 @@ _EXTRA: dict[str, tuple] = {   # key -> (book, order, label)
     "TRADING_ORPHAN_PROFIT_LOCK_ARM_PCT": ("s0", 72, "Profit lock: arms at"),
     "TRADING_ORPHAN_PROFIT_LOCK_PCT": ("s0", 73, "Profit lock: sell if back to"),
     "TRADING_STOP_CONFIRM_TOTAL": ("global", 50, "Stop confirmation counts total minutes"),
+    "TRADING_TREND_CHECK_DTE0": ("s0", 41, "Trend check"),
+    "TRADING_TREND_BARS_DTE0": ("s0", 42, "Trend check: window"),
+    "TRADING_TREND_MIN_PCT_DTE0": ("s0", 43, "Trend check: size"),
+    "TRADING_TREND_CHECK_W3": ("w3", 41, "Trend check"),
+    "TRADING_TREND_BARS_W3": ("w3", 42, "Trend check: window"),
+    "TRADING_TREND_MIN_PCT_W3": ("w3", 43, "Trend check: size"),
+    "TRADING_TREND_CHECK_W7": ("w7", 41, "Trend check"),
+    "TRADING_TREND_BARS_W7": ("w7", 42, "Trend check: window"),
+    "TRADING_TREND_MIN_PCT_W7": ("w7", 43, "Trend check: size"),
     "TRADING_MAX_TRADES_STOCK_0DTE": ("s0", 31, "Trades per run"),
     "TRADING_MAX_TRADES_STOCK_W3": ("w3", 31, "Trades per run"),
     "TRADING_MAX_TRADES_STOCK_W7": ("w7", 31, "Trades per run"),

@@ -120,3 +120,54 @@ def test_bollinger_switches_default_off_per_bucket(monkeypatch):
     assert not any(g.bollinger_on(b) for b in ("dte0", "w3", "w7"))
     monkeypatch.setenv("TRADING_BOLLINGER_GATE_W7", "true")
     assert g.bollinger_on("w7") and not g.bollinger_on("w3")
+
+
+# --- Section 274: the trend check on the stock books ------------------------
+
+def _ctx_with(closes5=None, hcloses=None):
+    return {"closes5": closes5, "hcloses": hcloses}
+
+
+def test_trend_refusal_mirrors_the_qqq_check(monkeypatch):
+    from trading_engine import structure_gates as G
+    rising = [100.0 + 0.1 * i for i in range(60)]            # 20-SMA climbs ~1.5 over 15 bars
+    falling = list(reversed(rising))
+    flat = [100.0] * 60
+    monkeypatch.setenv("TRADING_TREND_BARS_DTE0", "15")
+    monkeypatch.setenv("TRADING_TREND_MIN_PCT_DTE0", "0.5")
+    assert "no put" in G.trend_refusal(False, _ctx_with(closes5=rising), "dte0", "5min")
+    assert G.trend_refusal(True, _ctx_with(closes5=rising), "dte0", "5min") is None
+    assert "no call" in G.trend_refusal(True, _ctx_with(closes5=falling), "dte0", "5min")
+    assert G.trend_refusal(False, _ctx_with(closes5=falling), "dte0", "5min") is None
+    assert G.trend_refusal(False, _ctx_with(closes5=flat), "dte0", "5min") is None
+
+
+def test_trend_refusal_uses_the_book_timeframe_and_never_blocks_on_missing_data(monkeypatch):
+    from trading_engine import structure_gates as G
+    hourly_up = [50.0 + 0.5 * i for i in range(40)]
+    assert G.trend_refusal(False, _ctx_with(hcloses=hourly_up), "w3", "hourly")
+    assert G.trend_refusal(False, _ctx_with(closes5=hourly_up), "w3", "hourly") is None   # wrong series
+    assert G.trend_refusal(False, None, "w7", "hourly") is None
+    assert G.trend_refusal(False, _ctx_with(hcloses=[1.0] * 10), "w7", "hourly") is None  # too few bars
+
+
+def test_trend_switch_and_rows_are_on_each_stock_card(monkeypatch):
+    from trading_engine import structure_gates as G
+    from trading_engine import settings_overrides as so
+    monkeypatch.setenv("TRADING_TREND_CHECK_W3", "true")
+    assert G.trend_on("w3") and not G.trend_on("w7") and not G.trend_on("dte0")
+    for book, key in (("s0", "DTE0"), ("w3", "W3"), ("w7", "W7")):
+        rows = {s.key: s for s in so.REGISTRY if s.book == book and 40 < s.order < 50}
+        assert {f"TRADING_TREND_CHECK_{key}", f"TRADING_TREND_BARS_{key}",
+                f"TRADING_TREND_MIN_PCT_{key}"} <= set(rows)
+        assert rows[f"TRADING_TREND_CHECK_{key}"].default == "false"
+        assert so.validate(f"TRADING_TREND_BARS_{key}", "10") == "10"
+
+
+def test_context_keeps_the_close_series():
+    from trading_engine import structure_gates as G
+    b15 = [{"time": f"2026-10-13T{9 + i // 4:02d}:{(i % 4) * 15 + (30 if i < 2 else 0) % 60:02d}:00",
+            "high": 10.0, "low": 9.0, "close": 9.5} for i in range(8)]
+    b5 = [{"time": f"2026-10-13T10:{i:02d}:00", "high": 10.0, "low": 9.0, "close": 9.5} for i in range(0, 50, 2)]
+    ctx = G.context_from_bars(b15, b5)
+    assert ctx["closes5"] == [9.5] * len(b5) and isinstance(ctx["hcloses"], list)

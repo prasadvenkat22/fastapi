@@ -93,8 +93,10 @@ class Cfg:
 
 
 def live_cfg() -> Cfg:
-    """The settings in force on the droplet when this was written (10-09 close)."""
-    return Cfg()
+    """The settings in force on the droplet at the 10-23 close (trading_overrides.env)."""
+    return Cfg(min_profit=25.0, tp=40.0, lock_arm=35.0, lock_floor=25.0, stop=-30.0,
+               confirm=30.0, total=True, trend_bars=10, trend_min=0.25, start="09:35",
+               end="15:00", max_entries=10)
 
 
 # ---------------------------------------------------------------- data

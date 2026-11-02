@@ -128,6 +128,27 @@ except ValueError:
 
 BAND_TOUCH_PERIOD = int(float(os.getenv("TRADING_BAND_TOUCH_PERIOD", "20") or 20))
 BAND_TOUCH_SD = float(os.getenv("TRADING_BAND_TOUCH_SD", "2.0") or 2.0)
+# VOLATILITY-ADAPTIVE BAND (section 275). 2026-11-02 the 2-SD band fired mid-move
+# on a fast day: a put at the top of a +$2.8 spike, a call into a $3 drop, both
+# stopped. Replay (28 sessions, scripts/replay_band_touch.py bands): a FIXED
+# 2.5/3.0 SD kills the edge (+20 -> +1/day), but widening only when the last
+# VOL_BARS closes span more than VOL_PCT percent of price held expectancy
+# (+22/day at 0.35%) and cut the worst day -94 -> -52 (half 2 weaker, +14.7 vs
+# +20.4). Protection, not a profit fix. SD_HI 0 or VOL_PCT 0 = off (old band).
+BAND_TOUCH_SD_HI = float(os.getenv("TRADING_BAND_TOUCH_SD_HI", "0") or 0)
+BAND_TOUCH_VOL_PCT = float(os.getenv("TRADING_BAND_TOUCH_VOL_PCT", "0.35") or 0)
+BAND_TOUCH_VOL_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_VOL_BARS", "30") or 30))
+
+
+def effective_band_sd(close) -> float:
+    """BAND_TOUCH_SD, or BAND_TOUCH_SD_HI when the last VOL_BARS closes (before the
+    live price) span more than VOL_PCT percent of their mean. Needs VOL_BARS closes;
+    with fewer it stays on the normal width."""
+    if BAND_TOUCH_SD_HI <= 0 or BAND_TOUCH_VOL_PCT <= 0 or len(close) < BAND_TOUCH_VOL_BARS:
+        return BAND_TOUCH_SD
+    w = close.iloc[-BAND_TOUCH_VOL_BARS:]
+    span = (float(w.max()) - float(w.min())) / float(w.mean()) * 100
+    return max(BAND_TOUCH_SD, BAND_TOUCH_SD_HI) if span > BAND_TOUCH_VOL_PCT else BAND_TOUCH_SD
 # TREND CHECK (section 268). On 10-05 QQQ trended up all day (751 -> 755):
 # upper-band puts lost -26 and -24 as price rode the band, lower-band calls
 # won. On: no put while the 1-minute 20-SMA has risen more than
@@ -179,7 +200,8 @@ def _band_touch() -> "dict | None":
         except Exception:
             spot = None
         spot = spot or float(fetch_qqq_spot())
-        upper, lower = mid + BAND_TOUCH_SD * sd, mid - BAND_TOUCH_SD * sd
+        k = effective_band_sd(close)
+        upper, lower = mid + k * sd, mid - k * sd
         touch = "LOWER" if spot <= lower else ("UPPER" if spot >= upper else None)
         slope = None
         n = BAND_TOUCH_PERIOD + BAND_TOUCH_TREND_BARS

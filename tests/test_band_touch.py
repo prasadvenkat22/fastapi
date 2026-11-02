@@ -182,3 +182,29 @@ def test_band_reports_macd(monkeypatch):
     _feed(monkeypatch, closes, closes[-1])
     b = nodes._band_touch()
     assert b["macd_hist"] is not None and b["macd_hist_prev"] is not None
+
+
+def test_fast_day_widens_the_band_only_when_on_and_only_on_a_fast_window(monkeypatch):
+    calm = [750.0 + (0.1 if i % 2 else -0.1) for i in range(30)]        # span 0.027%
+    fast = [750.0 + i * 0.2 for i in range(30)]                         # span ~0.77%
+    monkeypatch.setattr(nodes, "BAND_TOUCH_SD", 2.0)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_VOL_PCT", 0.35)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_VOL_BARS", 30)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_SD_HI", 0.0)                 # off: old band
+    assert nodes.effective_band_sd(pd.Series(fast)) == 2.0
+    monkeypatch.setattr(nodes, "BAND_TOUCH_SD_HI", 3.0)
+    assert nodes.effective_band_sd(pd.Series(fast)) == 3.0
+    assert nodes.effective_band_sd(pd.Series(calm)) == 2.0
+    assert nodes.effective_band_sd(pd.Series(fast[:10])) == 2.0         # too few bars
+    monkeypatch.setattr(nodes, "BAND_TOUCH_SD_HI", 1.5)                 # never narrower
+    assert nodes.effective_band_sd(pd.Series(fast)) == 2.0
+
+
+def test_fast_day_band_moves_the_touch_level(monkeypatch):
+    closes = [750.0 + i * 0.2 for i in range(30)]
+    monkeypatch.setattr(nodes, "BAND_TOUCH_SD_HI", 0.0)
+    _feed(monkeypatch, closes, 757.5)
+    narrow = nodes._band_touch()
+    monkeypatch.setattr(nodes, "BAND_TOUCH_SD_HI", 3.0)
+    wide = nodes._band_touch()
+    assert wide["upper"] > narrow["upper"] and wide["lower"] < narrow["lower"]

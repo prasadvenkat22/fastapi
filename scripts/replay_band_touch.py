@@ -86,6 +86,19 @@ class Cfg:
     max_streak: int = 3
     sd: float = 2.0
     period: int = 20
+    # Confirmed-reversal entry (0 = off, enter on the touch). A touch only ARMS the
+    # side; the entry waits until the extreme (lowest low / highest high since the
+    # first touch) is at least rev_wait closed bars old, price has turned back off
+    # it but is still on the touch side of the 20-SMA. Disarms after rev_window bars
+    # without a fresh touch.
+    rev_wait: int = 0
+    rev_window: int = 10
+    # Volatility-adaptive band (0 = off). When the last vol_look closes span more
+    # than vol_pct percent of price, the band uses sd_hi standard deviations
+    # instead of sd -- a wider band on fast days so a mid-move print is not a touch.
+    sd_hi: float = 0.0
+    vol_look: int = 30
+    vol_pct: float = 0.0
 
     def label(self, base: "Cfg") -> str:
         d = {k: v for k, v in asdict(self).items() if asdict(base)[k] != v}
@@ -93,10 +106,13 @@ class Cfg:
 
 
 def live_cfg() -> Cfg:
-    """The settings in force on the droplet at the 10-23 close (trading_overrides.env)."""
-    return Cfg(min_profit=25.0, tp=40.0, lock_arm=35.0, lock_floor=25.0, stop=-30.0,
-               confirm=30.0, total=True, trend_bars=10, trend_min=0.25, start="09:35",
-               end="15:00", max_entries=10)
+    """The settings in force on the droplet 2026-11-02 (trading_overrides.env, read 16:41Z).
+
+    Profit lock floor is blank there (off); arm 20 is moot with no floor.
+    """
+    return Cfg(min_profit=25.0, tp=35.0, lock_arm=20.0, lock_floor=None, stop=-5.0,
+               confirm=10.0, total=True, trend_bars=30, trend_min=0.25, start="09:35",
+               end="14:45", max_entries=15)
 
 
 # ---------------------------------------------------------------- data
@@ -138,15 +154,18 @@ def load_bars() -> pd.DataFrame:
     want = [d for d in want if market_calendar.is_trading_day(d) and d not in got]
     # Today only once the session is over.
     now = datetime.now(NY)
-    want = [d for d in want if d < now.date() or now.time() >= dtime(16, 5)]
+    live_today = os.environ.get("REPLAY_TODAY") == "1"     # partial session, never cached
+    want = [d for d in want if d < now.date() or now.time() >= dtime(16, 5)
+            or (live_today and d == now.date())]
     if want:
         new = _fetch(want)
         if new is not None:
             have = new if have is None else pd.concat([have, new])
             have = have[~have.index.duplicated()].sort_index()
     have = have[(have.index.time >= dtime(9, 30)) & (have.index.time < dtime(16, 0))]
+    keep = have if not (live_today and now.time() < dtime(16, 5)) else have[have.index.date < now.date()]
     with open(CACHE, "wb") as fh:
-        pickle.dump(have, fh)
+        pickle.dump(keep, fh)
     return have
 
 
@@ -180,7 +199,7 @@ class Day:
 def prep(bars: pd.DataFrame, vix: dict) -> list:
     days = []
     for d, g in bars.groupby(bars.index.date):
-        if len(g) < 300:
+        if len(g) < int(os.environ.get("REPLAY_MIN_BARS", "300")):
             continue                     # half day / partial data
         c = g["Close"].astype(float)
         macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
@@ -222,7 +241,12 @@ def band_at(day: Day, i: int, cfg: Cfg):
     hist = prev = None
     if i >= 35:
         hist, prev = float(day.hist[i - 1]), float(day.hist[i - 2])
-    return mid, mid + cfg.sd * sd, mid - cfg.sd * sd, slope, hist, prev
+    k = cfg.sd
+    if cfg.sd_hi > 0 and cfg.vol_pct > 0 and i >= cfg.vol_look:
+        w = day.c[i - cfg.vol_look:i]
+        if (float(w.max()) - float(w.min())) / float(w.mean()) * 100 > cfg.vol_pct:
+            k = cfg.sd_hi
+    return mid, mid + k * sd, mid - k * sd, slope, hist, prev
 
 
 def refused(call: bool, b, cfg: Cfg) -> str | None:
@@ -247,6 +271,7 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
     pos = None
     last = None          # (closed_at, pnl, call)
     entries = streak = 0
+    rev = None           # [call, first_touch_i, last_touch_i] while a reversal entry waits
     start, end, fc = _hm(cfg.start), _hm(cfg.end), dtime(15, 45)
     half = COST_HALF if fills == "cost" else 0.0
     comm = FEES if fills in ("fees", "cost") else 0.0
@@ -331,6 +356,30 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
             if rng.random() >= p_random:
                 continue
             call = rng.random() < 0.5
+        elif cfg.rev_wait > 0:
+            touch = True if spot <= lo else (False if spot >= up else None)
+            if touch is not None:
+                if rev is None or rev[0] != touch:
+                    rev = [touch, i, i]          # side, first touch bar, latest touch bar
+                else:
+                    rev[2] = i
+            if rev is None:
+                continue
+            if i - rev[2] > cfg.rev_window:
+                rev = None
+                continue
+            call = rev[0]
+            if call:
+                seg = day.l[rev[1]:i] if i > rev[1] else day.l[rev[1]:rev[1] + 1]
+                j = int(np.argmin(seg)); ext = float(seg[j])
+                turned = spot > ext and spot < mid
+            else:
+                seg = day.h[rev[1]:i] if i > rev[1] else day.h[rev[1]:rev[1] + 1]
+                j = int(np.argmax(seg)); ext = float(seg[j])
+                turned = spot < ext and spot > mid
+            age = (i - 1) - (rev[1] + j)         # closed bars since the extreme
+            if not (turned and age >= cfg.rev_wait):
+                continue
         else:
             if spot <= lo:
                 call = True
@@ -357,6 +406,7 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
         pos = dict(t=now, call=call, k=k, entry_v=v, fill=v + half, peak=0.0,
                    s_since=None, s_last=None, s_held=0.0)
         entries += 1
+        rev = None
     if pos is not None:
         when = day.t[-1] + timedelta(seconds=59)
         close(when, value(day, day.c[-1], when, *pos["k"], pos["call"]), "FORCE_CLOSE")
@@ -523,6 +573,55 @@ def mode_grid(days, fills="mid"):
           f"(near 0 = the half-1 winner is luck)")
 
 
+def mode_reversal(days, fills="fees"):
+    """Confirmed-reversal entry vs the touch entry, each with the live stop and with looser stops."""
+    base = live_cfg()
+    n = len(days)
+    print(f"REVERSAL ENTRY, {n} sessions {days[0].d}..{days[-1].d}, fills={fills}. "
+          f"rev_wait = closed bars the extreme must have held; rev_window = bars to wait.")
+    print(HDR)
+    for stop, conf in ((-5.0, 10.0), (-20.0, 10.0), (-30.0, 10.0)):
+        print(f"-- stop {stop:g}% confirm {conf:g} min")
+        for wait, win in ((0, 0), (1, 5), (2, 5), (2, 10), (3, 10), (5, 10), (5, 15)):
+            c = replace(base, stop=stop, confirm=conf, rev_wait=wait, rev_window=win)
+            lab = "touch entry (LIVE entry)" if wait == 0 else f"reversal wait {wait} window {win}"
+            print(row(lab, summary(run(days, c, fills), days)))
+
+
+BANDS = (
+    ("LIVE band sd 2.0 period 20", {}),
+    ("sd 2.5", dict(sd=2.5)),
+    ("sd 3.0", dict(sd=3.0)),
+    ("period 30", dict(period=30)),
+    ("period 40", dict(period=40)),
+    ("sd 2.5 period 30", dict(sd=2.5, period=30)),
+    ("sd 3.0 period 30", dict(sd=3.0, period=30)),
+    ("adaptive: 2.0, 3.0 if 30-bar range>0.25%", dict(sd_hi=3.0, vol_pct=0.25)),
+    ("adaptive: 2.0, 3.0 if 30-bar range>0.35%", dict(sd_hi=3.0, vol_pct=0.35)),
+    ("adaptive: 2.0, 3.0 if 30-bar range>0.50%", dict(sd_hi=3.0, vol_pct=0.50)),
+    ("adaptive: 2.0, 2.5 if 30-bar range>0.35%", dict(sd_hi=2.5, vol_pct=0.35)),
+    ("adaptive: 2.0, 2.5 if 30-bar range>0.50%", dict(sd_hi=2.5, vol_pct=0.50)),
+)
+
+
+def mode_bands(days, fills="fees"):
+    """Band construction at the live exits: width in SDs, lookback, and a volatility-adaptive width."""
+    base = live_cfg()
+    full = [d for d in days if len(d.t) >= 300]
+    part = [d for d in days if len(d.t) < 300 and d.d == date.today()]
+    print(f"BAND ENTRY POINT, {len(full)} full sessions {full[0].d}..{full[-1].d}, fills={fills}, "
+          f"live exits (stop {base.stop:g}% / {base.confirm:g} min)")
+    print(HDR)
+    for lab, kw in BANDS:
+        print(row(lab, summary(run(full, replace(base, **kw), fills), full)))
+    if part:
+        print(f"\nPARTIAL session {part[0].d} ({len(part[0].t)} bars so far) -- P&L $ and trades")
+        for lab, kw in BANDS:
+            tr = run(part, replace(base, **kw), fills)
+            print(f"  {lab:44s} n {len(tr):2d}  {sum(t['pnl'] for t in tr):+7.1f}  "
+                  + " ".join(f"{t['opened']:%H:%M}{'C' if t['call'] else 'P'}{t['pnl']:+.0f}" for t in tr))
+
+
 def mode_null(days, fills="mid", seeds=20):
     base = live_cfg()
     real = run(days, base, fills)
@@ -560,6 +659,10 @@ def main():
         mode_oneway(days, "fees"); print()
     if mode in ("grid", "all"):
         mode_grid(days, "fees"); print()
+    if mode in ("reversal", "all"):
+        mode_reversal(days, "fees"); print()
+    if mode in ("bands", "all"):
+        mode_bands(days, "fees"); print()
     if mode in ("null", "all"):
         mode_null(days, "fees"); print()
 

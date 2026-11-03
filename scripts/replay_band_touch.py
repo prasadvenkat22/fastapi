@@ -63,6 +63,8 @@ FEES = 0.0023
 
 
 # ---------------------------------------------------------------- settings
+BREADTH: dict = {}   # date -> array of net_ratio per bar index (latest reading before the bar)
+VWAP: dict = {}   # date -> array, session VWAP of the bars closed before each bar index
 @dataclass(frozen=True)
 class Cfg:
     min_profit: float = 15.0            # 20-SMA exit books only at/above this
@@ -99,6 +101,26 @@ class Cfg:
     sd_hi: float = 0.0
     vol_look: int = 30
     vol_pct: float = 0.0
+    # Minimum band width in dollars (upper - lower); 0 = off. No entry when narrower.
+    min_band: float = 0.0
+    # Extra entry filters (0 = off). rsi_hi: block a CALL when RSI(14) > rsi_hi and a PUT when
+    # RSI < 100-rsi_hi (the usual overbought/oversold rule). rsi_knife: the opposite -- block a
+    # call when RSI < rsi_knife and a put when RSI > 100-rsi_knife (do not fade a runaway).
+    # ema_stretch: block when price is more than this many dollars beyond the 9-bar EMA in the
+    # touch direction (below it for a call, above it for a put).
+    rsi_hi: float = 0.0
+    rsi_knife: float = 0.0
+    ema_stretch: float = 0.0
+    # VWAP: 1 = block a CALL above VWAP and a PUT below it (fade only from the stretched side
+    # of the day's average price); 2 = the reverse (block a call below VWAP, a put above it).
+    # vwap_dist: only block when price is more than this many dollars from VWAP.
+    vwap_mode: int = 0
+    vwap_dist: float = 0.0
+    # Breadth (net advancers/decliners over the basket, -1..+1, latest reading before the bar).
+    # breadth_mode 1 = with the tape: block a CALL when breadth < -breadth_min, a PUT when
+    # breadth > +breadth_min. 2 = contrarian: block a call when breadth > +min, a put when < -min.
+    breadth_mode: int = 0
+    breadth_min: float = 0.0
 
     def label(self, base: "Cfg") -> str:
         d = {k: v for k, v in asdict(self).items() if asdict(base)[k] != v}
@@ -106,13 +128,13 @@ class Cfg:
 
 
 def live_cfg() -> Cfg:
-    """The settings in force on the droplet 2026-11-02 (trading_overrides.env, read 16:41Z).
+    """The settings in force on the droplet 2026-11-03 (trading_overrides.env, read 16:30Z; SD_HI=3 but VOL_PCT unset = adaptive off).
 
     Profit lock floor is blank there (off); arm 20 is moot with no floor.
     """
-    return Cfg(min_profit=25.0, tp=35.0, lock_arm=20.0, lock_floor=None, stop=-5.0,
-               confirm=10.0, total=True, trend_bars=30, trend_min=0.25, start="09:35",
-               end="14:45", max_entries=15)
+    return Cfg(min_profit=35.0, tp=50.0, lock_arm=20.0, lock_floor=None, stop=-5.0,
+               confirm=2.0, total=True, trend_bars=30, trend_min=0.25, start="09:30",
+               end="14:45", max_entries=15, width=3.0)
 
 
 # ---------------------------------------------------------------- data
@@ -352,6 +374,8 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
             continue
         spot = day.o[i]
         mid, up, lo, *_ = b
+        if p_random <= 0 and up - lo < cfg.min_band:
+            continue
         if p_random > 0:
             if rng.random() >= p_random:
                 continue
@@ -399,6 +423,35 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
             continue
         if p_random <= 0 and refused(call, b, cfg):
             continue
+        if p_random <= 0 and cfg.breadth_mode and day.d in BREADTH:
+            br = float(BREADTH[day.d][i])
+            if not np.isnan(br):
+                if cfg.breadth_mode == 1 and ((call and br < -cfg.breadth_min) or (not call and br > cfg.breadth_min)):
+                    continue
+                if cfg.breadth_mode == 2 and ((call and br > cfg.breadth_min) or (not call and br < -cfg.breadth_min)):
+                    continue
+        if p_random <= 0 and cfg.vwap_mode and day.d in VWAP and i < len(VWAP[day.d]):
+            vw = float(VWAP[day.d][i])
+            if vw > 0:
+                above = spot - vw
+                if cfg.vwap_mode == 1 and ((call and above > cfg.vwap_dist) or (not call and -above > cfg.vwap_dist)):
+                    continue
+                if cfg.vwap_mode == 2 and ((call and -above > cfg.vwap_dist) or (not call and above > cfg.vwap_dist)):
+                    continue
+        if p_random <= 0 and (cfg.rsi_hi or cfg.rsi_knife or cfg.ema_stretch):
+            cs = pd.Series(day.c[:i])
+            if len(cs) >= 15:
+                dl = cs.diff()
+                ag = dl.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean().iloc[-1]
+                al = (-dl.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean().iloc[-1]
+                rsi = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+                if cfg.rsi_hi and ((call and rsi > cfg.rsi_hi) or (not call and rsi < 100 - cfg.rsi_hi)):
+                    continue
+                if cfg.rsi_knife and ((call and rsi < cfg.rsi_knife) or (not call and rsi > 100 - cfg.rsi_knife)):
+                    continue
+                e9 = float(cs.ewm(span=9, adjust=False).mean().iloc[-1])
+                if cfg.ema_stretch and ((call and e9 - spot > cfg.ema_stretch) or (not call and spot - e9 > cfg.ema_stretch)):
+                    continue
         k = strikes(spot, call, cfg)
         v = value(day, spot, now, *k, call)
         if v < 0.05:
@@ -622,6 +675,29 @@ def mode_bands(days, fills="fees"):
                   + " ".join(f"{t['opened']:%H:%M}{'C' if t['call'] else 'P'}{t['pnl']:+.0f}" for t in tr))
 
 
+def mode_stopband(days, fills="fees"):
+    """Stop level x confirm minutes, and a minimum band width, at the 11-03 live settings."""
+    base = live_cfg()
+    full = [d for d in days if len(d.t) >= 300]
+    print(f"STOP / BAND WIDTH, {len(full)} full sessions {full[0].d}..{full[-1].d}, fills={fills}")
+    print(HDR)
+    for stop in (-5.0, -10.0, -15.0, -20.0, -30.0):
+        for conf in (2.0, 5.0):
+            c = replace(base, stop=stop, confirm=conf)
+            print(row(f"stop {stop:g}% confirm {conf:g}m" + ("  (LIVE)" if (stop, conf) == (-5.0, 2.0) else ""),
+                      summary(run(full, c, fills), full)))
+    print()
+    for mb in (0.0, 1.0, 1.5, 2.0, 2.5, 3.0):
+        c = replace(base, min_band=mb)
+        print(row(f"min band ${mb:g}" + ("  (LIVE: none)" if mb == 0 else ""),
+                  summary(run(full, c, fills), full)))
+    print()
+    for mb in (1.5, 2.0, 2.5):
+        for stop in (-10.0, -15.0):
+            c = replace(base, min_band=mb, stop=stop)
+            print(row(f"min band ${mb:g} + stop {stop:g}%", summary(run(full, c, fills), full)))
+
+
 def mode_null(days, fills="mid", seeds=20):
     base = live_cfg()
     real = run(days, base, fills)
@@ -663,6 +739,8 @@ def main():
         mode_reversal(days, "fees"); print()
     if mode in ("bands", "all"):
         mode_bands(days, "fees"); print()
+    if mode in ("stopband", "all"):
+        mode_stopband(days, "fees"); print()
     if mode in ("null", "all"):
         mode_null(days, "fees"); print()
 

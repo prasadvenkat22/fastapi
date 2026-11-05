@@ -1252,7 +1252,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
                     logger.exception("Chain fetch failed — pricing from the model.")
                     chain = {}
                 strategy = BULL_CALL_SPREAD if bullish else BEAR_PUT_SPREAD
-                long_strike, short_strike = strikes_for(window, atm_strike, bullish)
+                long_strike, short_strike = strikes_for(window, atm_strike, bullish,
+                                                        datetime.now(ZoneInfo("America/New_York")))
                 # Buying a vertical fills at its natural ask; the model is the
                 # fallback when the chain cannot price it.
                 model_mid = estimate_spread_value(strategy, long_strike, short_strike, spot)

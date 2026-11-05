@@ -65,7 +65,18 @@ class PlaybookWindow:
     # Where the LONG leg sits, in dollars in the money. None = the width, which
     # puts the short leg at the money.
     long_depth: "float | None" = None
+    # Afternoon width: from `pm_from` on, entries use `width_pm` instead of `width`
+    # (None = one width all day). Replay (31 sessions): the morning carries the edge,
+    # and a wider spread scales it; the afternoon earns little, so a narrower one risks less.
+    width_pm: "float | None" = None
+    pm_from: "time | None" = None
     note: str = ""
+
+    def width_at(self, now: "Optional[datetime]" = None) -> float:
+        """Spread width for an entry at `now` (ET). No `now` = the morning width."""
+        if now is not None and self.width_pm and self.pm_from and now.time() >= self.pm_from:
+            return self.width_pm
+        return self.width
 
     def allows_tier(self, tier: str) -> bool:
         return tier == "TOUCH"
@@ -79,7 +90,9 @@ BAND_TOUCH = PlaybookWindow(
     start=_env_time("TRADING_BAND_TOUCH_START", "09:45"),
     end=_env_time("TRADING_BAND_TOUCH_END", "15:00"),
     placement=ITM,
-    width=_env_float("TRADING_BAND_TOUCH_WIDTH", 4.0),
+    width=_env_float("TRADING_BAND_TOUCH_WIDTH", 3.0),
+    width_pm=_env_float("TRADING_BAND_TOUCH_WIDTH_PM", 2.0),
+    pm_from=_env_time("TRADING_BAND_TOUCH_PM_FROM", "13:00"),
     note="Fade a 1-minute Bollinger band touch back to the 20-SMA: calls at the "
          "lower band, puts at the upper.",
 )
@@ -105,14 +118,15 @@ def window_for_direction(bullish: bool, now: Optional[datetime] = None) -> Optio
 BAND_TOUCH_ATM = os.getenv("TRADING_BAND_TOUCH_ATM", "false").lower() == "true"
 
 
-def strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool) -> tuple[float, float]:
+def strikes_for(window: PlaybookWindow, atm_strike: float, bullish: bool,
+                now: "Optional[datetime]" = None) -> tuple[float, float]:
     """(long_strike, short_strike): long leg in the money (or at the money with
     TRADING_BAND_TOUCH_ATM), short one width toward the move.
 
     A bull call spread is long the lower strike and short the higher one; a
     bear put spread is the mirror.
     """
-    w = window.width
+    w = window.width_at(now)
     d = window.long_depth if window.long_depth is not None else w
     if BAND_TOUCH_ATM:
         d = 0.0

@@ -208,3 +208,26 @@ def test_fast_day_band_moves_the_touch_level(monkeypatch):
     monkeypatch.setattr(nodes, "BAND_TOUCH_SD_HI", 3.0)
     wide = nodes._band_touch()
     assert wide["upper"] > narrow["upper"] and wide["lower"] < narrow["lower"]
+
+
+def test_afternoon_width_switches_at_pm_from(monkeypatch):
+    from dataclasses import replace
+    from datetime import datetime, time
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr(PB, "BAND_TOUCH_ATM", False)
+    w = replace(PB.window_by_playbook("BAND_TOUCH"), width=3.0, width_pm=2.0, pm_from=time(13, 0))
+    ny = ZoneInfo("America/New_York")
+    am, pm = datetime(2026, 11, 5, 12, 59, tzinfo=ny), datetime(2026, 11, 5, 13, 0, tzinfo=ny)
+    assert PB.strikes_for(w, 753.0, True, am) == (750.0, 753.0)
+    assert PB.strikes_for(w, 753.0, True, pm) == (751.0, 753.0)
+    assert PB.strikes_for(w, 754.0, False, pm) == (756.0, 754.0)
+    assert PB.strikes_for(w, 753.0, True) == (750.0, 753.0)            # no time = morning width
+    one = replace(w, width_pm=None)
+    assert PB.strikes_for(one, 753.0, True, pm) == (750.0, 753.0)      # no afternoon width = one width
+
+
+def test_afternoon_width_settings_are_on_the_qqq_card():
+    from trading_engine import settings_overrides as so
+    assert so.BY_KEY["TRADING_BAND_TOUCH_WIDTH"].default == "3"
+    assert (so.BY_KEY["TRADING_BAND_TOUCH_WIDTH_PM"].book, so.BY_KEY["TRADING_BAND_TOUCH_WIDTH_PM"].default) == ("qqq", "2")
+    assert so.BY_KEY["TRADING_BAND_TOUCH_PM_FROM"].default == "13:00"

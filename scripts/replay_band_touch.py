@@ -78,6 +78,8 @@ class Cfg:
     trend_min: float | None = 0.10      # None = trend check off
     macd: bool = False
     width: float = 2.0
+    width_pm: float = 0.0               # spread width from pm_from on (0 = same as width)
+    pm_from: str = "12:00"
     atm: bool = True
     sides: str = "both"                 # both / calls / puts
     start: str = "09:40"
@@ -452,7 +454,7 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
                 e9 = float(cs.ewm(span=9, adjust=False).mean().iloc[-1])
                 if cfg.ema_stretch and ((call and e9 - spot > cfg.ema_stretch) or (not call and spot - e9 > cfg.ema_stretch)):
                     continue
-        k = strikes(spot, call, cfg)
+        k = strikes(spot, call, replace(cfg, width=cfg.width_pm) if cfg.width_pm and now.time() >= _hm(cfg.pm_from) else cfg)
         v = value(day, spot, now, *k, call)
         if v < 0.05:
             continue

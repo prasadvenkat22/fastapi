@@ -231,3 +231,13 @@ def test_afternoon_width_settings_are_on_the_qqq_card():
     assert so.BY_KEY["TRADING_BAND_TOUCH_WIDTH"].default == "3"
     assert (so.BY_KEY["TRADING_BAND_TOUCH_WIDTH_PM"].book, so.BY_KEY["TRADING_BAND_TOUCH_WIDTH_PM"].default) == ("qqq", "2")
     assert so.BY_KEY["TRADING_BAND_TOUCH_PM_FROM"].default == "13:00"
+
+
+def test_vix_ceiling_is_a_qqq_card_setting():
+    from trading_engine import settings_overrides as so
+    st = so.BY_KEY["TRADING_VIX_LEVEL_MAX"]
+    assert (st.book, st.default, st.kind) == ("qqq", "22", "float")
+    assert so.validate("TRADING_VIX_LEVEL_MAX", "20") == "20" or so.validate("TRADING_VIX_LEVEL_MAX", "20") == "20.0"
+    import pytest
+    with pytest.raises(ValueError):
+        so.validate("TRADING_VIX_LEVEL_MAX", "500")

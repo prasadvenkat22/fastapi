@@ -938,7 +938,7 @@ async def market_signals_agent(state: TradingState) -> dict:
 
     gates = {
         "breadth": breadth_is_bullish,
-        "vix_level": vix.level < VIX_LEVEL_MAX,
+        "vix_level": VIX_LEVEL_MAX <= 0 or vix.level < VIX_LEVEL_MAX,
         "vix_spike": vix.change_pct < VIX_SPIKE_PCT,
         "yields": not yields_spiking,
         "crude": not crude_spiking,
@@ -959,7 +959,7 @@ async def market_signals_agent(state: TradingState) -> dict:
     # its ceiling is genuine disorder — wide quotes and gap risk hurt a short
     # spread as much as a long one — as distinct from the velocity terms,
     # which are directional.
-    halt = vix.level >= VIX_LEVEL_MAX
+    halt = VIX_LEVEL_MAX > 0 and vix.level >= VIX_LEVEL_MAX
     if halt:
         logger.warning(
             "Macro halt: VIX at %.2f is at or above the %.1f ceiling — no entries in either direction.",

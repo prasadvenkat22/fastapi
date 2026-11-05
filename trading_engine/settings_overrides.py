@@ -107,6 +107,9 @@ REGISTRY: tuple[Setting, ...] = (
             "Strike width from the afternoon time on. Same as the morning width = one width all day.", "$", 1, 10),
     Setting("TRADING_BAND_TOUCH_PM_FROM", "Band touch: afternoon from", G_BUCKETS, "time", "13:00",
             "Entries at or after this time (ET) use the afternoon width."),
+    Setting("TRADING_VIX_LEVEL_MAX", "Macro halt: VIX ceiling", G_BUCKETS, "float", "22",
+            "No entries, calls or puts, while VIX is at or above this level. Replay: days with a VIX close "
+            "of 18-22 lost money (28% wins). 0 = no ceiling.", "", 0, 80),
     Setting("TRADING_BAND_TOUCH_SD", "Band touch: band width (SD)", G_BUCKETS, "float", "2",
             "Standard deviations from the 20-SMA.", "sd", 1, 4),
     Setting("TRADING_BAND_TOUCH_PERIOD", "Band touch: SMA period", G_BUCKETS, "int", "20",
@@ -582,6 +585,7 @@ _EXTRA: dict[str, tuple] = {   # key -> (book, order, label)
     "TRADING_BAND_TOUCH_WIDTH": ("qqq", 44, "Spread width (morning)"),
     "TRADING_BAND_TOUCH_WIDTH_PM": ("qqq", 49, "Spread width (afternoon)"),
     "TRADING_BAND_TOUCH_PM_FROM": ("qqq", 76, "Afternoon width from"),
+    "TRADING_VIX_LEVEL_MAX": ("qqq", 77, "VIX halt: ceiling"),
     "TRADING_BAND_TOUCH_ATM": ("qqq", 45, "Strike placement: at the money"),
     "TRADING_BAND_TOUCH_MACRO_GATE": ("qqq", 46, "Macro gate"),
     "TRADING_BAND_TOUCH_TREND_CHECK": ("qqq", 47, "Trend check"),

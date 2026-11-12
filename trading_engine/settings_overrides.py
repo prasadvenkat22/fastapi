@@ -242,6 +242,14 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_BAND_TOUCH_TREND_MIN", "Trend check: size", G_ENGINE, "float", "0.25",
             "How many dollars the 20-SMA must move over the window to count as a trend.",
             "$", 0, 10),
+    Setting("TRADING_BAND_TOUCH_EMA_MODE", "EMA9 slope entries", G_ENGINE, "bool", "false",
+            "On: enter on the 1-minute 9-EMA slope instead of band touches. Call spread when the "
+            "EMA9 was falling and has flattened or turned up; put spread when it was rising and "
+            "has stalled or turned down. Exits are unchanged."),
+    Setting("TRADING_BAND_TOUCH_EMA_BARS", "EMA9 slope: window", G_ENGINE, "int", "8",
+            "Minutes over which the EMA9's change is measured.", "min", 2, 30),
+    Setting("TRADING_BAND_TOUCH_EMA_MIN", "EMA9 slope: flat zone", G_ENGINE, "float", "0",
+            "Dollars either side of zero that count as flat.", "$", 0, 1),
     Setting("TRADING_BAND_TOUCH_ATM", "Strike placement: at the money", G_ENGINE, "bool", "false",
             "Off = in the money (now): long leg one width in the money, short at the money -- costs "
             "~70-75% of the width, profits on a small snap back. On = at the money: long at the "
@@ -590,6 +598,9 @@ _EXTRA: dict[str, tuple] = {   # key -> (book, order, label)
     "TRADING_BAND_TOUCH_MACRO_GATE": ("qqq", 46, "Macro gate"),
     "TRADING_BAND_TOUCH_TREND_CHECK": ("qqq", 47, "Trend check"),
     "TRADING_BAND_TOUCH_MACD_CHECK": ("qqq", 48, "MACD check"),
+    "TRADING_BAND_TOUCH_EMA_MODE": ("qqq", 78, "EMA9 slope entries"),
+    "TRADING_BAND_TOUCH_EMA_BARS": ("qqq", 79, "EMA9 slope: window"),
+    "TRADING_BAND_TOUCH_EMA_MIN": ("qqq", 80, "EMA9 slope: flat zone"),
     "TRADING_BAND_TOUCH_SD_HI": ("qqq", 74, "Fast-day band width (SD)"),
     "TRADING_BAND_TOUCH_VOL_PCT": ("qqq", 75, "Fast-day band: range trigger"),
     "TRADING_BAND_TOUCH_MIN_PROFIT_PCT": ("qqq", 71, "20-SMA exit: minimum profit"),

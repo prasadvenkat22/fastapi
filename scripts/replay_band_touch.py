@@ -64,6 +64,8 @@ FEES = 0.0023
 
 # ---------------------------------------------------------------- settings
 BREADTH: dict = {}   # date -> array of net_ratio per bar index (latest reading before the bar)
+PREV: dict = {}   # date -> prior session close (for day_mode 2)
+EMA9: dict = {}   # date -> 9-bar EMA of closes, one value per bar (value i includes bar i)
 VWAP: dict = {}   # date -> array, session VWAP of the bars closed before each bar index
 @dataclass(frozen=True)
 class Cfg:
@@ -123,6 +125,26 @@ class Cfg:
     # breadth > +breadth_min. 2 = contrarian: block a call when breadth > +min, a put when < -min.
     breadth_mode: int = 0
     breadth_min: float = 0.0
+    # Early-session band: when > 0 the band forms once this many bars have closed, using the
+    # bars available (up to `period`), instead of waiting for a full period. 0 = off.
+    min_bars: int = 0
+    # Day-direction filter (0 = off): block a PUT when spot is more than day_pct percent ABOVE
+    # the reference and a CALL when more than day_pct percent BELOW it. day_mode 1 = today's
+    # open, 2 = the prior session close.
+    # No new entries between lunch_from and lunch_to ("" = off).
+    lunch_from: str = ""
+    lunch_to: str = ""
+    day_mode: int = 0
+    day_pct: float = 0.0
+    # EMA9 trend (0 = off). ema_mode 1 = GATE the band-touch entries on the 9-EMA slope
+    # (replaces nothing; stacks with the SMA trend check): no put while the EMA9 is rising or
+    # flat, no call while it is falling or flat. ema_mode 2 = TREND-FOLLOW entry, no band: call
+    # when the EMA9 has been falling and is now flat/rising, put when it has been rising and is
+    # now falling. Slope = EMA9 now minus EMA9 ema_bars bars ago (closed bars), in dollars;
+    # ema_min is the dead zone either side of zero.
+    ema_mode: int = 0
+    ema_bars: int = 3
+    ema_min: float = 0.02
 
     def label(self, base: "Cfg") -> str:
         d = {k: v for k, v in asdict(self).items() if asdict(base)[k] != v}
@@ -226,7 +248,8 @@ def prep(bars: pd.DataFrame, vix: dict) -> list:
         if len(g) < int(os.environ.get("REPLAY_MIN_BARS", "300")):
             continue                     # half day / partial data
         c = g["Close"].astype(float)
-        macd = c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
+        EMA9[d] = c.ewm(span=9, adjust=False).mean().values
+        macd =c.ewm(span=12, adjust=False).mean() - c.ewm(span=26, adjust=False).mean()
         hist = (macd - macd.ewm(span=9, adjust=False).mean()).values
         days.append(Day(d, [ts.to_pydatetime() for ts in g.index], g["Open"].values.astype(float),
                         g["High"].values.astype(float), g["Low"].values.astype(float),
@@ -254,9 +277,10 @@ def strikes(spot: float, call: bool, cfg: Cfg) -> tuple:
 
 def band_at(day: Day, i: int, cfg: Cfg):
     """Band from closed bars before bar i (today only), slope and MACD as _band_touch."""
-    if i < cfg.period:
+    need = cfg.min_bars if 0 < cfg.min_bars < cfg.period else cfg.period
+    if i < need:
         return None
-    last = day.c[i - cfg.period:i]
+    last = day.c[max(0, i - cfg.period):i]
     mid, sd = float(last.mean()), float(last.std(ddof=1))
     slope = None
     n = cfg.period + cfg.trend_bars
@@ -378,7 +402,22 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
         mid, up, lo, *_ = b
         if p_random <= 0 and up - lo < cfg.min_band:
             continue
-        if p_random > 0:
+        e = EMA9.get(day.d)
+        ema_slope = ema_prev = None          # closed bars only: bar i-1 is the newest
+        if e is not None and cfg.ema_mode and i > cfg.ema_bars + 1:
+            ema_slope = float(e[i - 1] - e[i - 1 - cfg.ema_bars])
+            ema_prev = float(e[i - 2] - e[i - 2 - cfg.ema_bars])
+        if cfg.ema_mode:
+            if ema_slope is None:
+                continue
+        if cfg.ema_mode == 2:
+            if ema_prev < -cfg.ema_min and ema_slope >= -cfg.ema_min:
+                call = True                   # was falling, now stabilised or rising
+            elif ema_prev > cfg.ema_min and ema_slope <= cfg.ema_min:
+                call = False                  # was rising, now stalled or falling
+            else:
+                continue
+        elif p_random > 0:
             if rng.random() >= p_random:
                 continue
             call = rng.random() < 0.5
@@ -425,6 +464,16 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
             continue
         if p_random <= 0 and refused(call, b, cfg):
             continue
+        if cfg.ema_mode == 1 and ((call and ema_slope <= cfg.ema_min) or (not call and ema_slope >= -cfg.ema_min)):
+            continue
+        if cfg.lunch_from and _hm(cfg.lunch_from) <= (day.t[i] + timedelta(seconds=6)).time() < _hm(cfg.lunch_to):
+            continue
+        if p_random <= 0 and cfg.day_mode:
+            ref = float(day.o[0]) if cfg.day_mode == 1 else PREV.get(day.d)
+            if ref:
+                chg = (spot / ref - 1.0) * 100.0
+                if (not call and chg > cfg.day_pct) or (call and chg < -cfg.day_pct):
+                    continue
         if p_random <= 0 and cfg.breadth_mode and day.d in BREADTH:
             br = float(BREADTH[day.d][i])
             if not np.isnan(br):
@@ -570,6 +619,31 @@ ONEWAY = {
     "end": ["14:00"],
     "start": ["10:00"],
 }
+
+
+def current_cfg() -> Cfg:
+    """Droplet trading_overrides.env as read 2026-11-12 (adaptive band ON: SD_HI 3, VOL_PCT default 0.35)."""
+    return Cfg(min_profit=25.0, tp=40.0, lock_arm=20.0, lock_floor=None, stop=-40.0,
+               confirm=20.0, total=True, trend_bars=30, trend_min=0.25, start="09:30",
+               end="15:30", max_entries=15, width=2.0, width_pm=1.0, pm_from="13:00",
+               sd_hi=3.0, vol_pct=0.35)
+
+
+def mode_ema(days, fills="fees"):
+    base = current_cfg()
+    print(f"EMA9 TEST from CURRENT droplet settings, {len(days)} sessions, fills={fills}")
+    print(HDR)
+    print(row("CURRENT (SMA trend check)", summary(run(days, base, fills), days)))
+    nosma = replace(base, trend_min=None)
+    print(row("no trend check at all", summary(run(days, nosma, fills), days)))
+    for bars in (2, 3, 5, 8):
+        for mn in (0.0, 0.03, 0.08):
+            c = replace(nosma, ema_mode=1, ema_bars=bars, ema_min=mn)
+            print(row(f"GATE ema9 bars={bars} min={mn}", summary(run(days, c, fills), days)))
+    for bars in (2, 3, 5, 8):
+        for mn in (0.0, 0.03, 0.08):
+            c = replace(nosma, ema_mode=2, ema_bars=bars, ema_min=mn)
+            print(row(f"FOLLOW ema9 bars={bars} min={mn}", summary(run(days, c, fills), days)))
 
 
 def mode_oneway(days, fills="mid"):
@@ -733,6 +807,8 @@ def main():
         mode_validate(days); print()
     if mode in ("live", "all"):
         mode_live(days); print()
+    if mode == "ema":
+        mode_ema(days, "fees"); print()
     if mode in ("oneway", "all"):
         mode_oneway(days, "fees"); print()
     if mode in ("grid", "all"):

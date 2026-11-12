@@ -162,6 +162,11 @@ BAND_TOUCH_TREND_MIN = float(os.getenv("TRADING_BAND_TOUCH_TREND_MIN", "0.25") o
 # MACRO_OIL_PCT, and the QQQ macro news not bearish; puts the mirror (not
 # falling that much, news not bullish). MACD: the 1-minute histogram (12/26/9)
 # rising for a call (the drop is losing speed), falling for a put. Both off.
+# EMA9 SLOPE ENTRIES: replay (36 sessions) 8-bar slope, flat zone 0: +19.1/day vs +18.7
+# for the band fade, worst day -107 vs -108. A tie, so it ships off.
+BAND_TOUCH_EMA_MODE = os.getenv("TRADING_BAND_TOUCH_EMA_MODE", "false").lower() == "true"
+BAND_TOUCH_EMA_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_EMA_BARS", "8") or 8))
+BAND_TOUCH_EMA_MIN = float(os.getenv("TRADING_BAND_TOUCH_EMA_MIN", "0") or 0)
 BAND_TOUCH_MACRO_GATE = os.getenv("TRADING_BAND_TOUCH_MACRO_GATE", "false").lower() == "true"
 BAND_TOUCH_MACRO_YIELD_BPS = float(os.getenv("TRADING_BAND_TOUCH_MACRO_YIELD_BPS", "2") or 2)
 BAND_TOUCH_MACRO_OIL_PCT = float(os.getenv("TRADING_BAND_TOUCH_MACRO_OIL_PCT", "0.5") or 0.5)
@@ -213,8 +218,21 @@ def _band_touch() -> "dict | None":
             macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
             h = macd - macd.ewm(span=9, adjust=False).mean()
             hist, hist_prev = float(h.iloc[-1]), float(h.iloc[-2])
+        ema_signal = None
+        nb = BAND_TOUCH_EMA_BARS
+        if BAND_TOUCH_EMA_MODE and len(close) >= nb + 3:
+            e = close.ewm(span=9, adjust=False).mean()
+            s_now, s_prev = float(e.iloc[-1] - e.iloc[-1 - nb]), float(e.iloc[-2] - e.iloc[-2 - nb])
+            m = BAND_TOUCH_EMA_MIN
+            if s_prev < -m and s_now >= -m:
+                ema_signal = "CALL"      # was falling, now flat or rising
+            elif s_prev > m and s_now <= m:
+                ema_signal = "PUT"       # was rising, now stalled or falling
+            if ema_signal:
+                logger.info("EMA9 slope %+.3f (prev %+.3f over %d min) -> %s signal.",
+                            s_now, s_prev, nb, ema_signal)
         return {"spot": spot, "mid": mid, "upper": upper, "lower": lower, "touch": touch,
-                "slope": slope, "macd_hist": hist, "macd_hist_prev": hist_prev}
+                "ema_signal": ema_signal, "slope": slope, "macd_hist": hist, "macd_hist_prev": hist_prev}
     except Exception:
         logger.exception("Band touch: could not read the 1-minute band.")
         return None
@@ -1097,7 +1115,7 @@ def macd_refusal(bullish: bool, band: "dict | None") -> "str | None":
 
 def trend_refusal(bullish: bool, band: "dict | None") -> "str | None":
     """Why the trend check refuses this touch, or None (section 268)."""
-    if not BAND_TOUCH_TREND_CHECK or not band or band.get("slope") is None:
+    if BAND_TOUCH_EMA_MODE or not BAND_TOUCH_TREND_CHECK or not band or band.get("slope") is None:
         return None
     sl = band["slope"]
     if not bullish and sl > BAND_TOUCH_TREND_MIN:
@@ -1196,6 +1214,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             and entry_window is not None):
         tier, bullish = None, False
         tb = _band_touch()
+        if tb and BAND_TOUCH_EMA_MODE:
+            tb["touch"] = {"CALL": "LOWER", "PUT": "UPPER"}.get(tb.get("ema_signal"))
         if tb and tb["touch"] and not halt:
             _bull = tb["touch"] == "LOWER"
             if win_pause_active() or entry_cap_reached():

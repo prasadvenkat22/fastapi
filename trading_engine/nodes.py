@@ -1131,7 +1131,9 @@ def macd_refusal(bullish: bool, band: "dict | None") -> "str | None":
 
 def trend_refusal(bullish: bool, band: "dict | None") -> "str | None":
     """Why the trend check refuses this touch, or None (section 268)."""
-    if BAND_TOUCH_EMA_MODE or not BAND_TOUCH_TREND_CHECK or not band or band.get("slope") is None:
+    # The plain EMA9 turn entry is counter-trend by design, so the SMA check would block every
+    # entry; the regime modes already trade with the trend and keep the longer-window check.
+    if (BAND_TOUCH_EMA_MODE and not BAND_TOUCH_EMA_REGIME) or not BAND_TOUCH_TREND_CHECK or not band or band.get("slope") is None:
         return None
     sl = band["slope"]
     if not bullish and sl > BAND_TOUCH_TREND_MIN:

@@ -167,6 +167,11 @@ BAND_TOUCH_TREND_MIN = float(os.getenv("TRADING_BAND_TOUCH_TREND_MIN", "0.25") o
 BAND_TOUCH_EMA_MODE = os.getenv("TRADING_BAND_TOUCH_EMA_MODE", "false").lower() == "true"
 BAND_TOUCH_EMA_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_EMA_BARS", "8") or 8))
 BAND_TOUCH_EMA_MIN = float(os.getenv("TRADING_BAND_TOUCH_EMA_MIN", "0") or 0)
+# EMA9/SMA20 REGIME: 0 = off (the EMA9 turn alone), 1 = the turn AND the regime (EMA9 beyond the
+# 20-SMA on the trade side, both rising/falling, gap >= EMA_GAP and widening), 2 = the regime alone
+# (can fire every minute; cooldowns and the entry cap pace it).
+BAND_TOUCH_EMA_REGIME = int(float(os.getenv("TRADING_BAND_TOUCH_EMA_REGIME", "0") or 0))
+BAND_TOUCH_EMA_GAP = float(os.getenv("TRADING_BAND_TOUCH_EMA_GAP", "0.05") or 0)
 BAND_TOUCH_MACRO_GATE = os.getenv("TRADING_BAND_TOUCH_MACRO_GATE", "false").lower() == "true"
 BAND_TOUCH_MACRO_YIELD_BPS = float(os.getenv("TRADING_BAND_TOUCH_MACRO_YIELD_BPS", "2") or 2)
 BAND_TOUCH_MACRO_OIL_PCT = float(os.getenv("TRADING_BAND_TOUCH_MACRO_OIL_PCT", "0.5") or 0.5)
@@ -228,6 +233,17 @@ def _band_touch() -> "dict | None":
                 ema_signal = "CALL"      # was falling, now flat or rising
             elif s_prev > m and s_now <= m:
                 ema_signal = "PUT"       # was rising, now stalled or falling
+            if BAND_TOUCH_EMA_REGIME and len(close) >= BAND_TOUCH_PERIOD + nb + 2:
+                # EMA9 vs SMA20 regime: both sloping the same way, gap past EMA_GAP and widening.
+                p = BAND_TOUCH_PERIOD
+                sma_then = float(close.iloc[-p - nb:-nb].mean())
+                sma_prev = float(close.iloc[-p - 1:-1].mean())
+                gap, gap_prev = float(e.iloc[-1]) - mid, float(e.iloc[-2]) - sma_prev
+                up = gap >= BAND_TOUCH_EMA_GAP and gap > gap_prev and s_now > m and mid - sma_then > 0
+                dn = -gap >= BAND_TOUCH_EMA_GAP and gap < gap_prev and s_now < -m and mid - sma_then < 0
+                if BAND_TOUCH_EMA_REGIME == 1:     # regime AND the EMA9 turn
+                    up, dn = up and ema_signal == "CALL", dn and ema_signal == "PUT"
+                ema_signal = "CALL" if up else ("PUT" if dn else None)
             if ema_signal:
                 logger.info("EMA9 slope %+.3f (prev %+.3f over %d min) -> %s signal.",
                             s_now, s_prev, nb, ema_signal)

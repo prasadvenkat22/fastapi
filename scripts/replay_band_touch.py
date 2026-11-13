@@ -145,6 +145,11 @@ class Cfg:
     ema_mode: int = 0
     ema_bars: int = 3
     ema_min: float = 0.02
+    # ema_mode 3 = REGIME entry: call while EMA9 > SMA20 with both rising over ema_bars and the gap
+    # (EMA9 - SMA20) at least ema_gap dollars and wider than a bar ago; put is the mirror.
+    # ema_mode 4 = regime AND the mode-2 turn (EMA9 just flattened/turned) -- fires once per turn.
+    ema_gap: float = 0.0
+    sma_exit: bool = True               # False = no back-at-the-SMA exit (percent exits only)
 
     def label(self, base: "Cfg") -> str:
         d = {k: v for k, v in asdict(self).items() if asdict(base)[k] != v}
@@ -358,7 +363,7 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
                     tp_v = pos["entry_v"] * (1 + cfg.tp / 100) if kind == "fav" else v
                     close(when, tp_v, "TAKE_PROFIT")
                     break
-                if b is not None:
+                if b is not None and cfg.sma_exit:
                     mid = b[0]
                     crossed = (spot >= mid) if call else (spot <= mid)
                     if crossed:
@@ -410,7 +415,27 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
         if cfg.ema_mode:
             if ema_slope is None:
                 continue
-        if cfg.ema_mode == 2:
+        if cfg.ema_mode in (3, 4):
+            nb = cfg.ema_bars
+            if i < cfg.period + nb + 2:
+                continue
+            sma_now = float(day.c[i - cfg.period:i].mean())
+            sma_then = float(day.c[i - cfg.period - nb:i - nb].mean())
+            sma_prev = float(day.c[i - 1 - cfg.period:i - 1].mean())
+            gap, gap_prev = float(e[i - 1]) - sma_now, float(e[i - 2]) - sma_prev
+            up = gap >= cfg.ema_gap and gap > gap_prev and ema_slope > cfg.ema_min and sma_now - sma_then > 0
+            dn = -gap >= cfg.ema_gap and gap < gap_prev and ema_slope < -cfg.ema_min and sma_now - sma_then < 0
+            if cfg.ema_mode == 4:
+                turn_up = ema_prev < -cfg.ema_min and ema_slope >= -cfg.ema_min
+                turn_dn = ema_prev > cfg.ema_min and ema_slope <= cfg.ema_min
+                up, dn = up and turn_up, dn and turn_dn
+            if up:
+                call = True
+            elif dn:
+                call = False
+            else:
+                continue
+        elif cfg.ema_mode == 2:
             if ema_prev < -cfg.ema_min and ema_slope >= -cfg.ema_min:
                 call = True                   # was falling, now stabilised or rising
             elif ema_prev > cfg.ema_min and ema_slope <= cfg.ema_min:
@@ -646,6 +671,22 @@ def mode_ema(days, fills="fees"):
             print(row(f"FOLLOW ema9 bars={bars} min={mn}", summary(run(days, c, fills), days)))
 
 
+def mode_regime(days, fills="fees"):
+    base = replace(current_cfg(), trend_min=None)
+    print(f"EMA9/SMA20 REGIME entry, {len(days)} sessions, fills={fills}")
+    print(HDR)
+    print(row("CURRENT band fade", summary(run(days, current_cfg(), fills), days)))
+    for mode in (3, 4):
+        for bars in (3, 5, 8):
+            for gap in (0.0, 0.05):
+                for tp in (20.0, 30.0, 40.0):
+                    for sx in (False, True):
+                        c = replace(base, ema_mode=mode, ema_bars=bars, ema_min=0.0, ema_gap=gap,
+                                    tp=tp, sma_exit=sx, min_profit=25.0)
+                        print(row(f"m{mode} b{bars} gap{gap} tp{tp:g} smaexit={int(sx)}",
+                                  summary(run(days, c, fills), days)))
+
+
 def mode_oneway(days, fills="mid"):
     base = live_cfg()
     print(f"ONE SETTING AT A TIME from LIVE, {len(days)} sessions, fills={fills}. "
@@ -807,6 +848,8 @@ def main():
         mode_validate(days); print()
     if mode in ("live", "all"):
         mode_live(days); print()
+    if mode == "regime":
+        mode_regime(days, "fees"); print()
     if mode == "ema":
         mode_ema(days, "fees"); print()
     if mode in ("oneway", "all"):

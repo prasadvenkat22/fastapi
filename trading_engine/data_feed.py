@@ -303,6 +303,47 @@ def _tradier_session_vwap() -> "float | None":
         return None
 
 
+def fetch_qqq_vwap_slope(bars: int) -> "float | None":
+    """Change in QQQ's session VWAP over the last `bars` CLOSED 1-minute bars, in dollars.
+
+    Cumulative volume-weighted mean of Tradier's per-bar vwap, read at the last closed bar
+    and `bars` bars earlier (the same definition the replay used). The bar still forming is
+    dropped. None when the data is missing or too short -- the caller treats that as a refusal.
+    """
+    api_key = os.getenv("TRADIER_API_KEY")
+    if not api_key or bars < 1:
+        return None
+    env = os.getenv("TRADIER_ENV", "sandbox").lower()
+    base = (TRADIER_PRODUCTION_URL if env == "production"
+            else TRADIER_SANDBOX_URL).replace("/quotes", "/timesales")
+    now = datetime.now(NY)
+    try:
+        r = httpx.get(base, params={"symbol": "QQQ", "interval": "1min",
+                                    "start": f"{now:%Y-%m-%d} 09:30", "end": f"{now:%Y-%m-%d} 16:00",
+                                    "session_filter": "open"},
+                      headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                      timeout=10.0)
+        r.raise_for_status()
+        data = (r.json().get("series") or {}).get("data") or []
+        if isinstance(data, dict):
+            data = [data]
+        if data and str(data[-1].get("time", ""))[:16] == now.strftime("%Y-%m-%dT%H:%M"):
+            data = data[:-1]                       # the minute still forming
+        num = den = 0.0
+        cum = []
+        for bar in data:
+            vol, vwap = bar.get("volume"), bar.get("vwap")
+            if vol and vwap is not None:
+                num += float(vwap) * float(vol)
+                den += float(vol)
+            cum.append(num / den if den > 0 else None)
+        if len(cum) <= bars or cum[-1] is None or cum[-1 - bars] is None:
+            return None
+        return cum[-1] - cum[-1 - bars]
+    except Exception:
+        return None
+
+
 def fetch_qqq_session_vwap() -> "float | None":
     """Session VWAP for QQQ. Tradier first, yfinance as a volume-checked fallback.
 

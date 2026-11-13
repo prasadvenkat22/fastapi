@@ -120,6 +120,10 @@ class Cfg:
     # vwap_dist: only block when price is more than this many dollars from VWAP.
     vwap_mode: int = 0
     vwap_dist: float = 0.0
+    # VWAP slope (0 = off): a CALL needs the session VWAP higher than vwap_slope bars ago by more
+    # than vwap_slope_min dollars, a PUT lower by more than that.
+    vwap_slope: int = 0
+    vwap_slope_min: float = 0.0
     # Breadth (net advancers/decliners over the basket, -1..+1, latest reading before the bar).
     # breadth_mode 1 = with the tape: block a CALL when breadth < -breadth_min, a PUT when
     # breadth > +breadth_min. 2 = contrarian: block a call when breadth > +min, a put when < -min.
@@ -506,6 +510,13 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
                     continue
                 if cfg.breadth_mode == 2 and ((call and br > cfg.breadth_min) or (not call and br < -cfg.breadth_min)):
                     continue
+        if cfg.vwap_slope and day.d in VWAP:
+            vwa = VWAP[day.d]
+            if i - cfg.vwap_slope < 1 or i >= len(vwa):
+                continue
+            vs = float(vwa[i] - vwa[i - cfg.vwap_slope])
+            if (call and vs <= cfg.vwap_slope_min) or (not call and vs >= -cfg.vwap_slope_min):
+                continue
         if p_random <= 0 and cfg.vwap_mode and day.d in VWAP and i < len(VWAP[day.d]):
             vw = float(VWAP[day.d][i])
             if vw > 0:

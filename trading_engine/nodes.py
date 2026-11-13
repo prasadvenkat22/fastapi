@@ -38,7 +38,7 @@ NY = ZoneInfo("America/New_York")
 
 from .data_feed import (fetch_market_breadth, fetch_qqq_bars, fetch_oil, fetch_qqq_spot,
                         fetch_tnx, fetch_vix, chain_vertical, fetch_option_chain,
-                        log_price_divergence)
+                        log_price_divergence, fetch_qqq_vwap_slope)
 from .state import TradingState
 
 logger = logging.getLogger(__name__)
@@ -171,6 +171,13 @@ BAND_TOUCH_EMA_MIN = float(os.getenv("TRADING_BAND_TOUCH_EMA_MIN", "0") or 0)
 # 20-SMA on the trade side, both rising/falling, gap >= EMA_GAP and widening), 2 = the regime alone
 # (can fire every minute; cooldowns and the entry cap pace it).
 BAND_TOUCH_EMA_REGIME = int(float(os.getenv("TRADING_BAND_TOUCH_EMA_REGIME", "0") or 0))
+# VWAP SLOPE CONFIRMATION (EMA modes only): a call needs the session VWAP up more than
+# VWAP_SLOPE_MIN dollars over the last VWAP_SLOPE_BARS closed minutes, a put down by that much.
+# 0 bars = off. Replay (21 sessions with volume), regime 2 + SMA trend check: worst day -185 ->
+# -78 at 20 bars / $0.05 while $/day stayed ~+33; neighbouring settings gave +17..+33, so the
+# protection is the dependable part, the profit is not.
+BAND_TOUCH_VWAP_SLOPE_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_VWAP_SLOPE_BARS", "0") or 0))
+BAND_TOUCH_VWAP_SLOPE_MIN = float(os.getenv("TRADING_BAND_TOUCH_VWAP_SLOPE_MIN", "0.05") or 0)
 BAND_TOUCH_EMA_GAP = float(os.getenv("TRADING_BAND_TOUCH_EMA_GAP", "0.05") or 0)
 BAND_TOUCH_MACRO_GATE = os.getenv("TRADING_BAND_TOUCH_MACRO_GATE", "false").lower() == "true"
 BAND_TOUCH_MACRO_YIELD_BPS = float(os.getenv("TRADING_BAND_TOUCH_MACRO_YIELD_BPS", "2") or 2)
@@ -244,6 +251,18 @@ def _band_touch() -> "dict | None":
                 if BAND_TOUCH_EMA_REGIME == 1:     # regime AND the EMA9 turn
                     up, dn = up and ema_signal == "CALL", dn and ema_signal == "PUT"
                 ema_signal = "CALL" if up else ("PUT" if dn else None)
+            if ema_signal and BAND_TOUCH_VWAP_SLOPE_BARS > 0:
+                vwap_slope = fetch_qqq_vwap_slope(BAND_TOUCH_VWAP_SLOPE_BARS)
+                if vwap_slope is None:
+                    logger.info("EMA9 %s signal refused: VWAP slope unavailable.", ema_signal)
+                    ema_signal = None
+                elif ((ema_signal == "CALL" and vwap_slope <= BAND_TOUCH_VWAP_SLOPE_MIN)
+                      or (ema_signal == "PUT" and vwap_slope >= -BAND_TOUCH_VWAP_SLOPE_MIN)):
+                    logger.info("EMA9 %s signal refused: VWAP moved %+.3f over %d min "
+                                "(needs %s $%.2f).", ema_signal, vwap_slope,
+                                BAND_TOUCH_VWAP_SLOPE_BARS,
+                                "above" if ema_signal == "CALL" else "below -", BAND_TOUCH_VWAP_SLOPE_MIN)
+                    ema_signal = None
             if ema_signal:
                 logger.info("EMA9 slope %+.3f (prev %+.3f over %d min) -> %s signal.",
                             s_now, s_prev, nb, ema_signal)

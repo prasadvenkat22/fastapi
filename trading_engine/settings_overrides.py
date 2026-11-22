@@ -256,6 +256,9 @@ REGISTRY: tuple[Setting, ...] = (
             "EMA9 slope entries on.", "", 0, 2),
     Setting("TRADING_BAND_TOUCH_EMA_GAP", "EMA9/SMA20 regime: minimum gap", G_ENGINE, "float", "0.05",
             "Dollars the EMA9 must sit beyond the 20-SMA.", "$", 0, 2),
+    Setting("TRADING_BAND_TOUCH_CALLS_ON_FADE", "EMA modes: calls on the band fade", G_ENGINE, "bool", "false",
+            "On (with EMA9 slope entries): puts come from the EMA signal, calls from a lower-band touch "
+            "with the trend check. Lets a bounce be bought without taking regime calls."),
     Setting("TRADING_BAND_TOUCH_VWAP_SLOPE_BARS", "VWAP slope confirmation: window", G_ENGINE, "int", "0",
             "0 = off. Minutes over which the session VWAP's change is measured. A call needs "
             "VWAP rising by more than the size below, a put falling by that much. EMA modes only.",
@@ -615,6 +618,7 @@ _EXTRA: dict[str, tuple] = {   # key -> (book, order, label)
     "TRADING_BAND_TOUCH_EMA_MIN": ("qqq", 80, "EMA9 slope: flat zone"),
     "TRADING_BAND_TOUCH_EMA_REGIME": ("qqq", 81, "EMA9/SMA20 regime"),
     "TRADING_BAND_TOUCH_EMA_GAP": ("qqq", 82, "EMA9/SMA20 regime: minimum gap"),
+    "TRADING_BAND_TOUCH_CALLS_ON_FADE": ("qqq", 85, "EMA modes: calls on the band fade"),
     "TRADING_BAND_TOUCH_VWAP_SLOPE_BARS": ("qqq", 83, "VWAP slope confirmation: window"),
     "TRADING_BAND_TOUCH_VWAP_SLOPE_MIN": ("qqq", 84, "VWAP slope confirmation: size"),
     "TRADING_BAND_TOUCH_SD_HI": ("qqq", 74, "Fast-day band width (SD)"),

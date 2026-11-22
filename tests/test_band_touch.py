@@ -241,3 +241,27 @@ def test_vix_ceiling_is_a_qqq_card_setting():
     import pytest
     with pytest.raises(ValueError):
         so.validate("TRADING_VIX_LEVEL_MAX", "500")
+
+
+def test_calls_on_fade_puts_from_regime_calls_from_lower_touch(monkeypatch):
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_MODE", True)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_CALLS_ON_FADE", True)
+    # regime says CALL but price is not at the lower band: no call
+    assert nodes.entry_touch({"touch": None, "ema_signal": "CALL"}) is None
+    # lower-band touch with no regime signal: a call (the bounce)
+    assert nodes.entry_touch({"touch": "LOWER", "ema_signal": None}) == "LOWER"
+    # regime PUT wins whatever the band says; an upper touch alone is not a put
+    assert nodes.entry_touch({"touch": None, "ema_signal": "PUT"}) == "UPPER"
+    assert nodes.entry_touch({"touch": "UPPER", "ema_signal": None}) is None
+    monkeypatch.setattr(nodes, "BAND_TOUCH_CALLS_ON_FADE", False)
+    assert nodes.entry_touch({"touch": None, "ema_signal": "CALL"}) == "LOWER"
+
+
+def test_calls_on_fade_trend_check_guards_calls_only(monkeypatch):
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_MODE", True)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_REGIME", 2)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_TREND_CHECK", True)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_CALLS_ON_FADE", True)
+    falling, rising = {"slope": -1.0}, {"slope": 1.0}
+    assert nodes.trend_refusal(True, falling)          # no call into a falling market
+    assert nodes.trend_refusal(False, rising) is None   # regime put is not second-guessed

@@ -179,6 +179,13 @@ BAND_TOUCH_EMA_REGIME = int(float(os.getenv("TRADING_BAND_TOUCH_EMA_REGIME", "0"
 BAND_TOUCH_VWAP_SLOPE_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_VWAP_SLOPE_BARS", "0") or 0))
 BAND_TOUCH_VWAP_SLOPE_MIN = float(os.getenv("TRADING_BAND_TOUCH_VWAP_SLOPE_MIN", "0.05") or 0)
 BAND_TOUCH_EMA_GAP = float(os.getenv("TRADING_BAND_TOUCH_EMA_GAP", "0.05") or 0)
+# CALLS ON THE BAND FADE (EMA modes only). The EMA9/SMA20 regime takes the PUTS; CALLS come from
+# the classic lower-band touch with the 20-SMA trend check, so a bounce can still be bought but a
+# call is never taken just because the regime is long. Replay (43 sessions, mid +/- 0.01 + fees):
+# regime puts +16.5/day, regime calls -24/day (3% of call configs positive), band-fade calls
+# -4.6/day; regime puts + fade calls +11.9/day, worst day -125. The sample is a falling market, so
+# the call side is insurance for a bounce, not a measured edge.
+BAND_TOUCH_CALLS_ON_FADE = os.getenv("TRADING_BAND_TOUCH_CALLS_ON_FADE", "false").lower() == "true"
 BAND_TOUCH_MACRO_GATE = os.getenv("TRADING_BAND_TOUCH_MACRO_GATE", "false").lower() == "true"
 BAND_TOUCH_MACRO_YIELD_BPS = float(os.getenv("TRADING_BAND_TOUCH_MACRO_YIELD_BPS", "2") or 2)
 BAND_TOUCH_MACRO_OIL_PCT = float(os.getenv("TRADING_BAND_TOUCH_MACRO_OIL_PCT", "0.5") or 0.5)
@@ -1109,6 +1116,18 @@ def _qqq_news_verdict() -> "str | None":
     return v
 
 
+def entry_touch(tb: "dict | None") -> "str | None":
+    """Which side a read of the band/EMA signals asks for: 'LOWER' (call), 'UPPER' (put) or None."""
+    if not tb:
+        return None
+    if not BAND_TOUCH_EMA_MODE:
+        return tb.get("touch")
+    sig = {"CALL": "LOWER", "PUT": "UPPER"}.get(tb.get("ema_signal"))
+    if BAND_TOUCH_CALLS_ON_FADE:
+        return "UPPER" if sig == "UPPER" else ("LOWER" if tb.get("touch") == "LOWER" else None)
+    return sig
+
+
 def macro_refusal(bullish: bool, state: dict) -> "str | None":
     """Why the macro gate refuses this touch, or None (section 269).
 
@@ -1154,6 +1173,8 @@ def trend_refusal(bullish: bool, band: "dict | None") -> "str | None":
     # entry; the regime modes already trade with the trend and keep the longer-window check.
     if (BAND_TOUCH_EMA_MODE and not BAND_TOUCH_EMA_REGIME) or not BAND_TOUCH_TREND_CHECK or not band or band.get("slope") is None:
         return None
+    if BAND_TOUCH_EMA_MODE and BAND_TOUCH_CALLS_ON_FADE and not bullish:
+        return None          # the regime put already trades with the trend; the check guards the fade call
     sl = band["slope"]
     if not bullish and sl > BAND_TOUCH_TREND_MIN:
         return (f"trend check: the 20-SMA rose ${sl:.2f} in {BAND_TOUCH_TREND_BARS} min "
@@ -1251,8 +1272,8 @@ def execution_risk_agent(state: TradingState, broker: MockBrokerClient = None) -
             and entry_window is not None):
         tier, bullish = None, False
         tb = _band_touch()
-        if tb and BAND_TOUCH_EMA_MODE:
-            tb["touch"] = {"CALL": "LOWER", "PUT": "UPPER"}.get(tb.get("ema_signal"))
+        if tb:
+            tb["touch"] = entry_touch(tb)
         if tb and tb["touch"] and not halt:
             _bull = tb["touch"] == "LOWER"
             if win_pause_active() or entry_cap_reached():

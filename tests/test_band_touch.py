@@ -265,3 +265,16 @@ def test_calls_on_fade_trend_check_guards_calls_only(monkeypatch):
     falling, rising = {"slope": -1.0}, {"slope": 1.0}
     assert nodes.trend_refusal(True, falling)          # no call into a falling market
     assert nodes.trend_refusal(False, rising) is None   # regime put is not second-guessed
+
+
+def test_regime_waits_for_enough_bars_instead_of_the_plain_turn(monkeypatch):
+    closes = [700.0 - 0.5 * i for i in range(19)] + [688.0, 695.0, 708.0]   # 22 bars: fell, then turned up
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_MODE", True)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_BARS", 5)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_MIN", 0.0)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_VWAP_SLOPE_BARS", 0)
+    _feed(monkeypatch, closes, 708.0)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_REGIME", 0)
+    assert nodes._band_touch()["ema_signal"] == "CALL"      # the plain turn fires
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_REGIME", 2)
+    assert nodes._band_touch()["ema_signal"] is None         # 22 < 20 + 5 + 2 bars: regime not ready

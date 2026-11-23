@@ -258,6 +258,10 @@ def _band_touch() -> "dict | None":
                 if BAND_TOUCH_EMA_REGIME == 1:     # regime AND the EMA9 turn
                     up, dn = up and ema_signal == "CALL", dn and ema_signal == "PUT"
                 ema_signal = "CALL" if up else ("PUT" if dn else None)
+            elif BAND_TOUCH_EMA_REGIME:
+                # Too few bars for the regime (needs PERIOD + EMA_BARS + 2, ~09:57): the plain EMA
+                # turn is counter-trend and was never what the regime replay tested, so no signal.
+                ema_signal = None
             if ema_signal and BAND_TOUCH_VWAP_SLOPE_BARS > 0:
                 vwap_slope = fetch_qqq_vwap_slope(BAND_TOUCH_VWAP_SLOPE_BARS)
                 if vwap_slope is None:

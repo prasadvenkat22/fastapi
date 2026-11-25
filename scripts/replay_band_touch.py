@@ -153,7 +153,20 @@ class Cfg:
     # (EMA9 - SMA20) at least ema_gap dollars and wider than a bar ago; put is the mirror.
     # ema_mode 4 = regime AND the mode-2 turn (EMA9 just flattened/turned) -- fires once per turn.
     ema_gap: float = 0.0
+    # Regime 20-SMA slope test: -1 = off, 0 = over ema_bars (live), n > 0 = over n bars.
+    sma_slope_bars: int = 0
+    # Stall exit (0 = off): after stall_min minutes, leave a trade that is below stall_below percent
+    # and never reached stall_peak percent. Checked at the bar close.
+    stall_min: float = 0.0
+    stall_below: float = 0.0
+    stall_peak: float = 5.0
     sma_exit: bool = True               # False = no back-at-the-SMA exit (percent exits only)
+    # EMA9 exit (0 = off): 1 = leave when the EMA9 slope over ema_exit_bars turns against the
+    # position, 2 = leave when the bar closes beyond the EMA9 against it. Needs a gain of at
+    # least ema_exit_min percent. Checked once per bar at the close.
+    ema_exit: int = 0
+    ema_exit_bars: int = 3
+    ema_exit_min: float = 0.0
 
     def label(self, base: "Cfg") -> str:
         d = {k: v for k, v in asdict(self).items() if asdict(base)[k] != v}
@@ -378,6 +391,22 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
                             break
                 if kind == "fav":
                     continue
+                if kind == "close" and cfg.ema_exit and ret >= cfg.ema_exit_min:
+                    e9 = EMA9.get(day.d)
+                    if e9 is not None and i > cfg.ema_exit_bars:
+                        if cfg.ema_exit == 1:
+                            sl = float(e9[i] - e9[i - cfg.ema_exit_bars])
+                            against = sl <= 0 if call else sl >= 0
+                        else:
+                            against = day.c[i] < e9[i] if call else day.c[i] > e9[i]
+                        if against:
+                            close(when, v, "EMA9")
+                            break
+                if (kind == "close" and cfg.stall_min > 0
+                        and (when - pos["t"]).total_seconds() / 60 >= cfg.stall_min
+                        and pos["peak"] < cfg.stall_peak and ret < cfg.stall_below):
+                    close(when, v, "STALL")
+                    break
                 if (cfg.lock_floor is not None and arm is not None
                         and pos["peak"] >= arm and ret <= cfg.lock_floor):
                     close(when, v, "PROFIT_LOCK")
@@ -424,11 +453,12 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
             if i < cfg.period + nb + 2:
                 continue
             sma_now = float(day.c[i - cfg.period:i].mean())
-            sma_then = float(day.c[i - cfg.period - nb:i - nb].mean())
+            sb = nb if cfg.sma_slope_bars == 0 else max(cfg.sma_slope_bars, 1)
+            sma_then = float(day.c[i - cfg.period - sb:i - sb].mean())
             sma_prev = float(day.c[i - 1 - cfg.period:i - 1].mean())
             gap, gap_prev = float(e[i - 1]) - sma_now, float(e[i - 2]) - sma_prev
-            up = gap >= cfg.ema_gap and gap > gap_prev and ema_slope > cfg.ema_min and sma_now - sma_then > 0
-            dn = -gap >= cfg.ema_gap and gap < gap_prev and ema_slope < -cfg.ema_min and sma_now - sma_then < 0
+            up = gap >= cfg.ema_gap and gap > gap_prev and ema_slope > cfg.ema_min and (cfg.sma_slope_bars < 0 or sma_now - sma_then > 0)
+            dn = -gap >= cfg.ema_gap and gap < gap_prev and ema_slope < -cfg.ema_min and (cfg.sma_slope_bars < 0 or sma_now - sma_then < 0)
             if cfg.ema_mode == 4:
                 turn_up = ema_prev < -cfg.ema_min and ema_slope >= -cfg.ema_min
                 turn_dn = ema_prev > cfg.ema_min and ema_slope <= cfg.ema_min

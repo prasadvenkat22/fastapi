@@ -35,6 +35,10 @@ NY = ZoneInfo("America/New_York")
 # equity the session started with. 0.25 gives roughly two full stop-outs at
 # the default entry fraction before the engine stands down.
 MAX_DAILY_LOSS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_PCT", "0.02"))
+# Daily stop as a share of the FUNDS (POSITION_BUDGET), independent of realized
+# equity. The percentage limit above is 0 whenever equity is <= 0, so it never
+# fires on an account in drawdown. 0 = off.
+MAX_DAILY_LOSS_FUNDS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_FUNDS_PCT", "0.15"))
 
 # After a losing exit, refuse the SAME direction for this many minutes.
 #
@@ -269,6 +273,11 @@ def current_equity(starting_budget: float) -> EquityState:
     session_start = equity - realized_today
     limit = max(session_start, 0.0) * MAX_DAILY_LOSS_PCT
     halted = limit > 0 and realized_today <= -limit
+    funds_limit = max(starting_budget, 0.0) * MAX_DAILY_LOSS_FUNDS_PCT
+    if funds_limit > 0 and realized_today <= -funds_limit:
+        halted = True
+        logger.warning("Daily funds stop: %.2f lost today against a %.2f limit (%.0f%% of funds %.2f).",
+                       realized_today, funds_limit, MAX_DAILY_LOSS_FUNDS_PCT * 100, starting_budget)
 
     if halted:
         logger.warning(

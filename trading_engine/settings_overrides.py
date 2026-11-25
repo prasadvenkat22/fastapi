@@ -562,6 +562,10 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_MAX_DAILY_LOSS_PCT", "Daily loss limit", G_ACCOUNT, "float", "0.02",
             "QQQ engine: no new entries once today's realised losses reach this share of "
             "session-start equity (0.06 = 6%). Open positions are still managed.", "x equity", 0, 0.5),
+    Setting("TRADING_MAX_DAILY_LOSS_FUNDS_PCT", "Daily loss stop (% of funds)", G_ACCOUNT, "float", "0.15",
+            "QQQ engine: no new entries once today's realised losses reach this share of the funds "
+            "(position budget), whatever the equity (0.15 = 15%). 0 disables. "
+            "Open positions are still managed.", "x funds", 0, 1),
 
     # --- Entries (scripts/dte0_trade.py) -------------------------------------
     Setting("TRADING_DTE0_MAX_ROTATIONS", "Max rotations", G_ENTRY, "int", "3",

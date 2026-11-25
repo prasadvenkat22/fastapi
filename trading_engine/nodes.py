@@ -179,6 +179,10 @@ BAND_TOUCH_EMA_REGIME = int(float(os.getenv("TRADING_BAND_TOUCH_EMA_REGIME", "0"
 BAND_TOUCH_VWAP_SLOPE_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_VWAP_SLOPE_BARS", "0") or 0))
 BAND_TOUCH_VWAP_SLOPE_MIN = float(os.getenv("TRADING_BAND_TOUCH_VWAP_SLOPE_MIN", "0.05") or 0)
 BAND_TOUCH_EMA_GAP = float(os.getenv("TRADING_BAND_TOUCH_EMA_GAP", "0.05") or 0)
+# Minutes over which the regime tests that the 20-SMA is rising/falling; 0 = the EMA window.
+# Replay (45 sessions, applied exits): 5 bars +27.7/day, 3 bars +27.4, 2 bars +24.8, 1 bar +23.5,
+# no SMA test +15.5 -- the test filters whipsaws, so shorten it only to 3.
+BAND_TOUCH_SMA_SLOPE_BARS = int(float(os.getenv("TRADING_BAND_TOUCH_SMA_SLOPE_BARS", "0") or 0))
 # CALLS ON THE BAND FADE (EMA modes only). The EMA9/SMA20 regime takes the PUTS; CALLS come from
 # the classic lower-band touch with the 20-SMA trend check, so a bounce can still be bought but a
 # call is never taken just because the regime is long. Replay (43 sessions, mid +/- 0.01 + fees):
@@ -250,7 +254,8 @@ def _band_touch() -> "dict | None":
             if BAND_TOUCH_EMA_REGIME and len(close) >= BAND_TOUCH_PERIOD + nb + 2:
                 # EMA9 vs SMA20 regime: both sloping the same way, gap past EMA_GAP and widening.
                 p = BAND_TOUCH_PERIOD
-                sma_then = float(close.iloc[-p - nb:-nb].mean())
+                sb = BAND_TOUCH_SMA_SLOPE_BARS or nb
+                sma_then = float(close.iloc[-p - sb:-sb].mean())
                 sma_prev = float(close.iloc[-p - 1:-1].mean())
                 gap, gap_prev = float(e.iloc[-1]) - mid, float(e.iloc[-2]) - sma_prev
                 up = gap >= BAND_TOUCH_EMA_GAP and gap > gap_prev and s_now > m and mid - sma_then > 0

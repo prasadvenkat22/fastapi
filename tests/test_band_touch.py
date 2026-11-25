@@ -278,3 +278,19 @@ def test_regime_waits_for_enough_bars_instead_of_the_plain_turn(monkeypatch):
     assert nodes._band_touch()["ema_signal"] == "CALL"      # the plain turn fires
     monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_REGIME", 2)
     assert nodes._band_touch()["ema_signal"] is None         # 22 < 20 + 5 + 2 bars: regime not ready
+
+
+def test_sma_slope_window_is_separate_from_the_ema_window(monkeypatch):
+    # 40 bars: flat, then a rise over the last 3 only -> EMA window 8 sees a rising 20-SMA either way,
+    # but a 1-bar SMA test must read the SMA from fewer bars back than the 8-bar one.
+    closes = [700.0] * 30 + [700.0, 700.4, 700.9, 701.5, 702.2, 703.0, 703.9, 704.9, 706.0, 707.2]
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_MODE", True)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_REGIME", 2)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_BARS", 5)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_GAP", 0.0)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_EMA_MIN", 0.0)
+    monkeypatch.setattr(nodes, "BAND_TOUCH_VWAP_SLOPE_BARS", 0)
+    _feed(monkeypatch, closes, 707.2)
+    for sb in (0, 3):
+        monkeypatch.setattr(nodes, "BAND_TOUCH_SMA_SLOPE_BARS", sb)
+        assert nodes._band_touch()["ema_signal"] == "CALL"

@@ -38,7 +38,7 @@ MAX_DAILY_LOSS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_PCT", "0.02"))
 # Daily stop as a share of the FUNDS (POSITION_BUDGET), independent of realized
 # equity. The percentage limit above is 0 whenever equity is <= 0, so it never
 # fires on an account in drawdown. 0 = off.
-MAX_DAILY_LOSS_FUNDS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_FUNDS_PCT", "0.15"))
+MAX_DAILY_LOSS_FUNDS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_FUNDS_PCT", "0.30"))
 
 # After a losing exit, refuse the SAME direction for this many minutes.
 #

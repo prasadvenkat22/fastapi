@@ -562,6 +562,9 @@ REGISTRY: tuple[Setting, ...] = (
     Setting("TRADING_MAX_DAILY_LOSS_PCT", "Daily loss limit", G_ACCOUNT, "float", "0.02",
             "QQQ engine: no new entries once today's realised losses reach this share of "
             "session-start equity (0.06 = 6%). Open positions are still managed.", "x equity", 0, 0.5),
+    Setting("TRADING_EQUITY_SINCE", "Equity base: count P&L since (YYYYMMDD)", G_ACCOUNT, "int", "0",
+            "QQQ engine sizing: only realised P&L closed on or after this date counts toward equity "
+            "(20261126 = start fresh on that day). 0 = all history. No trade rows are deleted.", "date", 0, 99991231),
     Setting("TRADING_MAX_DAILY_LOSS_FUNDS_PCT", "Daily loss stop (% of funds)", G_ACCOUNT, "float", "0.30",
             "QQQ engine: no new entries once today's realised losses reach this share of the funds "
             "(position budget), whatever the equity (0.30 = 30%). 0 disables. "

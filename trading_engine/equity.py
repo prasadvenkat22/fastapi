@@ -39,6 +39,9 @@ MAX_DAILY_LOSS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_PCT", "0.02"))
 # equity. The percentage limit above is 0 whenever equity is <= 0, so it never
 # fires on an account in drawdown. 0 = off.
 MAX_DAILY_LOSS_FUNDS_PCT = float(os.getenv("TRADING_MAX_DAILY_LOSS_FUNDS_PCT", "0.30"))
+# Equity base reset: only realized P&L closed on/after this date (YYYYMMDD) counts
+# toward equity. 0 = all history. Trade rows are never deleted.
+EQUITY_SINCE = int(float(os.getenv("TRADING_EQUITY_SINCE", "0") or 0))
 
 # After a losing exit, refuse the SAME direction for this many minutes.
 #
@@ -261,6 +264,8 @@ def current_equity(starting_budget: float) -> EquityState:
             start = _today_start()
             for pnl, closed_at in rows:
                 pnl = pnl or 0.0
+                if EQUITY_SINCE and closed_at is not None and int(closed_at.strftime("%Y%m%d")) < EQUITY_SINCE:
+                    continue
                 realized_total += pnl
                 if closed_at is not None and closed_at >= start:
                     realized_today += pnl

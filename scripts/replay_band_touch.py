@@ -74,6 +74,8 @@ class Cfg:
     lock_arm: float | None = 30.0       # None = the take profit
     lock_floor: float | None = 20.0     # None = profit lock off
     stop: float = -20.0
+    hard_stop: float = 0.0              # exit at once at/below this return, no confirm wait (0 = off)
+    invert: bool = False                # flip the EMA-regime side (buy calls on a put signal)
     confirm: float = 10.0               # stop confirmation minutes
     total: bool = False                 # count total minutes past the stop
     trend_bars: int = 20
@@ -427,7 +429,8 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
                     else:
                         pos["s_since"] = None
                         held = 0.0
-                if breach and (cfg.confirm <= 0 or held >= cfg.confirm - 10 / 60):
+                hard = cfg.hard_stop < 0 and ret <= cfg.hard_stop
+                if breach and (hard or cfg.confirm <= 0 or held >= cfg.confirm - 10 / 60):
                     close(when, v, "STOP_LOSS")
                     break
             continue                     # re-entry waits for the next cycle
@@ -511,6 +514,8 @@ def run_day(day: Day, cfg: Cfg, fills: str = "mid", rng: random.Random | None = 
                 call = False
             else:
                 continue
+        if cfg.invert and cfg.ema_mode in (3, 4):
+            call = not call
         if cfg.sides == "calls" and not call or cfg.sides == "puts" and call:
             continue
         if last is not None:
